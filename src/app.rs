@@ -105,6 +105,10 @@ impl DatabaseContext {
         if panels.is_empty() {
             return;
         }
+        // Fallback to 0 is safe: it selects the first panel, which is always valid
+        // since we return early above when panels is empty. The debug_assert catches
+        // logic bugs where focus drifts out of the focusable set (e.g., a new action
+        // handler forgets to update focus after hiding a panel).
         let current = panels
             .iter()
             .position(|p| *p == self.focus)
