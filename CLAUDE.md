@@ -21,6 +21,6 @@ Key patterns:
 
 ## Dependencies
 
-- `turso` crate is a PATH dependency pointing to `../turso/bindings/rust`
+- `turso` 0.6.0-pre.5 from crates.io (default-features = false to avoid mimalloc override)
 - `ratatui` 0.30 with crossterm backend (re-exported via `ratatui::crossterm`)
 - `tokio` for async runtime (turso Builder::build() is async)

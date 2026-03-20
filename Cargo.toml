@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Database engine — path dep during development, switch to git/crates.io when publishing
-# Using default-features = false to avoid mimalloc global allocator override
-turso = { path = "../turso/bindings/rust", default-features = false }
+# Database engine
+turso = { version = "0.6.0-pre.5", default-features = false }
 
 # TUI framework (0.30 includes crossterm re-export)
 ratatui = "0.30"
