@@ -1,3 +1,4 @@
+pub(crate) mod editor;
 pub(crate) mod placeholder;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
