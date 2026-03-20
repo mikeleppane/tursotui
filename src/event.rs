@@ -1,0 +1,62 @@
+#![allow(
+    dead_code,
+    reason = "event functions used from main loop starting in Task 7"
+)]
+
+use std::time::Duration;
+
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+use crate::app::{Action, Direction, SubTab};
+
+/// Poll for a crossterm event with the given timeout.
+/// Returns `None` if no event occurred within the timeout.
+pub(crate) fn poll_event(timeout: Duration) -> std::io::Result<Option<Event>> {
+    if event::poll(timeout)? {
+        Ok(Some(event::read()?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Map a key event to a global Action (fallback handler).
+///
+/// Called AFTER the focused component's `handle_key`. If the component consumed
+/// the key (returned `Some(Action)`), this function is never reached. Only keys
+/// that the focused component ignored arrive here.
+///
+/// Bare `Tab`, `Shift+Tab`, and `Esc` are intentionally absent — those are
+/// handled by focused components. The editor uses `Tab` for indentation and
+/// `Esc` to release focus. Non-editor components emit `CycleFocus` from their
+/// own `handle_key` when they receive `Tab`/`Esc`.
+///
+/// `Ctrl+Tab` is the only unconditional focus-cycle binding — it always works
+/// regardless of which component is focused.
+pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+
+    match (key.modifiers, key.code) {
+        // Quit
+        (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::Quit),
+
+        // Focus cycling — only Ctrl+Tab is global; bare Tab/Esc are component-handled
+        (KeyModifiers::CONTROL, KeyCode::Tab) => Some(Action::CycleFocus(Direction::Forward)),
+
+        // Sidebar toggle
+        (KeyModifiers::CONTROL, KeyCode::Char('b')) => Some(Action::ToggleSidebar),
+
+        // Sub-tab switching
+        (KeyModifiers::ALT, KeyCode::Char('1')) => Some(Action::SwitchSubTab(SubTab::Query)),
+        (KeyModifiers::ALT, KeyCode::Char('2')) => Some(Action::SwitchSubTab(SubTab::Admin)),
+
+        // Theme toggle
+        (KeyModifiers::CONTROL, KeyCode::Char('t')) => Some(Action::ToggleTheme),
+
+        // Help
+        (KeyModifiers::NONE, KeyCode::F(1)) => Some(Action::ShowHelp),
+
+        _ => None,
+    }
+}
