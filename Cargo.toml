@@ -4,3 +4,64 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Database engine — path dep during development, switch to git/crates.io when publishing
+# Using default-features = false to avoid mimalloc global allocator override
+turso = { path = "../turso/bindings/rust", default-features = false }
+
+# TUI framework (0.30 includes crossterm re-export)
+ratatui = "0.30"
+
+# Async runtime — needed for turso's Builder::build().await
+tokio = { version = "1", features = ["full"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Enable pedantic, then selectively allow noisy lints
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic lints that are too noisy for this project
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# Extra warnings beyond pedantic
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+redundant_type_annotations = "warn"
+use_self = "warn"
+implicit_clone = "warn"
+needless_pass_by_ref_mut = "warn"
+
+# Hard denies — performance and correctness
+or_fun_call = "deny"
+clear_with_drain = "deny"
+collection_is_never_read = "deny"
+naive_bytecount = "deny"
+stable_sort_primitive = "deny"
+large_stack_frames = "deny"
+large_types_passed_by_value = "deny"
+redundant_clone = "deny"
+assigning_clones = "deny"
