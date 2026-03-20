@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "QueryMessage variants and some methods not used until later milestones"
-)]
-
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -15,8 +10,11 @@ pub(crate) enum QueryMessage {}
 /// Wraps an `Arc<Database>` and provides a channel for receiving query results.
 /// One per open database.
 pub(crate) struct DatabaseHandle {
+    #[allow(dead_code)]
     database: Arc<turso::Database>,
+    #[allow(dead_code)]
     result_rx: mpsc::UnboundedReceiver<QueryMessage>,
+    #[allow(dead_code)]
     result_tx: mpsc::UnboundedSender<QueryMessage>,
 }
 
@@ -34,31 +32,29 @@ impl DatabaseHandle {
     }
 
     /// Get a clone of the database `Arc` for spawning query tasks.
+    #[allow(dead_code)]
     pub fn database(&self) -> Arc<turso::Database> {
         Arc::clone(&self.database)
     }
 
     /// Get a clone of the sender for spawning query tasks.
+    #[allow(dead_code)]
     pub fn sender(&self) -> mpsc::UnboundedSender<QueryMessage> {
         self.result_tx.clone()
     }
 
     /// Create a fresh, independent connection for a query task.
+    #[allow(dead_code)]
     pub fn connect(&self) -> Result<turso::Connection, Box<dyn std::error::Error>> {
         Ok(self.database.connect()?)
     }
 
     /// Check for completed query results (non-blocking).
-    /// Returns `Some` if a message is available, `None` if the channel is empty.
-    /// Logs a debug warning if the channel is disconnected (sender dropped unexpectedly).
+    /// `Disconnected` cannot occur here because `self` holds `result_tx` — the channel
+    /// stays open as long as the handle exists. Spawned tasks clone the sender via
+    /// `sender()`, so even if all tasks complete, the original sender keeps the channel alive.
+    #[allow(dead_code)]
     pub fn try_recv(&mut self) -> Option<QueryMessage> {
-        match self.result_rx.try_recv() {
-            Ok(msg) => Some(msg),
-            Err(mpsc::error::TryRecvError::Empty) => None,
-            Err(mpsc::error::TryRecvError::Disconnected) => {
-                debug_assert!(false, "query result channel disconnected unexpectedly");
-                None
-            }
-        }
+        self.result_rx.try_recv().ok()
     }
 }

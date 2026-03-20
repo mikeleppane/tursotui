@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "theme and palette constants used incrementally as components are added"
-)]
-
 use ratatui::style::{Color, Modifier, Style};
 
 // Catppuccin Mocha palette
@@ -18,6 +13,10 @@ const TEAL: Color = Color::Rgb(148, 226, 213);
 
 /// Visual theme for the entire application.
 /// Every styled element references a field here — no hardcoded colors elsewhere.
+#[allow(
+    dead_code,
+    reason = "fields used incrementally as components are added"
+)]
 pub(crate) struct Theme {
     // Base
     pub bg: Color,

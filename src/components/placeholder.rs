@@ -1,13 +1,13 @@
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::app::Action;
+use crate::app::{Action, Direction};
 use crate::theme::Theme;
 
 use super::Component;
 
-/// Temporary placeholder panel -- renders a bordered box with a label.
+/// Temporary placeholder panel — renders a bordered box with a label.
 /// Replaced by real components in later milestones.
 pub(crate) struct Placeholder {
     label: String,
@@ -22,8 +22,20 @@ impl Placeholder {
 }
 
 impl Component for Placeholder {
-    fn handle_key(&mut self, _key: KeyEvent) -> Option<Action> {
-        None
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        // Non-editor components handle Tab/Esc/BackTab for focus cycling.
+        // Real components (QueryEditor) will override this to consume Tab for
+        // indentation and Esc to release focus.
+        match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
+                Some(Action::CycleFocus(Direction::Forward))
+            }
+            (_, KeyCode::BackTab) => Some(Action::CycleFocus(Direction::Backward)),
+            _ => None,
+        }
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {

@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "event functions used from main loop starting in Task 7"
-)]
-
 use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -41,7 +36,10 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // Quit
         (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::Quit),
 
-        // Focus cycling — only Ctrl+Tab is global; bare Tab/Esc are component-handled
+        // Focus cycling — only Ctrl+Tab is global; bare Tab/Esc are component-handled.
+        // Note: Ctrl+Tab is not reliably transmitted by all terminals (xterm, older tmux).
+        // Terminals supporting the kitty keyboard protocol deliver it correctly.
+        // Bare Tab/Esc in component handle_key provides the fallback for non-editor panels.
         (KeyModifiers::CONTROL, KeyCode::Tab) => Some(Action::CycleFocus(Direction::Forward)),
 
         // Sidebar toggle

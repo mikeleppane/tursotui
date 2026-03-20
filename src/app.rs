@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "app state types used incrementally as milestones are implemented"
-)]
-
 use std::time::Instant;
 
 use crate::db::DatabaseHandle;
@@ -17,8 +12,11 @@ pub(crate) enum SubTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BottomTab {
     Results,
+    #[allow(dead_code)]
     Explain,
+    #[allow(dead_code)]
     Detail,
+    #[allow(dead_code)]
     ERDiagram,
 }
 
@@ -42,9 +40,11 @@ pub(crate) enum Direction {
 #[derive(Debug)]
 pub(crate) enum Action {
     SwitchSubTab(SubTab),
+    #[allow(dead_code)]
     FocusPanel(PanelId),
     CycleFocus(Direction),
     ToggleSidebar,
+    #[allow(dead_code)]
     SwitchBottomTab(BottomTab),
     ToggleTheme,
     ShowHelp,
@@ -53,7 +53,9 @@ pub(crate) enum Action {
 
 /// Per-database workspace.
 pub(crate) struct DatabaseContext {
+    #[allow(dead_code)]
     pub handle: DatabaseHandle,
+    #[allow(dead_code)]
     pub path: String,
     pub label: String,
     pub sub_tab: SubTab,
@@ -133,6 +135,7 @@ pub(crate) struct AppState {
     pub databases: Vec<DatabaseContext>,
     pub active_db: usize,
     pub theme: Theme,
+    #[allow(dead_code)]
     pub transient_message: Option<(String, Instant)>,
     pub should_quit: bool,
 }

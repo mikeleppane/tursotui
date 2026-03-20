@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "component trait and placeholders used incrementally as UI is wired up"
-)]
-
 pub(crate) mod placeholder;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
@@ -18,11 +13,13 @@ pub(crate) trait Component {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action>;
 
     /// Handle a mouse event. Default: ignore.
+    #[allow(dead_code)]
     fn handle_mouse(&mut self, _mouse: MouseEvent) -> Option<Action> {
         None
     }
 
     /// React to an action dispatched by the app. Default: no-op.
+    #[allow(dead_code)]
     fn update(&mut self, _action: &Action) {}
 
     /// Render into the given area. `focused` indicates whether this panel has keyboard focus.
