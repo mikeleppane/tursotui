@@ -2,6 +2,7 @@ mod app;
 mod components;
 mod db;
 mod event;
+mod highlight;
 mod theme;
 
 use std::time::Duration;
