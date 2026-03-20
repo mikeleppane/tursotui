@@ -1,0 +1,186 @@
+#![allow(
+    dead_code,
+    reason = "app state types used incrementally as milestones are implemented"
+)]
+
+use std::time::Instant;
+
+use crate::db::DatabaseHandle;
+use crate::theme::{DARK_THEME, Theme};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubTab {
+    Query,
+    Admin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BottomTab {
+    Results,
+    Explain,
+    Detail,
+    ERDiagram,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelId {
+    Schema,
+    Editor,
+    Bottom,
+    DbInfo,
+    Pragmas,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Direction {
+    Forward,
+    Backward,
+}
+
+/// All state mutations flow through actions.
+/// Milestone 1 only uses a subset -- the rest are added in later milestones.
+#[derive(Debug)]
+pub(crate) enum Action {
+    SwitchSubTab(SubTab),
+    FocusPanel(PanelId),
+    CycleFocus(Direction),
+    ToggleSidebar,
+    SwitchBottomTab(BottomTab),
+    ToggleTheme,
+    ShowHelp,
+    Quit,
+}
+
+/// Per-database workspace.
+pub(crate) struct DatabaseContext {
+    pub handle: DatabaseHandle,
+    pub path: String,
+    pub label: String,
+    pub sub_tab: SubTab,
+    pub focus: PanelId,
+    pub sidebar_visible: bool,
+    pub bottom_tab: BottomTab,
+}
+
+impl DatabaseContext {
+    pub fn new(handle: DatabaseHandle, path: String) -> Self {
+        let label = if path == ":memory:" {
+            "[in-memory]".to_string()
+        } else {
+            std::path::Path::new(&path)
+                .file_name()
+                .map_or_else(|| path.clone(), |f| f.to_string_lossy().to_string())
+        };
+
+        Self {
+            handle,
+            path,
+            label,
+            sub_tab: SubTab::Query,
+            focus: PanelId::Editor,
+            sidebar_visible: true,
+            bottom_tab: BottomTab::Results,
+        }
+    }
+
+    /// Returns the ordered list of focusable panels for the current sub-tab.
+    pub fn focusable_panels(&self) -> Vec<PanelId> {
+        match self.sub_tab {
+            SubTab::Query => {
+                let mut panels = vec![];
+                if self.sidebar_visible {
+                    panels.push(PanelId::Schema);
+                }
+                panels.push(PanelId::Editor);
+                panels.push(PanelId::Bottom);
+                panels
+            }
+            SubTab::Admin => vec![PanelId::DbInfo, PanelId::Pragmas],
+        }
+    }
+
+    /// Cycle focus to the next/previous panel.
+    pub fn cycle_focus(&mut self, direction: Direction) {
+        let panels = self.focusable_panels();
+        if panels.is_empty() {
+            return;
+        }
+        let current = panels
+            .iter()
+            .position(|p| *p == self.focus)
+            .unwrap_or_else(|| {
+                debug_assert!(
+                    false,
+                    "focus {:?} not in focusable_panels {:?}",
+                    self.focus, panels
+                );
+                0
+            });
+        let next = match direction {
+            Direction::Forward => (current + 1) % panels.len(),
+            Direction::Backward => (current + panels.len() - 1) % panels.len(),
+        };
+        self.focus = panels[next];
+    }
+}
+
+/// Global application state.
+pub(crate) struct AppState {
+    pub databases: Vec<DatabaseContext>,
+    pub active_db: usize,
+    pub theme: Theme,
+    pub transient_message: Option<(String, Instant)>,
+    pub should_quit: bool,
+}
+
+impl AppState {
+    pub fn new(db_context: DatabaseContext) -> Self {
+        Self {
+            databases: vec![db_context],
+            active_db: 0,
+            theme: DARK_THEME,
+            transient_message: None,
+            should_quit: false,
+        }
+    }
+
+    pub fn active_db(&self) -> &DatabaseContext {
+        debug_assert!(self.active_db < self.databases.len());
+        &self.databases[self.active_db]
+    }
+
+    pub fn active_db_mut(&mut self) -> &mut DatabaseContext {
+        debug_assert!(self.active_db < self.databases.len());
+        &mut self.databases[self.active_db]
+    }
+
+    /// Process an action and update state.
+    pub fn update(&mut self, action: &Action) {
+        match *action {
+            Action::Quit => self.should_quit = true,
+            Action::CycleFocus(dir) => self.active_db_mut().cycle_focus(dir),
+            Action::FocusPanel(panel) => self.active_db_mut().focus = panel,
+            Action::SwitchSubTab(tab) => {
+                let db = self.active_db_mut();
+                db.sub_tab = tab;
+                let panels = db.focusable_panels();
+                if let Some(&first) = panels.first() {
+                    db.focus = first;
+                }
+            }
+            Action::ToggleSidebar => {
+                let db = self.active_db_mut();
+                db.sidebar_visible = !db.sidebar_visible;
+                if !db.sidebar_visible && db.focus == PanelId::Schema {
+                    db.focus = PanelId::Editor;
+                }
+            }
+            Action::SwitchBottomTab(tab) => {
+                self.active_db_mut().bottom_tab = tab;
+            }
+            Action::ToggleTheme | Action::ShowHelp => {
+                // Implemented in later milestones
+            }
+        }
+    }
+}
