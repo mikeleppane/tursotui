@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::db::DatabaseHandle;
+use crate::db::{ColumnInfo, DatabaseHandle, QueryResult, SchemaEntry};
 use crate::theme::{DARK_THEME, Theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,19 +36,24 @@ pub(crate) enum Direction {
 }
 
 /// All state mutations flow through actions.
-/// Milestone 1 only uses a subset -- the rest are added in later milestones.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum Action {
     SwitchSubTab(SubTab),
-    #[allow(dead_code)]
     FocusPanel(PanelId),
     CycleFocus(Direction),
     ToggleSidebar,
-    #[allow(dead_code)]
     SwitchBottomTab(BottomTab),
     ToggleTheme,
     ShowHelp,
     Quit,
+    ExecuteQuery(String),
+    QueryCompleted(QueryResult),
+    QueryFailed(String),
+    SchemaLoaded(Vec<SchemaEntry>),
+    ColumnsLoaded(String, Vec<ColumnInfo>),
+    PopulateEditor(String),
+    LoadColumns(String),
 }
 
 /// Per-database workspace.
@@ -163,13 +168,13 @@ impl AppState {
 
     /// Process an action and update state.
     pub fn update(&mut self, action: &Action) {
-        match *action {
+        match action {
             Action::Quit => self.should_quit = true,
-            Action::CycleFocus(dir) => self.active_db_mut().cycle_focus(dir),
-            Action::FocusPanel(panel) => self.active_db_mut().focus = panel,
+            Action::CycleFocus(dir) => self.active_db_mut().cycle_focus(*dir),
+            Action::FocusPanel(panel) => self.active_db_mut().focus = *panel,
             Action::SwitchSubTab(tab) => {
                 let db = self.active_db_mut();
-                db.sub_tab = tab;
+                db.sub_tab = *tab;
                 let panels = db.focusable_panels();
                 if let Some(&first) = panels.first() {
                     db.focus = first;
@@ -183,10 +188,20 @@ impl AppState {
                 }
             }
             Action::SwitchBottomTab(tab) => {
-                self.active_db_mut().bottom_tab = tab;
+                self.active_db_mut().bottom_tab = *tab;
             }
-            Action::ToggleTheme | Action::ShowHelp => {
-                // Implemented in later milestones
+            Action::PopulateEditor(_) => {
+                self.active_db_mut().focus = PanelId::Editor;
+            }
+            Action::ExecuteQuery(_)
+            | Action::QueryCompleted(_)
+            | Action::QueryFailed(_)
+            | Action::SchemaLoaded(_)
+            | Action::ColumnsLoaded(_, _)
+            | Action::LoadColumns(_)
+            | Action::ToggleTheme
+            | Action::ShowHelp => {
+                // Handled elsewhere (main.rs) or implemented in later milestones
             }
         }
     }
