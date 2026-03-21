@@ -9,7 +9,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(64);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(96);
 
     // --- Global ---
     lines.push(Line::from(Span::styled("Global", header_style)));
@@ -54,11 +54,50 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Esc             Release focus"));
     lines.push(Line::from(""));
 
-    // --- Admin Tab ---
-    lines.push(Line::from(Span::styled("Admin Tab", header_style)));
-    lines.push(Line::from("  r               Refresh values"));
+    // --- Bottom Panel ---
+    lines.push(Line::from(Span::styled("Bottom Panel", header_style)));
+    lines.push(Line::from(
+        "  1 / 2 / 3 / 4   Switch Results / Explain / Detail / ER",
+    ));
+    lines.push(Line::from(""));
+
+    // --- EXPLAIN View ---
+    lines.push(Line::from(Span::styled("EXPLAIN View", header_style)));
+    lines.push(Line::from("  Tab             Toggle Bytecode / Query Plan"));
+    lines.push(Line::from("  Enter           Generate EXPLAIN"));
+    lines.push(Line::from("  j/k or Up/Down  Scroll rows"));
+    lines.push(Line::from("  g / G           Jump to first / last"));
+    lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(""));
+
+    // --- Record Detail ---
+    lines.push(Line::from(Span::styled("Record Detail", header_style)));
+    lines.push(Line::from("  j/k or Up/Down  Scroll fields"));
+    lines.push(Line::from("  g / G           Jump to first / last"));
+    lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(""));
+
+    // --- Database Info (Admin Tab) ---
+    lines.push(Line::from(Span::styled(
+        "Database Info (Admin Tab)",
+        header_style,
+    )));
+    lines.push(Line::from("  r               Refresh database info"));
+    lines.push(Line::from("  c               WAL checkpoint (passive)"));
+    lines.push(Line::from("  j/k or Up/Down  Scroll"));
+    lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(""));
+
+    // --- PRAGMA Dashboard (Admin Tab) ---
+    lines.push(Line::from(Span::styled(
+        "PRAGMA Dashboard (Admin Tab)",
+        header_style,
+    )));
     lines.push(Line::from("  Enter           Edit selected pragma"));
-    lines.push(Line::from("  Tab / Esc       Cycle focus"));
+    lines.push(Line::from("  Esc             Cancel edit / release focus"));
+    lines.push(Line::from("  r               Refresh all values"));
+    lines.push(Line::from("  j/k or Up/Down  Navigate"));
+    lines.push(Line::from("  g / G           Jump to first / last"));
 
     lines
 }
