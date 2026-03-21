@@ -25,6 +25,10 @@ pub(crate) struct ResultsTable {
     rows: Vec<Vec<Option<String>>>,
     column_widths: Vec<u16>,
     state: TableState,
+    /// Currently selected column index.
+    selected_col: usize,
+    /// First visible column index for horizontal scroll.
+    col_offset: usize,
 }
 
 impl ResultsTable {
@@ -34,6 +38,8 @@ impl ResultsTable {
             rows: Vec::new(),
             column_widths: Vec::new(),
             state: TableState::default(),
+            selected_col: 0,
+            col_offset: 0,
         }
     }
 
@@ -47,12 +53,23 @@ impl ResultsTable {
             .map(|row| row.iter().map(value_to_display).collect())
             .collect();
         self.column_widths = compute_column_widths(&self.columns, &self.rows);
+        self.selected_col = 0;
+        self.col_offset = 0;
+        debug_assert!(
+            self.rows.iter().all(|r| r.len() == self.columns.len()),
+            "row/column count mismatch"
+        );
         // Select first row when there are results
         if self.rows.is_empty() {
             self.state.select(None);
         } else {
             self.state.select(Some(0));
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn selected_col(&self) -> usize {
+        self.selected_col
     }
 
     pub(crate) fn selected_row(&self) -> Option<usize> {
@@ -70,6 +87,8 @@ impl ResultsTable {
         self.rows.clear();
         self.column_widths.clear();
         self.state = TableState::default();
+        self.selected_col = 0;
+        self.col_offset = 0;
     }
 
     fn next_row(&mut self) {
@@ -106,6 +125,69 @@ impl ResultsTable {
             self.state.select(Some(self.rows.len() - 1));
         }
     }
+
+    fn next_col(&mut self) {
+        if !self.columns.is_empty() && self.selected_col + 1 < self.columns.len() {
+            self.selected_col += 1;
+        }
+    }
+
+    fn prev_col(&mut self) {
+        if !self.columns.is_empty() && self.selected_col > 0 {
+            self.selected_col -= 1;
+        }
+    }
+
+    /// Compute the range of column indices visible in the given width, adjusting
+    /// `col_offset` so that `selected_col` stays on screen.
+    ///
+    /// **Note:** This method intentionally mutates scroll state (`col_offset`,
+    /// `selected_col` clamping) from within `render`.  This is a standard ratatui
+    /// pattern for stateful widgets — the viewport geometry is only known at render
+    /// time, so scroll adjustment must happen here.  A terminal resize can shift the
+    /// viewport without any user input; this is expected behaviour.
+    fn visible_col_range(&mut self, available_width: u16) -> std::ops::Range<usize> {
+        // Column spacing: ratatui uses 1-cell gap between columns by default.
+        let col_spacing: u16 = 1;
+
+        // Ensure selected_col is in range (defensive).
+        if !self.columns.is_empty() {
+            self.selected_col = self.selected_col.min(self.columns.len() - 1);
+        }
+
+        // Scroll left if selected column is before the viewport.
+        if self.selected_col < self.col_offset {
+            self.col_offset = self.selected_col;
+        }
+
+        // Walk forward from col_offset to find how many columns fit.
+        // Termination: each iteration either breaks out of the loop or increments
+        // `col_offset` by 1.  `col_offset` is bounded above by `selected_col`
+        // (the `selected_col >= end` guard prevents advancing past it), so the
+        // loop executes at most `selected_col - initial_col_offset + 1` times.
+        loop {
+            let mut used: u16 = 0;
+            let mut end = self.col_offset;
+            for (i, &w) in self.column_widths.iter().enumerate().skip(self.col_offset) {
+                let needed = if i == self.col_offset {
+                    w
+                } else {
+                    col_spacing + w
+                };
+                if used.saturating_add(needed) > available_width && i > self.col_offset {
+                    break;
+                }
+                used = used.saturating_add(needed);
+                end = i + 1;
+            }
+            // If selected_col is past the visible end, scroll right and retry.
+            if self.selected_col >= end && end > self.col_offset {
+                self.col_offset += 1;
+                continue;
+            }
+            break self.col_offset..end;
+        }
+    }
 }
 
 impl Component for ResultsTable {
@@ -130,6 +212,16 @@ impl Component for ResultsTable {
             }
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('G')) => {
                 self.last_row();
+                None
+            }
+
+            // Column navigation
+            (KeyModifiers::NONE, KeyCode::Char('l') | KeyCode::Right) => {
+                self.next_col();
+                None
+            }
+            (KeyModifiers::NONE, KeyCode::Char('h') | KeyCode::Left) => {
+                self.prev_col();
                 None
             }
 
@@ -195,37 +287,6 @@ impl Component for ResultsTable {
             return;
         }
 
-        // Build column constraints from widths
-        let col_widths: Vec<Constraint> = self
-            .column_widths
-            .iter()
-            .map(|&w| Constraint::Length(w))
-            .collect();
-
-        // Build header row
-        let header_cells: Vec<Cell> = self
-            .columns
-            .iter()
-            .map(|col| Cell::from(col.name.as_str()).style(theme.header_style))
-            .collect();
-        let header = Row::new(header_cells).height(1);
-
-        // Build data rows — SQL NULLs (None) get a special style
-        let data_rows: Vec<Row> = self
-            .rows
-            .iter()
-            .map(|row_vals| {
-                let cells: Vec<Cell> = row_vals
-                    .iter()
-                    .map(|val| match val {
-                        None => Cell::from("NULL").style(theme.null_style),
-                        Some(s) => Cell::from(s.as_str()),
-                    })
-                    .collect();
-                Row::new(cells).height(1)
-            })
-            .collect();
-
         // Calculate visible rows for the scrollbar (header takes 1 row)
         let visible_rows = inner.height.saturating_sub(1) as usize;
         let show_scrollbar = self.rows.len() > visible_rows;
@@ -240,11 +301,23 @@ impl Component for ResultsTable {
             inner
         };
 
-        let table = Table::new(data_rows, col_widths)
-            .header(header)
-            .row_highlight_style(theme.selected_style)
-            .highlight_symbol("▌ ")
-            .highlight_spacing(HighlightSpacing::Always);
+        // The highlight symbol "▌ " consumes 2 columns; account for it when
+        // deciding how many data columns fit in the viewport.
+        let highlight_symbol_width: u16 = 2;
+        let col_spacing: u16 = 1; // ratatui default column_spacing
+        let available_width = table_area
+            .width
+            .saturating_sub(highlight_symbol_width + col_spacing);
+
+        let visible_range = self.visible_col_range(available_width);
+        let table = build_visible_table(
+            &self.columns,
+            &self.rows,
+            &self.column_widths,
+            &visible_range,
+            self.selected_col,
+            theme,
+        );
 
         frame.render_stateful_widget(table, table_area, &mut self.state);
 
@@ -262,6 +335,61 @@ impl Component for ResultsTable {
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
         }
     }
+}
+
+/// Build a ratatui `Table` for the visible column range, highlighting the selected column header.
+fn build_visible_table<'a>(
+    columns: &'a [ColumnDef],
+    rows: &'a [Vec<Option<String>>],
+    column_widths: &[u16],
+    visible_range: &std::ops::Range<usize>,
+    selected_col: usize,
+    theme: &Theme,
+) -> Table<'a> {
+    let col_widths: Vec<Constraint> = column_widths[visible_range.clone()]
+        .iter()
+        .map(|&w| Constraint::Length(w))
+        .collect();
+
+    let selected_header_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::UNDERLINED);
+
+    let header_cells: Vec<Cell> = columns[visible_range.clone()]
+        .iter()
+        .enumerate()
+        .map(|(vis_idx, col)| {
+            let abs_idx = visible_range.start + vis_idx;
+            let style = if abs_idx == selected_col {
+                selected_header_style
+            } else {
+                theme.header_style
+            };
+            Cell::from(col.name.as_str()).style(style)
+        })
+        .collect();
+    let header = Row::new(header_cells).height(1);
+
+    let data_rows: Vec<Row> = rows
+        .iter()
+        .map(|row_vals| {
+            let cells: Vec<Cell> = row_vals[visible_range.clone()]
+                .iter()
+                .map(|val| match val {
+                    None => Cell::from("NULL").style(theme.null_style),
+                    Some(s) => Cell::from(s.as_str()),
+                })
+                .collect();
+            Row::new(cells).height(1)
+        })
+        .collect();
+
+    Table::new(data_rows, col_widths)
+        .header(header)
+        .row_highlight_style(theme.selected_style)
+        .highlight_symbol("▌ ")
+        .highlight_spacing(HighlightSpacing::Always)
 }
 
 /// Convert a `turso::Value` to a display string. Returns `None` for SQL NULL.
@@ -597,5 +725,146 @@ mod tests {
         let rows: Vec<Vec<Option<String>>> = vec![vec![None]]; // NULL = 4 chars
         let widths = compute_column_widths(&cols, &rows);
         assert_eq!(widths, vec![MIN_COL_WIDTH]); // max(1, 4) clamped = 4
+    }
+
+    // --- column navigation tests ---
+
+    /// Create a `QueryResult` with `num_cols` columns (named `col_0..col_N`) and
+    /// `num_rows` rows of integer values.
+    fn make_test_result(num_cols: usize, num_rows: usize) -> QueryResult {
+        let columns: Vec<ColumnDef> = (0..num_cols)
+            .map(|i| make_column(&format!("col_{i}")))
+            .collect();
+        let rows: Vec<Vec<turso::Value>> = (0..num_rows)
+            .map(|r| {
+                (0..num_cols)
+                    .map(|c| turso::Value::Integer((r * num_cols + c) as i64))
+                    .collect()
+            })
+            .collect();
+        make_result(columns, rows)
+    }
+
+    #[test]
+    fn test_column_navigation() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 3);
+        table.set_results(&result);
+        assert_eq!(table.selected_col, 0);
+        table.next_col();
+        assert_eq!(table.selected_col, 1);
+        table.next_col();
+        assert_eq!(table.selected_col, 2);
+        table.next_col(); // clamp — should not go past last column
+        assert_eq!(table.selected_col, 2);
+        table.prev_col();
+        assert_eq!(table.selected_col, 1);
+    }
+
+    #[test]
+    fn test_column_navigation_prev_at_zero() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 1);
+        table.set_results(&result);
+        table.prev_col(); // already at 0, should stay
+        assert_eq!(table.selected_col, 0);
+    }
+
+    #[test]
+    fn test_column_navigation_empty_table() {
+        let mut table = ResultsTable::new();
+        // No results loaded — navigation should not panic
+        table.next_col();
+        table.prev_col();
+        assert_eq!(table.selected_col, 0);
+    }
+
+    #[test]
+    fn test_column_reset_on_new_results() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 3);
+        table.set_results(&result);
+        table.next_col();
+        table.next_col();
+        assert_eq!(table.selected_col, 2);
+        table.set_results(&result);
+        assert_eq!(table.selected_col, 0);
+        assert_eq!(table.col_offset, 0);
+    }
+
+    #[test]
+    fn test_column_reset_on_clear() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 3);
+        table.set_results(&result);
+        table.next_col();
+        table.clear();
+        assert_eq!(table.selected_col, 0);
+        assert_eq!(table.col_offset, 0);
+    }
+
+    // --- visible_col_range tests ---
+
+    #[test]
+    fn test_visible_col_range_all_fit() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 2);
+        table.set_results(&result);
+
+        // Each column is width 5 ("col_0" etc.), spacing 1 between them.
+        // Total needed: 5 + 1+5 + 1+5 = 17.  Give plenty of room.
+        let range = table.visible_col_range(200);
+        assert_eq!(range, 0..3);
+    }
+
+    #[test]
+    fn test_visible_col_range_scroll_right() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(5, 2);
+        table.set_results(&result);
+
+        // Navigate to the last column.
+        for _ in 0..4 {
+            table.next_col();
+        }
+        assert_eq!(table.selected_col, 4);
+
+        // Give just enough width for ~2 columns (5 + 1 + 5 = 11).
+        let range = table.visible_col_range(11);
+        assert!(
+            range.contains(&4),
+            "selected_col 4 should be within range {range:?}"
+        );
+    }
+
+    #[test]
+    fn test_visible_col_range_zero_width() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 2);
+        table.set_results(&result);
+
+        // Should not panic and should return a valid (possibly single-element) range.
+        let range = table.visible_col_range(0);
+        assert!(range.start <= range.end);
+    }
+
+    #[test]
+    fn test_visible_col_range_single_wide_column() {
+        let mut table = ResultsTable::new();
+        // Create a column with a very long header so it gets a wide computed width.
+        let wide_col = make_column("a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]");
+        let result = make_result(
+            vec![wide_col, make_column("b")],
+            vec![vec![turso::Value::Integer(1), turso::Value::Integer(2)]],
+        );
+        table.set_results(&result);
+
+        // The first column's computed width (40 = MAX_COL_WIDTH) exceeds viewport.
+        // It should still be included in the visible range.
+        let range = table.visible_col_range(10);
+        assert!(
+            range.contains(&0),
+            "wide column 0 should still be included in range {range:?}"
+        );
     }
 }

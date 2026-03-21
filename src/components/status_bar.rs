@@ -56,7 +56,9 @@ fn keybindings_for(sub_tab: SubTab, focus: PanelId) -> &'static str {
         // Query-tab panels
         (SubTab::Query, PanelId::Editor) => "F5 Execute  Esc Release",
         (SubTab::Query, PanelId::Schema) => "Enter Expand  o Open  Esc Release",
-        (SubTab::Query, PanelId::Bottom) => "j/k Navigate  g/G First/Last  Esc Release",
+        (SubTab::Query, PanelId::Bottom) => {
+            "j/k Navigate  h/l Columns  g/G First/Last  Esc Release"
+        }
         // Admin-tab panels and fallback
         _ => "Tab Cycle",
     }
