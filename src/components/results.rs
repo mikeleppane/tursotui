@@ -11,6 +11,12 @@ use crate::theme::Theme;
 
 use super::Component;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    Ascending,
+    Descending,
+}
+
 /// Maximum number of rows to scan when calculating column widths.
 const WIDTH_SAMPLE_ROWS: usize = 50;
 /// Minimum column width in characters.
@@ -29,6 +35,12 @@ pub(crate) struct ResultsTable {
     selected_col: usize,
     /// First visible column index for horizontal scroll.
     col_offset: usize,
+    /// Column currently sorted on, if any.
+    sort_col: Option<usize>,
+    /// Current sort direction.
+    sort_order: SortOrder,
+    /// Original row order so we can un-sort.
+    original_rows: Vec<Vec<Option<String>>>,
 }
 
 impl ResultsTable {
@@ -40,6 +52,9 @@ impl ResultsTable {
             state: TableState::default(),
             selected_col: 0,
             col_offset: 0,
+            sort_col: None,
+            sort_order: SortOrder::Ascending,
+            original_rows: Vec::new(),
         }
     }
 
@@ -53,6 +68,9 @@ impl ResultsTable {
             .map(|row| row.iter().map(value_to_display).collect())
             .collect();
         self.column_widths = compute_column_widths(&self.columns, &self.rows);
+        self.original_rows = self.rows.clone();
+        self.sort_col = None;
+        self.sort_order = SortOrder::Ascending;
         self.selected_col = 0;
         self.col_offset = 0;
         debug_assert!(
@@ -89,6 +107,9 @@ impl ResultsTable {
         self.state = TableState::default();
         self.selected_col = 0;
         self.col_offset = 0;
+        self.sort_col = None;
+        self.sort_order = SortOrder::Ascending;
+        self.original_rows.clear();
     }
 
     fn next_row(&mut self) {
@@ -136,6 +157,53 @@ impl ResultsTable {
         if !self.columns.is_empty() && self.selected_col > 0 {
             self.selected_col -= 1;
         }
+    }
+
+    fn cycle_sort(&mut self) {
+        if self.columns.is_empty() || self.rows.is_empty() {
+            return;
+        }
+        let col = self.selected_col;
+        match (self.sort_col, self.sort_order) {
+            (Some(c), SortOrder::Ascending) if c == col => {
+                self.sort_order = SortOrder::Descending;
+                self.apply_sort();
+            }
+            (Some(c), SortOrder::Descending) if c == col => {
+                self.sort_col = None;
+                self.rows = self.original_rows.clone();
+            }
+            _ => {
+                self.sort_col = Some(col);
+                self.sort_order = SortOrder::Ascending;
+                self.apply_sort();
+            }
+        }
+        if !self.rows.is_empty() {
+            self.state.select(Some(0));
+        }
+    }
+
+    fn apply_sort(&mut self) {
+        let Some(col) = self.sort_col else {
+            return;
+        };
+        let desc = self.sort_order == SortOrder::Descending;
+        self.rows = self.original_rows.clone();
+        self.rows.sort_by(|a, b| {
+            let va = a.get(col).and_then(|v| v.as_deref());
+            let vb = b.get(col).and_then(|v| v.as_deref());
+            // NULLs always sort last, regardless of direction
+            match (va, vb) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (Some(a), Some(b)) => {
+                    let cmp = compare_non_null(a, b);
+                    if desc { cmp.reverse() } else { cmp }
+                }
+            }
+        });
     }
 
     /// Compute the range of column indices visible in the given width, adjusting
@@ -225,6 +293,12 @@ impl Component for ResultsTable {
                 None
             }
 
+            // Sorting
+            (KeyModifiers::NONE, KeyCode::Char('s')) => {
+                self.cycle_sort();
+                None
+            }
+
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
                 Some(Action::CycleFocus(Direction::Forward))
@@ -310,12 +384,14 @@ impl Component for ResultsTable {
             .saturating_sub(highlight_symbol_width + col_spacing);
 
         let visible_range = self.visible_col_range(available_width);
+        let sort_state = self.sort_col.map(|c| (c, self.sort_order));
         let table = build_visible_table(
             &self.columns,
             &self.rows,
             &self.column_widths,
             &visible_range,
             self.selected_col,
+            sort_state,
             theme,
         );
 
@@ -344,11 +420,18 @@ fn build_visible_table<'a>(
     column_widths: &[u16],
     visible_range: &std::ops::Range<usize>,
     selected_col: usize,
+    sort_state: Option<(usize, SortOrder)>,
     theme: &Theme,
 ) -> Table<'a> {
     let col_widths: Vec<Constraint> = column_widths[visible_range.clone()]
         .iter()
-        .map(|&w| Constraint::Length(w))
+        .enumerate()
+        .map(|(vis_idx, &w)| {
+            let abs_col_idx = visible_range.start + vis_idx;
+            let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_col_idx);
+            let width = if is_sorted { w.saturating_add(2) } else { w };
+            Constraint::Length(width)
+        })
         .collect();
 
     let selected_header_style = Style::default()
@@ -366,7 +449,16 @@ fn build_visible_table<'a>(
             } else {
                 theme.header_style
             };
-            Cell::from(col.name.as_str()).style(style)
+            let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_idx);
+            if is_sorted {
+                let arrow = match sort_state.unwrap().1 {
+                    SortOrder::Ascending => " \u{25B2}",
+                    SortOrder::Descending => " \u{25BC}",
+                };
+                Cell::from(format!("{}{arrow}", col.name)).style(style)
+            } else {
+                Cell::from(col.name.as_str()).style(style)
+            }
         })
         .collect();
     let header = Row::new(header_cells).height(1);
@@ -390,6 +482,27 @@ fn build_visible_table<'a>(
         .row_highlight_style(theme.selected_style)
         .highlight_symbol("▌ ")
         .highlight_spacing(HighlightSpacing::Always)
+}
+
+/// Try to parse a string as a finite number for sorting.
+/// Returns `None` for non-numeric strings, NaN, and infinity.
+fn parse_number(s: &str) -> Option<f64> {
+    let f: f64 = s.parse().ok()?;
+    f.is_finite().then_some(f)
+}
+
+/// Compare two non-null cell values for sorting using class-aware comparison.
+/// Numbers sort before strings; within each class, values are compared naturally.
+/// This preserves transitivity across mixed-type columns.
+fn compare_non_null(a: &str, b: &str) -> std::cmp::Ordering {
+    let na = parse_number(a);
+    let nb = parse_number(b);
+    match (na, nb) {
+        (Some(na), Some(nb)) => na.total_cmp(&nb),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.cmp(b),
+    }
 }
 
 /// Convert a `turso::Value` to a display string. Returns `None` for SQL NULL.
@@ -865,6 +978,191 @@ mod tests {
         assert!(
             range.contains(&0),
             "wide column 0 should still be included in range {range:?}"
+        );
+    }
+
+    // --- sorting tests ---
+
+    /// Helper: create a result with a single column of text values.
+    fn make_sortable_result(col_name: &str, values: Vec<Option<&str>>) -> QueryResult {
+        let columns = vec![make_column(col_name)];
+        let rows: Vec<Vec<turso::Value>> = values
+            .into_iter()
+            .map(|v| {
+                vec![match v {
+                    Some(s) => turso::Value::Text(s.to_string()),
+                    None => turso::Value::Null,
+                }]
+            })
+            .collect();
+        make_result(columns, rows)
+    }
+
+    /// Extract column 0 values from the table rows for easy assertion.
+    fn col0_values(table: &ResultsTable) -> Vec<Option<String>> {
+        table.rows.iter().map(|r| r[0].clone()).collect()
+    }
+
+    #[test]
+    fn test_sort_ascending() {
+        let mut table = ResultsTable::new();
+        let result = make_sortable_result("val", vec![Some("3"), Some("1"), Some("2")]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // None → Ascending on col 0
+        assert_eq!(table.sort_col, Some(0));
+        assert_eq!(table.sort_order, SortOrder::Ascending);
+        assert_eq!(
+            col0_values(&table),
+            vec![
+                Some("1".to_string()),
+                Some("2".to_string()),
+                Some("3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sort_descending() {
+        let mut table = ResultsTable::new();
+        let result = make_sortable_result("val", vec![Some("3"), Some("1"), Some("2")]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // Ascending
+        table.cycle_sort(); // Descending
+        assert_eq!(table.sort_order, SortOrder::Descending);
+        assert_eq!(
+            col0_values(&table),
+            vec![
+                Some("3".to_string()),
+                Some("2".to_string()),
+                Some("1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sort_remove() {
+        let mut table = ResultsTable::new();
+        let result = make_sortable_result("val", vec![Some("3"), Some("1"), Some("2")]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // Ascending
+        table.cycle_sort(); // Descending
+        table.cycle_sort(); // Back to original order
+        assert_eq!(table.sort_col, None);
+        assert_eq!(
+            col0_values(&table),
+            vec![
+                Some("3".to_string()),
+                Some("1".to_string()),
+                Some("2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sort_nulls_last() {
+        let mut table = ResultsTable::new();
+        let result = make_sortable_result("val", vec![None, Some("2"), Some("1"), None]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // Ascending — NULLs should sort last
+        assert_eq!(
+            col0_values(&table),
+            vec![Some("1".to_string()), Some("2".to_string()), None, None,]
+        );
+    }
+
+    #[test]
+    fn test_sort_different_column() {
+        let mut table = ResultsTable::new();
+        let result = make_result(
+            vec![make_column("a"), make_column("b")],
+            vec![
+                vec![
+                    turso::Value::Text("2".to_string()),
+                    turso::Value::Text("y".to_string()),
+                ],
+                vec![
+                    turso::Value::Text("1".to_string()),
+                    turso::Value::Text("x".to_string()),
+                ],
+            ],
+        );
+        table.set_results(&result);
+
+        // Sort col 0 ascending
+        table.cycle_sort();
+        assert_eq!(table.sort_col, Some(0));
+        assert_eq!(table.rows[0][0], Some("1".to_string()));
+
+        // Move to col 1 and sort — should reset to ascending on col 1
+        table.next_col();
+        table.cycle_sort();
+        assert_eq!(table.sort_col, Some(1));
+        assert_eq!(table.sort_order, SortOrder::Ascending);
+        assert_eq!(table.rows[0][1], Some("x".to_string()));
+        assert_eq!(table.rows[1][1], Some("y".to_string()));
+    }
+
+    #[test]
+    fn test_compare_non_null_numeric() {
+        // "2" < "10" numerically (not string comparison where "10" < "2")
+        assert_eq!(compare_non_null("2", "10"), std::cmp::Ordering::Less);
+        assert_eq!(compare_non_null("10", "2"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_non_null_mixed_types_transitive() {
+        // Numbers sort before strings — this preserves transitivity
+        assert_eq!(compare_non_null("10", "abc"), std::cmp::Ordering::Less);
+        assert_eq!(compare_non_null("2", "abc"), std::cmp::Ordering::Less);
+        assert_eq!(compare_non_null("abc", "10"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_non_null_nan_inf_treated_as_text() {
+        // NaN and infinity should not parse as numbers
+        assert_eq!(parse_number("NaN"), None);
+        assert_eq!(parse_number("inf"), None);
+        assert_eq!(parse_number("-inf"), None);
+        assert_eq!(parse_number("infinity"), None);
+        // Finite numbers should parse
+        assert_eq!(parse_number("42"), Some(42.0));
+        assert_eq!(parse_number("-2.5"), Some(-2.5));
+    }
+
+    #[test]
+    fn test_sort_nulls_last_descending() {
+        let mut table = ResultsTable::new();
+        let result = make_sortable_result("val", vec![None, Some("2"), Some("1"), None]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // Ascending
+        table.cycle_sort(); // Descending — NULLs should still sort last
+        assert_eq!(
+            col0_values(&table),
+            vec![Some("2".to_string()), Some("1".to_string()), None, None,]
+        );
+    }
+
+    #[test]
+    fn test_sort_mixed_types_column() {
+        let mut table = ResultsTable::new();
+        let result =
+            make_sortable_result("val", vec![Some("abc"), Some("2"), Some("10"), Some("def")]);
+        table.set_results(&result);
+
+        table.cycle_sort(); // Ascending — numbers first, then strings
+        assert_eq!(
+            col0_values(&table),
+            vec![
+                Some("2".to_string()),
+                Some("10".to_string()),
+                Some("abc".to_string()),
+                Some("def".to_string()),
+            ]
         );
     }
 }
