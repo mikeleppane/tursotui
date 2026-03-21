@@ -25,6 +25,11 @@ arboard = { version = "3", default-features = false }
 # JSON detection and pretty-printing in record detail
 serde_json = "1"
 
+# Config file support
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
 [profile.dev]
 opt-level = 0
 debug = false

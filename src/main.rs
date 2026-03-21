@@ -1,8 +1,11 @@
 mod app;
 mod components;
+mod config;
 mod db;
 mod event;
 mod highlight;
+#[allow(dead_code)] // Used by later milestone tasks (buffer save/load on quit/startup)
+mod persistence;
 mod theme;
 
 use std::time::Duration;
@@ -48,11 +51,14 @@ struct UiPanels {
 }
 
 impl UiPanels {
-    fn new() -> Self {
+    fn new(config: &crate::config::AppConfig) -> Self {
         Self {
             schema: SchemaExplorer::new(),
-            editor: QueryEditor::new(),
-            results: ResultsTable::new(),
+            editor: QueryEditor::with_tab_size(config.editor.tab_size),
+            results: ResultsTable::with_config(
+                config.results.max_column_width,
+                config.results.null_display.clone(),
+            ),
             explain: ExplainView::new(),
             record_detail: RecordDetail::new(),
             db_info: DbInfoPanel::new(),
@@ -65,13 +71,22 @@ impl UiPanels {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    let (cfg, config_err) = config::load_config();
+
     // Open the first database (multi-db support in Milestone 7)
     let path = cli.database.first().map_or(":memory:", String::as_str);
     let handle = DatabaseHandle::open(path)
         .await
         .map_err(|e| format!("failed to open '{path}': {e}"))?;
     let db_context = DatabaseContext::new(handle, path.to_string());
-    let mut app = AppState::new(db_context);
+    let mut app = AppState::new(db_context, cfg);
+    if let Some(err_msg) = config_err {
+        app.transient_message = Some(app::TransientMessage {
+            text: err_msg,
+            created_at: std::time::Instant::now(),
+            is_error: true,
+        });
+    }
 
     // Trigger schema load on startup
     app.active_db_mut().handle.load_schema();
@@ -94,7 +109,7 @@ fn run_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut panels = UiPanels::new();
+    let mut panels = UiPanels::new(&app.config);
 
     loop {
         // 1. Drain async result channel before key handling
@@ -167,9 +182,24 @@ fn handle_key_event(
     app: &mut AppState,
     panels: &mut UiPanels,
 ) {
-    if app.help_visible {
-        handle_help_key(key, app);
-        return;
+    match app.active_overlay {
+        Some(app::Overlay::Help) => {
+            handle_help_key(key, app);
+            return;
+        }
+        Some(app::Overlay::History) => {
+            // History key handling will be added in Task 10.
+            // Allow Esc to dismiss and Ctrl+Q to quit so input isn't swallowed.
+            match key.code {
+                KeyCode::Esc => app.active_overlay = None,
+                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                    app.should_quit = true;
+                }
+                _ => {}
+            }
+            return;
+        }
+        None => {}
     }
 
     // Route to focused component first
@@ -187,7 +217,7 @@ fn handle_key_event(
 fn handle_help_key(key: ratatui::crossterm::event::KeyEvent, app: &mut AppState) {
     match key.code {
         KeyCode::F(1) | KeyCode::Esc | KeyCode::Char('?') => {
-            app.help_visible = false;
+            app.active_overlay = None;
         }
         KeyCode::Down | KeyCode::Char('j') => {
             app.help_scroll = app.help_scroll.saturating_add(1);
@@ -449,6 +479,15 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 is_error: true,
             });
         }
+        app::Action::ToggleTheme => {
+            if let Err(e) = crate::config::save_config(&app.config) {
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Config save failed: {e}"),
+                    created_at: std::time::Instant::now(),
+                    is_error: true,
+                });
+            }
+        }
         app::Action::WalCheckpoint => {
             // Guard: info must be loaded, journal mode must be WAL, not already checkpointing
             let info = panels.db_info.info();
@@ -568,7 +607,7 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     }
 
     // Help overlay (rendered last so it floats on top)
-    if app.help_visible {
+    if app.active_overlay == Some(app::Overlay::Help) {
         components::help::render(frame, app.help_scroll, theme);
     }
 }

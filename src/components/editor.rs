@@ -35,6 +35,7 @@ pub(crate) struct QueryEditor {
     scroll_offset: usize,
     undo_stack: Vec<Vec<String>>,
     redo_stack: Vec<Vec<String>>,
+    tab_size: usize,
 }
 
 impl QueryEditor {
@@ -45,6 +46,14 @@ impl QueryEditor {
             scroll_offset: 0,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            tab_size: TAB_SIZE,
+        }
+    }
+
+    pub(crate) fn with_tab_size(tab_size: usize) -> Self {
+        Self {
+            tab_size,
+            ..Self::new()
         }
     }
 
@@ -150,20 +159,20 @@ impl QueryEditor {
         self.save_undo();
         let (row, col) = self.cursor;
         let byte_idx = char_to_byte(&self.buffer[row], col);
-        let spaces = " ".repeat(TAB_SIZE);
+        let spaces = " ".repeat(self.tab_size);
         self.buffer[row].insert_str(byte_idx, &spaces);
-        self.cursor.1 += TAB_SIZE;
+        self.cursor.1 += self.tab_size;
     }
 
-    /// Remove up to `TAB_SIZE` leading spaces from the current line (Shift+Tab dedent).
+    /// Remove up to `tab_size` leading spaces from the current line (Shift+Tab dedent).
     fn dedent(&mut self) {
         let row = self.cursor.0;
-        let line = &self.buffer[row];
-        let leading_spaces = line.len() - line.trim_start_matches(' ').len();
-        let remove_count = leading_spaces.min(TAB_SIZE);
+        let leading_spaces = self.buffer[row].chars().take_while(|c| *c == ' ').count();
+        let remove_count = leading_spaces.min(self.tab_size);
         if remove_count > 0 {
             self.save_undo();
-            self.buffer[row] = self.buffer[row][remove_count..].to_string();
+            let byte_offset = char_to_byte(&self.buffer[row], remove_count);
+            self.buffer[row] = self.buffer[row][byte_offset..].to_string();
             // Adjust cursor: move left by removed amount, but don't go below 0
             self.cursor.1 = self.cursor.1.saturating_sub(remove_count);
         }

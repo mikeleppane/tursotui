@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use crate::config::{AppConfig, ThemeMode};
 use crate::db::{
     ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryKind, QueryResult, SchemaEntry,
 };
@@ -10,6 +11,13 @@ pub(crate) struct TransientMessage {
     pub text: String,
     pub created_at: Instant,
     pub is_error: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Overlay {
+    Help,
+    #[allow(dead_code)] // used when history panel lands (Task 10)
+    History,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,21 +198,27 @@ pub(crate) struct AppState {
     pub databases: Vec<DatabaseContext>,
     pub active_db: usize,
     pub theme: Theme,
+    pub config: AppConfig,
     pub transient_message: Option<TransientMessage>,
     pub should_quit: bool,
-    pub help_visible: bool,
+    pub active_overlay: Option<Overlay>,
     pub help_scroll: usize,
 }
 
 impl AppState {
-    pub fn new(db_context: DatabaseContext) -> Self {
+    pub fn new(db_context: DatabaseContext, config: AppConfig) -> Self {
+        let theme = match config.theme.mode {
+            ThemeMode::Dark => DARK_THEME,
+            ThemeMode::Light => LIGHT_THEME,
+        };
         Self {
             databases: vec![db_context],
             active_db: 0,
-            theme: DARK_THEME,
+            theme,
+            config,
             transient_message: None,
             should_quit: false,
-            help_visible: false,
+            active_overlay: None,
             help_scroll: 0,
         }
     }
@@ -220,6 +234,7 @@ impl AppState {
     }
 
     /// Process an action and update state.
+    #[allow(clippy::too_many_lines)]
     pub fn update(&mut self, action: &Action) {
         match action {
             Action::Quit => self.should_quit = true,
@@ -275,17 +290,21 @@ impl AppState {
                 });
             }
             Action::ToggleTheme => {
-                self.theme = if self.theme.bg == DARK_THEME.bg {
-                    LIGHT_THEME
+                if self.theme.bg == DARK_THEME.bg {
+                    self.theme = LIGHT_THEME;
+                    self.config.theme.mode = ThemeMode::Light;
                 } else {
-                    DARK_THEME
-                };
+                    self.theme = DARK_THEME;
+                    self.config.theme.mode = ThemeMode::Dark;
+                }
             }
             Action::ShowHelp => {
-                self.help_visible = !self.help_visible;
-                if self.help_visible {
+                self.active_overlay = if let Some(Overlay::Help) = self.active_overlay {
+                    None
+                } else {
                     self.help_scroll = 0;
-                }
+                    Some(Overlay::Help)
+                };
             }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)

@@ -22,8 +22,8 @@ enum SortOrder {
 const WIDTH_SAMPLE_ROWS: usize = 50;
 /// Minimum column width in characters.
 const MIN_COL_WIDTH: u16 = 4;
-/// Maximum column width in characters.
-const MAX_COL_WIDTH: u16 = 40;
+/// Default maximum column width in characters.
+const DEFAULT_MAX_COL_WIDTH: u16 = 40;
 
 /// Displays query results in a scrollable, navigable table.
 pub(crate) struct ResultsTable {
@@ -44,6 +44,10 @@ pub(crate) struct ResultsTable {
     sort_order: SortOrder,
     /// Original row order so we can un-sort.
     original_rows: Vec<Vec<Option<String>>>,
+    /// Maximum column width in characters (configurable).
+    max_col_width: u16,
+    /// Display string for SQL NULL values (configurable).
+    null_display: String,
 }
 
 impl ResultsTable {
@@ -59,6 +63,16 @@ impl ResultsTable {
             sort_col: None,
             sort_order: SortOrder::Ascending,
             original_rows: Vec::new(),
+            max_col_width: DEFAULT_MAX_COL_WIDTH,
+            null_display: "NULL".to_string(),
+        }
+    }
+
+    pub(crate) fn with_config(max_col_width: u16, null_display: String) -> Self {
+        Self {
+            max_col_width,
+            null_display,
+            ..Self::new()
         }
     }
 
@@ -71,7 +85,12 @@ impl ResultsTable {
             .iter()
             .map(|row| row.iter().map(value_to_display).collect())
             .collect();
-        self.column_widths = compute_column_widths(&self.columns, &self.rows);
+        self.column_widths = compute_column_widths(
+            &self.columns,
+            &self.rows,
+            self.max_col_width,
+            &self.null_display,
+        );
         self.min_widths = self
             .columns
             .iter()
@@ -184,7 +203,7 @@ impl ResultsTable {
 
     fn grow_column(&mut self) {
         if let Some(w) = self.column_widths.get_mut(self.selected_col) {
-            *w = (*w).saturating_add(1).min(MAX_COL_WIDTH);
+            *w = (*w).saturating_add(1).min(self.max_col_width);
         }
     }
 
@@ -254,8 +273,8 @@ impl ResultsTable {
                 Some(Action::SetTransient("No row selected".into(), false))
             };
         };
-        let text = format_cell_for_copy(&self.rows, row_idx, self.selected_col)
-            .unwrap_or_else(|| "NULL".to_string());
+        let text = format_cell_for_copy(&self.rows, row_idx, self.selected_col, &self.null_display)
+            .unwrap_or_else(|| self.null_display.clone());
         match set_clipboard(&text) {
             Ok(()) => Some(Action::SetTransient(
                 "Copied cell to clipboard".into(),
@@ -276,7 +295,7 @@ impl ResultsTable {
                 Some(Action::SetTransient("No row selected".into(), false))
             };
         };
-        let text = format_row_for_copy(&self.rows, row_idx).unwrap_or_default();
+        let text = format_row_for_copy(&self.rows, row_idx, &self.null_display).unwrap_or_default();
         match set_clipboard(&text) {
             Ok(()) => Some(Action::SetTransient(
                 "Copied row to clipboard".into(),
@@ -489,6 +508,7 @@ impl Component for ResultsTable {
             &visible_range,
             self.selected_col,
             sort_state,
+            &self.null_display,
             theme,
         );
 
@@ -511,6 +531,7 @@ impl Component for ResultsTable {
 }
 
 /// Build a ratatui `Table` for the visible column range, highlighting the selected column header.
+#[allow(clippy::too_many_arguments)]
 fn build_visible_table<'a>(
     columns: &'a [ColumnDef],
     rows: &'a [Vec<Option<String>>],
@@ -518,6 +539,7 @@ fn build_visible_table<'a>(
     visible_range: &std::ops::Range<usize>,
     selected_col: usize,
     sort_state: Option<(usize, SortOrder)>,
+    null_display: &'a str,
     theme: &Theme,
 ) -> Table<'a> {
     let col_widths: Vec<Constraint> = column_widths[visible_range.clone()]
@@ -566,7 +588,7 @@ fn build_visible_table<'a>(
             let cells: Vec<Cell> = row_vals[visible_range.clone()]
                 .iter()
                 .map(|val| match val {
-                    None => Cell::from("NULL").style(theme.null_style),
+                    None => Cell::from(null_display).style(theme.null_style),
                     Some(s) => Cell::from(s.as_str()),
                 })
                 .collect();
@@ -582,17 +604,26 @@ fn build_visible_table<'a>(
 }
 
 /// Format a single cell value for clipboard. Returns the display text.
-fn format_cell_for_copy(rows: &[Vec<Option<String>>], row: usize, col: usize) -> Option<String> {
+fn format_cell_for_copy(
+    rows: &[Vec<Option<String>>],
+    row: usize,
+    col: usize,
+    null_display: &str,
+) -> Option<String> {
     let cell = rows.get(row)?.get(col)?;
-    Some(cell.as_deref().unwrap_or("NULL").to_string())
+    Some(cell.as_deref().unwrap_or(null_display).to_string())
 }
 
 /// Format an entire row as tab-separated values for clipboard.
-fn format_row_for_copy(rows: &[Vec<Option<String>>], row: usize) -> Option<String> {
+fn format_row_for_copy(
+    rows: &[Vec<Option<String>>],
+    row: usize,
+    null_display: &str,
+) -> Option<String> {
     let row_data = rows.get(row)?;
     let text = row_data
         .iter()
-        .map(|v| v.as_deref().unwrap_or("NULL"))
+        .map(|v| v.as_deref().unwrap_or(null_display))
         .collect::<Vec<_>>()
         .join("\t");
     Some(text)
@@ -638,12 +669,18 @@ fn value_to_display(val: &turso::Value) -> Option<String> {
 
 /// Auto-size column widths: `max(header_width, longest_value_in_first_50_rows, MIN)`, capped at MAX.
 /// Uses unicode display widths for correct handling of multi-byte/wide characters.
-fn compute_column_widths(columns: &[ColumnDef], rows: &[Vec<Option<String>>]) -> Vec<u16> {
+fn compute_column_widths(
+    columns: &[ColumnDef],
+    rows: &[Vec<Option<String>>],
+    max_col_width: u16,
+    null_display: &str,
+) -> Vec<u16> {
+    let null_w = UnicodeWidthStr::width(null_display);
     columns
         .iter()
         .enumerate()
         .map(|(col_idx, col)| {
-            let header_w = col.name.as_str().width().min(MAX_COL_WIDTH as usize) as u16;
+            let header_w = col.name.as_str().width().min(max_col_width as usize) as u16;
             let max_val_w = rows
                 .iter()
                 .take(WIDTH_SAMPLE_ROWS)
@@ -651,13 +688,13 @@ fn compute_column_widths(columns: &[ColumnDef], rows: &[Vec<Option<String>>]) ->
                 .map(|v| {
                     let w = match v {
                         Some(s) => s.as_str().width(),
-                        None => 4, // "NULL" display width
+                        None => null_w,
                     };
-                    w.min(MAX_COL_WIDTH as usize) as u16
+                    w.min(max_col_width as usize) as u16
                 })
                 .max()
                 .unwrap_or(0);
-            header_w.max(max_val_w).clamp(MIN_COL_WIDTH, MAX_COL_WIDTH)
+            header_w.max(max_val_w).clamp(MIN_COL_WIDTH, max_col_width)
         })
         .collect()
 }
@@ -933,7 +970,7 @@ mod tests {
     fn test_column_width_minimum() {
         let cols = vec![make_column("x")]; // header len = 1 < MIN_COL_WIDTH=4
         let rows: Vec<Vec<Option<String>>> = vec![];
-        let widths = compute_column_widths(&cols, &rows);
+        let widths = compute_column_widths(&cols, &rows, DEFAULT_MAX_COL_WIDTH, "NULL");
         assert_eq!(widths, vec![MIN_COL_WIDTH]);
     }
 
@@ -941,7 +978,7 @@ mod tests {
     fn test_column_width_header_dominates() {
         let cols = vec![make_column("very_long_header_name")]; // 21 chars
         let rows: Vec<Vec<Option<String>>> = vec![vec![Some("hi".to_string())]];
-        let widths = compute_column_widths(&cols, &rows);
+        let widths = compute_column_widths(&cols, &rows, DEFAULT_MAX_COL_WIDTH, "NULL");
         assert_eq!(widths, vec![21]);
     }
 
@@ -950,15 +987,15 @@ mod tests {
         let cols = vec![make_column("col")];
         let long_val = Some("a".repeat(100));
         let rows = vec![vec![long_val]];
-        let widths = compute_column_widths(&cols, &rows);
-        assert_eq!(widths, vec![MAX_COL_WIDTH]);
+        let widths = compute_column_widths(&cols, &rows, DEFAULT_MAX_COL_WIDTH, "NULL");
+        assert_eq!(widths, vec![DEFAULT_MAX_COL_WIDTH]);
     }
 
     #[test]
     fn test_column_width_null_counts_as_four() {
         let cols = vec![make_column("x")]; // header len = 1
         let rows: Vec<Vec<Option<String>>> = vec![vec![None]]; // NULL = 4 chars
-        let widths = compute_column_widths(&cols, &rows);
+        let widths = compute_column_widths(&cols, &rows, DEFAULT_MAX_COL_WIDTH, "NULL");
         assert_eq!(widths, vec![MIN_COL_WIDTH]); // max(1, 4) clamped = 4
     }
 
@@ -1094,7 +1131,7 @@ mod tests {
         );
         table.set_results(&result);
 
-        // The first column's computed width (40 = MAX_COL_WIDTH) exceeds viewport.
+        // The first column's computed width (40 = DEFAULT_MAX_COL_WIDTH) exceeds viewport.
         // It should still be included in the visible range.
         let range = table.visible_col_range(10);
         assert!(
@@ -1146,7 +1183,7 @@ mod tests {
         for _ in 0..100 {
             table.grow_column();
         }
-        assert_eq!(table.column_widths[0], MAX_COL_WIDTH);
+        assert_eq!(table.column_widths[0], DEFAULT_MAX_COL_WIDTH);
     }
 
     #[test]
@@ -1359,26 +1396,32 @@ mod tests {
     #[test]
     fn test_format_cell_for_copy_normal() {
         let rows = vec![vec![Some("hello".to_string()), Some("world".to_string())]];
-        assert_eq!(format_cell_for_copy(&rows, 0, 0), Some("hello".to_string()));
+        assert_eq!(
+            format_cell_for_copy(&rows, 0, 0, "NULL"),
+            Some("hello".to_string())
+        );
     }
 
     #[test]
     fn test_format_cell_for_copy_null() {
         let rows = vec![vec![None, Some("value".to_string())]];
-        assert_eq!(format_cell_for_copy(&rows, 0, 0), Some("NULL".to_string()));
+        assert_eq!(
+            format_cell_for_copy(&rows, 0, 0, "NULL"),
+            Some("NULL".to_string())
+        );
     }
 
     #[test]
     fn test_format_cell_for_copy_out_of_bounds() {
         let rows = vec![vec![Some("hello".to_string())]];
-        assert_eq!(format_cell_for_copy(&rows, 5, 0), None);
+        assert_eq!(format_cell_for_copy(&rows, 5, 0, "NULL"), None);
     }
 
     #[test]
     fn test_format_row_for_copy() {
         let rows = vec![vec![Some("a".to_string()), None, Some("c".to_string())]];
         assert_eq!(
-            format_row_for_copy(&rows, 0),
+            format_row_for_copy(&rows, 0, "NULL"),
             Some("a\tNULL\tc".to_string())
         );
     }
@@ -1386,6 +1429,6 @@ mod tests {
     #[test]
     fn test_format_row_for_copy_out_of_bounds() {
         let rows: Vec<Vec<Option<String>>> = vec![];
-        assert_eq!(format_row_for_copy(&rows, 0), None);
+        assert_eq!(format_row_for_copy(&rows, 0, "NULL"), None);
     }
 }
