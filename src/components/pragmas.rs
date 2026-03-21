@@ -247,7 +247,9 @@ impl PragmaDashboard {
                 }
             }
             (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshPragmas),
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
+                Some(Action::CycleFocus(Direction::Forward))
+            }
             _ => None,
         }
     }
@@ -490,7 +492,9 @@ impl Component for PragmaDashboard {
         if self.pragmas.is_empty() {
             return match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshPragmas),
-                (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+                (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
+                    Some(Action::CycleFocus(Direction::Forward))
+                }
                 _ => None,
             };
         }

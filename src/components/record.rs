@@ -151,7 +151,7 @@ impl Component for RecordDetail {
 
         if self.columns.is_empty() {
             return match key.code {
-                KeyCode::Esc => Some(Action::CycleFocus(Direction::Forward)),
+                KeyCode::Tab | KeyCode::Esc => Some(Action::CycleFocus(Direction::Forward)),
                 _ => None,
             };
         }
@@ -179,7 +179,9 @@ impl Component for RecordDetail {
                 // scroll_offset adjusted by clamp_scroll() on next render()
                 None
             }
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
+                Some(Action::CycleFocus(Direction::Forward))
+            }
             _ => None,
         }
     }

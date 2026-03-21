@@ -135,15 +135,14 @@ impl DbInfoPanel {
         lines
     }
 
-    /// Ensure `scroll_offset` keeps visible content within bounds.
+    /// Clamp `scroll_offset` to valid range for the content.
     fn clamp_scroll(&mut self, content_height: usize, viewport_height: usize) {
         if viewport_height == 0 || content_height == 0 {
+            self.scroll_offset = 0;
             return;
         }
         let max_scroll = content_height.saturating_sub(viewport_height);
-        if self.scroll_offset > max_scroll {
-            self.scroll_offset = max_scroll;
-        }
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
     }
 
     /// Render a centered placeholder message.
@@ -239,8 +238,8 @@ impl DbInfoPanel {
             Paragraph::new(Span::styled(
                 *label,
                 Style::default()
-                    .fg(theme.border)
-                    .add_modifier(Modifier::DIM),
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
             )),
             label_area,
         );
@@ -296,7 +295,6 @@ impl Component for DbInfoPanel {
             (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::WalCheckpoint),
             (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
-                // Clamping happens in render() where we know viewport height.
                 None
             }
             (KeyModifiers::NONE, KeyCode::Char('k') | KeyCode::Up) => {
@@ -308,11 +306,12 @@ impl Component for DbInfoPanel {
                 None
             }
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('G')) => {
-                // Sentinel: clamp_scroll will pin to last valid offset on next render().
                 self.scroll_offset = usize::MAX;
                 None
             }
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
+                Some(Action::CycleFocus(Direction::Forward))
+            }
             _ => None,
         }
     }
