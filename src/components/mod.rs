@@ -1,4 +1,5 @@
 pub(crate) mod editor;
+pub(crate) mod help;
 pub(crate) mod placeholder;
 pub(crate) mod results;
 pub(crate) mod schema;

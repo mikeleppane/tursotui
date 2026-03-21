@@ -8,7 +8,7 @@ mod theme;
 use std::time::Duration;
 
 use clap::Parser;
-use ratatui::crossterm::event::{Event, KeyEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Tabs};
@@ -110,20 +110,45 @@ fn run_loop(
         if let Some(Event::Key(key)) = event::poll_event(Duration::from_millis(16))?
             && key.kind == KeyEventKind::Press
         {
-            // Route to focused component first
-            let focused = app.active_db().focus;
-            let component_action = match focused {
-                PanelId::Schema => panels.schema.handle_key(key),
-                PanelId::Editor => panels.editor.handle_key(key),
-                PanelId::Bottom => panels.results.handle_key(key),
-                PanelId::DbInfo => panels.db_info.handle_key(key),
-                PanelId::Pragmas => panels.pragmas.handle_key(key),
-            };
+            if app.help_visible {
+                match key.code {
+                    KeyCode::F(1) | KeyCode::Esc | KeyCode::Char('?') => {
+                        app.help_visible = false;
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app.help_scroll = app.help_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app.help_scroll = app.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Char('g') => {
+                        app.help_scroll = 0;
+                    }
+                    KeyCode::Char('G') => {
+                        app.help_scroll = usize::MAX; // clamped in render
+                    }
+                    KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
+                        app.should_quit = true;
+                    }
+                    _ => {}
+                }
+                // Skip normal key handling when help is visible
+            } else {
+                // Route to focused component first
+                let focused = app.active_db().focus;
+                let component_action = match focused {
+                    PanelId::Schema => panels.schema.handle_key(key),
+                    PanelId::Editor => panels.editor.handle_key(key),
+                    PanelId::Bottom => panels.results.handle_key(key),
+                    PanelId::DbInfo => panels.db_info.handle_key(key),
+                    PanelId::Pragmas => panels.pragmas.handle_key(key),
+                };
 
-            let action = component_action.or_else(|| event::map_global_key(key));
-            if let Some(ref action) = action {
-                app.update(action);
-                dispatch_action_to_components(action, app, &mut panels);
+                let action = component_action.or_else(|| event::map_global_key(key));
+                if let Some(ref action) = action {
+                    app.update(action);
+                    dispatch_action_to_components(action, app, &mut panels);
+                }
             }
         }
 
@@ -263,6 +288,11 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         panels.results.row_count(),
         theme,
     );
+
+    // Help overlay (rendered last so it floats on top)
+    if app.help_visible {
+        components::help::render(frame, app.help_scroll, theme);
+    }
 }
 
 fn render_query_tab(

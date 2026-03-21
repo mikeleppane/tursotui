@@ -53,7 +53,8 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::CONTROL, KeyCode::Char('t')) => Some(Action::ToggleTheme),
 
         // Help
-        (KeyModifiers::NONE, KeyCode::F(1)) => Some(Action::ShowHelp),
+        (KeyModifiers::NONE, KeyCode::F(1))
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('?')) => Some(Action::ShowHelp),
 
         _ => None,
     }

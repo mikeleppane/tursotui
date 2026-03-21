@@ -169,6 +169,8 @@ pub(crate) struct AppState {
     pub theme: Theme,
     pub transient_message: Option<TransientMessage>,
     pub should_quit: bool,
+    pub help_visible: bool,
+    pub help_scroll: usize,
 }
 
 impl AppState {
@@ -179,6 +181,8 @@ impl AppState {
             theme: DARK_THEME,
             transient_message: None,
             should_quit: false,
+            help_visible: false,
+            help_scroll: 0,
         }
     }
 
@@ -252,10 +256,13 @@ impl AppState {
                     DARK_THEME
                 };
             }
-            Action::SchemaLoaded(_)
-            | Action::ColumnsLoaded(_, _)
-            | Action::LoadColumns(_)
-            | Action::ShowHelp => {
+            Action::ShowHelp => {
+                self.help_visible = !self.help_visible;
+                if self.help_visible {
+                    self.help_scroll = 0;
+                }
+            }
+            Action::SchemaLoaded(_) | Action::ColumnsLoaded(_, _) | Action::LoadColumns(_) => {
                 // Handled elsewhere (main.rs) or implemented in later milestones
             }
         }
