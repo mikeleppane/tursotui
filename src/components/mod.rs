@@ -2,6 +2,7 @@ pub(crate) mod db_info;
 pub(crate) mod editor;
 pub(crate) mod explain;
 pub(crate) mod help;
+pub(crate) mod history;
 pub(crate) mod pragmas;
 pub(crate) mod record;
 pub(crate) mod results;

@@ -21,6 +21,7 @@ use components::Component;
 use components::db_info::DbInfoPanel;
 use components::editor::QueryEditor;
 use components::explain::ExplainView;
+use components::history::QueryHistoryPanel;
 use components::pragmas::PragmaDashboard;
 use components::record::RecordDetail;
 use components::results::ResultsTable;
@@ -48,6 +49,7 @@ struct UiPanels {
     record_detail: RecordDetail,
     db_info: DbInfoPanel,
     pragmas: PragmaDashboard,
+    history: QueryHistoryPanel,
 }
 
 impl UiPanels {
@@ -63,6 +65,7 @@ impl UiPanels {
             record_detail: RecordDetail::new(),
             db_info: DbInfoPanel::new(),
             pragmas: PragmaDashboard::new(),
+            history: QueryHistoryPanel::new(),
         }
     }
 }
@@ -240,7 +243,7 @@ fn map_history_message(msg: history::HistoryMessage) -> app::Action {
     match msg {
         history::HistoryMessage::Loaded(entries) => app::Action::HistoryLoaded(entries),
         history::HistoryMessage::LoadFailed(err) => app::Action::SetTransient(err, true),
-        history::HistoryMessage::Deleted(id) => app::Action::DeleteHistoryEntry(id),
+        history::HistoryMessage::Deleted(_) => app::Action::HistoryReloadRequested,
     }
 }
 
@@ -256,14 +259,9 @@ fn handle_key_event(
             return;
         }
         Some(app::Overlay::History) => {
-            // History key handling will be added in Task 10.
-            // Allow Esc to dismiss and Ctrl+Q to quit so input isn't swallowed.
-            match key.code {
-                KeyCode::Esc => app.active_overlay = None,
-                KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
-                    app.should_quit = true;
-                }
-                _ => {}
+            if let Some(action) = panels.history.handle_key(key) {
+                app.update(&action);
+                dispatch_action_to_components(&action, app, panels);
             }
             return;
         }
@@ -359,7 +357,7 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
         app::Action::LoadColumns(table_name) => {
             app.active_db_mut().handle.load_columns(table_name.clone());
         }
-        app::Action::PopulateEditor(sql) => {
+        app::Action::PopulateEditor(sql) | app::Action::RecallHistory(sql) => {
             panels.editor.set_contents(sql);
         }
         app::Action::QueryCompleted(result) => {
@@ -581,6 +579,63 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             let path = app.active_db().path.clone();
             let _ = persistence::delete_buffer(&path);
         }
+        app::Action::ShowHistory => {
+            if app.active_overlay == Some(app::Overlay::History) {
+                if let Some(ref history_db) = app.history_db {
+                    panels.history.set_loading();
+                    history_db.request_load(
+                        500,
+                        panels.history.db_filter_value(),
+                        panels.history.origin_filter(),
+                        panels.history.search_text(),
+                        panels.history.errors_only(),
+                    );
+                } else {
+                    panels.history.set_unavailable();
+                }
+            }
+        }
+        app::Action::HistoryLoaded(entries) => {
+            panels.history.set_entries(entries.clone());
+        }
+        app::Action::RecallAndExecute(sql) => {
+            // Note: duplicates ExecuteQuery state+dispatch logic because we can't
+            // recursively call dispatch_action_to_components. Keep in sync.
+            panels.editor.set_contents(sql);
+            if !sql.trim().is_empty() {
+                let db = app.active_db_mut();
+                db.executing = true;
+                db.last_execution_source = app::ExecutionSource::FullBuffer;
+                db.last_executed_sql = Some(sql.clone());
+                db.handle.execute(sql.clone());
+            }
+        }
+        app::Action::DeleteHistoryEntry(id) => {
+            if let Some(ref history_db) = app.history_db {
+                history_db.request_delete(*id);
+                // Reload triggered by HistoryReloadRequested when Deleted confirmation arrives
+                history_db.request_load(
+                    500,
+                    panels.history.db_filter_value(),
+                    panels.history.origin_filter(),
+                    panels.history.search_text(),
+                    panels.history.errors_only(),
+                );
+            }
+        }
+        app::Action::HistoryReloadRequested => {
+            // Reload history after a confirmed delete (separate from DeleteHistoryEntry
+            // to avoid re-triggering request_delete in a loop)
+            if let Some(ref history_db) = app.history_db {
+                history_db.request_load(
+                    500,
+                    panels.history.db_filter_value(),
+                    panels.history.origin_filter(),
+                    panels.history.search_text(),
+                    panels.history.errors_only(),
+                );
+            }
+        }
         app::Action::ToggleTheme => {
             if let Err(e) = crate::config::save_config(&app.config) {
                 app.transient_message = Some(app::TransientMessage {
@@ -706,6 +761,11 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     // JSON overlay (renders on top of everything except help)
     if db.bottom_tab == BottomTab::Detail && panels.record_detail.has_overlay() {
         panels.record_detail.render_overlay(frame, area, theme);
+    }
+
+    // History overlay
+    if app.active_overlay == Some(app::Overlay::History) {
+        panels.history.render(frame, area, theme);
     }
 
     // Help overlay (rendered last so it floats on top)

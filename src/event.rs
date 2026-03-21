@@ -56,6 +56,9 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         (KeyModifiers::NONE, KeyCode::F(1))
         | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('?')) => Some(Action::ShowHelp),
 
+        // History
+        (KeyModifiers::CONTROL, KeyCode::Char('h')) => Some(Action::ShowHistory),
+
         _ => None,
     }
 }

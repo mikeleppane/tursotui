@@ -4,7 +4,6 @@ use tokio::sync::mpsc;
 
 /// A stored history entry read back from the `query_log` table.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // fields read when history panel lands (Task 10)
 pub(crate) struct HistoryEntry {
     pub(crate) id: i64,
     pub(crate) sql: String,
@@ -13,11 +12,11 @@ pub(crate) struct HistoryEntry {
     pub(crate) execution_time_ms: Option<u64>,
     pub(crate) row_count: Option<u64>,
     pub(crate) error_message: Option<String>,
+    #[allow(dead_code)] // used when origin filtering lands (M8)
     pub(crate) origin: String,
 }
 
 impl HistoryEntry {
-    #[allow(dead_code)] // used when history panel lands (Task 10)
     pub(crate) fn is_error(&self) -> bool {
         self.error_message.is_some()
     }
@@ -35,10 +34,10 @@ pub(crate) struct LogEntry {
 
 /// Messages sent from history tasks back to the main loop.
 #[derive(Debug)]
-#[allow(dead_code)] // variants constructed when history panel lands (Task 10)
 pub(crate) enum HistoryMessage {
     Loaded(Vec<HistoryEntry>),
     LoadFailed(String),
+    #[allow(dead_code)] // id carried for logging/debugging; mapped to HistoryReloadRequested
     Deleted(i64),
 }
 
@@ -49,7 +48,6 @@ pub(crate) enum HistoryMessage {
 /// back through an unbounded channel.
 pub(crate) struct HistoryDb {
     database: Arc<turso::Database>,
-    #[allow(dead_code)] // used by request_load/request_delete when history panel lands (Task 10)
     result_tx: mpsc::UnboundedSender<HistoryMessage>,
     result_rx: mpsc::UnboundedReceiver<HistoryMessage>,
 }
@@ -153,7 +151,6 @@ impl HistoryDb {
 
     /// Request an async load of history entries with optional filters.
     /// Results arrive via [`Self::try_recv`].
-    #[allow(dead_code)] // called when history panel lands (Task 10)
     pub(crate) fn request_load(
         &self,
         limit: usize,
@@ -181,7 +178,6 @@ impl HistoryDb {
     }
 
     /// Build and execute the filtered SELECT query.
-    #[allow(dead_code)] // called via request_load when history panel lands (Task 10)
     async fn load_entries(
         db: &turso::Database,
         limit: usize,
@@ -248,7 +244,6 @@ impl HistoryDb {
 
     /// Request async deletion of a single history entry by id.
     /// Result arrives via [`Self::try_recv`] as `HistoryMessage::Deleted`.
-    #[allow(dead_code)] // called when history panel lands (Task 10)
     pub(crate) fn request_delete(&self, id: i64) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -291,7 +286,6 @@ impl HistoryDb {
 }
 
 /// Extract a `HistoryEntry` from a query result row.
-#[allow(dead_code)] // called via load_entries when history panel lands (Task 10)
 fn row_to_entry(row: &turso::Row) -> Result<HistoryEntry, String> {
     let map_err = |field: &str, e: turso::Error| format!("failed to read {field}: {e}");
 

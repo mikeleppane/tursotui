@@ -16,7 +16,6 @@ pub(crate) struct TransientMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Overlay {
     Help,
-    #[allow(dead_code)] // used when history panel lands (Task 10)
     History,
 }
 
@@ -110,16 +109,12 @@ pub(crate) enum Action {
     IntegrityCheck,
     IntegrityCheckCompleted(String),
     IntegrityCheckFailed(String),
-    #[allow(dead_code)] // payload consumed when history panel lands (Task 10)
     HistoryLoaded(Vec<crate::history::HistoryEntry>),
-    #[allow(dead_code)] // wired in Task 10
     ShowHistory,
-    #[allow(dead_code)] // wired in Task 10
     RecallHistory(String),
-    #[allow(dead_code)] // wired in Task 10
     RecallAndExecute(String),
-    #[allow(dead_code)] // wired in Task 10
     DeleteHistoryEntry(i64),
+    HistoryReloadRequested,
 }
 
 /// Per-database workspace.
@@ -370,6 +365,7 @@ impl AppState {
             | Action::IntegrityCheckFailed(_)
             | Action::HistoryLoaded(_)
             | Action::DeleteHistoryEntry(_)
+            | Action::HistoryReloadRequested
             | Action::ClearEditor => {
                 // No AppState mutation needed; dispatched to components
             }
