@@ -12,7 +12,6 @@ pub(crate) struct HistoryEntry {
     pub(crate) execution_time_ms: Option<u64>,
     pub(crate) row_count: Option<u64>,
     pub(crate) error_message: Option<String>,
-    #[allow(dead_code)] // used when origin filtering lands (M8)
     pub(crate) origin: String,
 }
 

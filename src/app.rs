@@ -28,9 +28,7 @@ pub(crate) enum SubTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BottomTab {
     Results,
-    #[allow(dead_code)] // used by bottom tab routing (M4 Task 7)
     Explain,
-    #[allow(dead_code)] // used by bottom tab routing (M4 Task 7)
     Detail,
     #[allow(dead_code)] // stays placeholder until ER Diagram milestone
     ERDiagram,

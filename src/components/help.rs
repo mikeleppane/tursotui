@@ -9,7 +9,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(96);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(112);
 
     // --- Global ---
     lines.push(Line::from(Span::styled("Global", header_style)));
@@ -24,9 +24,16 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     // --- Query Editor ---
     lines.push(Line::from(Span::styled("Query Editor", header_style)));
     lines.push(Line::from("  F5 / Ctrl+Enter Execute query"));
+    lines.push(Line::from(
+        "  Ctrl+Shift+Enter Execute selection / statement at cursor",
+    ));
     lines.push(Line::from("  Ctrl+Z / Ctrl+Y Undo / redo"));
     lines.push(Line::from("  Ctrl+L          Clear editor buffer"));
+    lines.push(Line::from("  Ctrl+H          Query history"));
     lines.push(Line::from("  Tab / Shift+Tab Indent / dedent"));
+    lines.push(Line::from("  Shift+Arrow     Extend selection"));
+    lines.push(Line::from("  Ctrl+Shift+A    Select all"));
+    lines.push(Line::from("  Ctrl+Arrow      Word movement"));
     lines.push(Line::from("  Esc             Release focus"));
     lines.push(Line::from(""));
 
