@@ -111,6 +111,7 @@ fn run_loop(
                 db::QueryMessage::PragmaSet(name, val) => app::Action::PragmaSet(name, val),
                 db::QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
                 db::QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
+                db::QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
             };
             app.update(&action);
             dispatch_action_to_components(&action, app, &mut panels);

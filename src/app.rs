@@ -103,6 +103,8 @@ pub(crate) enum Action {
     WalCheckpoint,
     #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
     WalCheckpointed(String),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    WalCheckpointFailed(String),
 }
 
 /// Per-database workspace.
@@ -307,7 +309,8 @@ impl AppState {
             | Action::PragmaSet(_, _)
             | Action::PragmaFailed(_, _)
             | Action::WalCheckpoint
-            | Action::WalCheckpointed(_) => {
+            | Action::WalCheckpointed(_)
+            | Action::WalCheckpointFailed(_) => {
                 // No AppState mutation needed; dispatched to components in M4 Tasks 3-7
             }
         }
