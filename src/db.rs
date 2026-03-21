@@ -101,7 +101,7 @@ fn skip_leading_whitespace_and_comments(sql: &str) -> &str {
 
 /// Split SQL input into individual statements on semicolons, respecting string
 /// literals, quoted identifiers, and comments. Returns trimmed non-empty statements.
-fn detect_statements(sql: &str) -> Vec<&str> {
+pub(crate) fn detect_statements(sql: &str) -> Vec<&str> {
     let mut statements = Vec::new();
     let bytes = sql.as_bytes();
     let len = bytes.len();

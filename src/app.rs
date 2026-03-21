@@ -64,6 +64,13 @@ pub(crate) enum Direction {
     Backward,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecutionSource {
+    FullBuffer,
+    Selection,
+    StatementAtCursor,
+}
+
 /// All state mutations flow through actions.
 #[derive(Debug)]
 pub(crate) enum Action {
@@ -76,7 +83,7 @@ pub(crate) enum Action {
     ToggleTheme,
     ShowHelp,
     Quit,
-    ExecuteQuery(String),
+    ExecuteQuery(String, ExecutionSource),
     QueryCompleted(QueryResult),
     QueryFailed(String),
     SchemaLoaded(Vec<SchemaEntry>),
@@ -119,6 +126,7 @@ pub(crate) struct DatabaseContext {
     pub last_truncated: bool,
     pub last_query_kind: Option<QueryKind>,
     pub last_rows_affected: u64,
+    pub last_execution_source: ExecutionSource,
 }
 
 impl DatabaseContext {
@@ -145,6 +153,7 @@ impl DatabaseContext {
             last_truncated: false,
             last_query_kind: None,
             last_rows_affected: 0,
+            last_execution_source: ExecutionSource::FullBuffer,
         }
     }
 
@@ -261,9 +270,11 @@ impl AppState {
             Action::PopulateEditor(_) => {
                 self.active_db_mut().focus = PanelId::Editor;
             }
-            Action::ExecuteQuery(sql) => {
+            Action::ExecuteQuery(sql, source) => {
                 if !sql.trim().is_empty() {
-                    self.active_db_mut().executing = true;
+                    let db = self.active_db_mut();
+                    db.executing = true;
+                    db.last_execution_source = *source;
                 }
             }
             Action::QueryCompleted(result) => {

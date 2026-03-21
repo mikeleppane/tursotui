@@ -141,7 +141,12 @@ pub(crate) fn render(
     let left = format!(" {panel_hints}");
 
     let center = if db.executing {
-        "Executing...".to_string()
+        match db.last_execution_source {
+            crate::app::ExecutionSource::FullBuffer => "Executing...",
+            crate::app::ExecutionSource::Selection => "Executing selection...",
+            crate::app::ExecutionSource::StatementAtCursor => "Executing statement...",
+        }
+        .to_string()
     } else if let Some(ref kind) = db.last_query_kind {
         let time = db
             .last_execution_time

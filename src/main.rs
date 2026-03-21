@@ -283,7 +283,7 @@ fn route_key_to_component(
 #[allow(clippy::too_many_lines)]
 fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panels: &mut UiPanels) {
     match action {
-        app::Action::ExecuteQuery(sql) => {
+        app::Action::ExecuteQuery(sql, _source) => {
             if !sql.trim().is_empty() {
                 app.active_db_mut().handle.execute(sql.clone());
             }
