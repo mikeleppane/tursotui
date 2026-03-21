@@ -55,13 +55,14 @@ pub(crate) enum Direction {
 }
 
 /// All state mutations flow through actions.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum Action {
     SwitchSubTab(SubTab),
+    #[allow(dead_code)] // constructed when click-to-focus lands (later milestone)
     FocusPanel(PanelId),
     CycleFocus(Direction),
     ToggleSidebar,
+    #[allow(dead_code)] // constructed when bottom tab bar is interactive (later milestone)
     SwitchBottomTab(BottomTab),
     ToggleTheme,
     ShowHelp,
