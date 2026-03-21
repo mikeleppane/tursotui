@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod event;
 mod highlight;
+mod history;
 mod persistence;
 mod theme;
 
@@ -78,8 +79,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("failed to open '{path}': {e}"))?;
     let db_context = DatabaseContext::new(handle, path.to_string());
-    let mut app = AppState::new(db_context, cfg);
-    if let Some(err_msg) = config_err {
+
+    // Open history database (non-fatal if it fails)
+    let (history_db, history_err) = match history::HistoryDb::open().await {
+        Ok(db) => {
+            db.prune(cfg.history.max_entries).await;
+            (Some(db), None)
+        }
+        Err(e) => (None, Some(format!("History unavailable: {e}"))),
+    };
+
+    let mut app = AppState::new(db_context, cfg, history_db);
+
+    // Show config or history error as transient message
+    let startup_err = config_err.or(history_err);
+    if let Some(err_msg) = startup_err {
         app.transient_message = Some(app::TransientMessage {
             text: err_msg,
             created_at: std::time::Instant::now(),
@@ -182,6 +196,18 @@ fn drain_async_messages(app: &mut AppState, panels: &mut UiPanels) {
         app.update(&action);
         dispatch_action_to_components(&action, app, panels);
     }
+
+    // Drain history messages (collect first to avoid borrow conflicts)
+    let history_msgs: Vec<_> = app
+        .history_db
+        .as_mut()
+        .map(|db| std::iter::from_fn(|| db.try_recv()).collect())
+        .unwrap_or_default();
+    for msg in history_msgs {
+        let action = map_history_message(msg);
+        app.update(&action);
+        dispatch_action_to_components(&action, app, panels);
+    }
 }
 
 /// Convert a `QueryMessage` from the database worker into an `Action`.
@@ -206,6 +232,15 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
         db::QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
         db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
+    }
+}
+
+/// Convert a `HistoryMessage` from the history worker into an `Action`.
+fn map_history_message(msg: history::HistoryMessage) -> app::Action {
+    match msg {
+        history::HistoryMessage::Loaded(entries) => app::Action::HistoryLoaded(entries),
+        history::HistoryMessage::LoadFailed(err) => app::Action::SetTransient(err, true),
+        history::HistoryMessage::Deleted(id) => app::Action::DeleteHistoryEntry(id),
     }
 }
 
@@ -348,6 +383,22 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             if has_ddl {
                 app.active_db_mut().handle.load_schema();
             }
+            // Log to query history
+            let origin = match result.query_kind {
+                db::QueryKind::Ddl => "ddl",
+                db::QueryKind::Pragma => "pragma",
+                _ => "user",
+            };
+            if let Some(ref history) = app.history_db {
+                history.log_query(history::LogEntry {
+                    sql: result.sql.clone(),
+                    database_path: app.active_db().path.clone(),
+                    execution_time_ms: result.execution_time.as_millis() as u64,
+                    row_count: result.rows.len(),
+                    error_message: None,
+                    origin,
+                });
+            }
         }
         app::Action::QueryFailed(err) => {
             app.transient_message = Some(app::TransientMessage {
@@ -355,6 +406,19 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 created_at: std::time::Instant::now(),
                 is_error: true,
             });
+            // Log failed query to history (use stored SQL from ExecuteQuery)
+            if let Some(ref history) = app.history_db
+                && let Some(ref sql) = app.active_db().last_executed_sql
+            {
+                history.log_query(history::LogEntry {
+                    sql: sql.clone(),
+                    database_path: app.active_db().path.clone(),
+                    execution_time_ms: 0,
+                    row_count: 0,
+                    error_message: Some(err.clone()),
+                    origin: "user",
+                });
+            }
         }
         app::Action::SchemaLoaded(entries) => {
             panels.schema.set_schema(entries);

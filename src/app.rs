@@ -110,6 +110,16 @@ pub(crate) enum Action {
     IntegrityCheck,
     IntegrityCheckCompleted(String),
     IntegrityCheckFailed(String),
+    #[allow(dead_code)] // payload consumed when history panel lands (Task 10)
+    HistoryLoaded(Vec<crate::history::HistoryEntry>),
+    #[allow(dead_code)] // wired in Task 10
+    ShowHistory,
+    #[allow(dead_code)] // wired in Task 10
+    RecallHistory(String),
+    #[allow(dead_code)] // wired in Task 10
+    RecallAndExecute(String),
+    #[allow(dead_code)] // wired in Task 10
+    DeleteHistoryEntry(i64),
 }
 
 /// Per-database workspace.
@@ -128,6 +138,7 @@ pub(crate) struct DatabaseContext {
     pub last_query_kind: Option<QueryKind>,
     pub last_rows_affected: u64,
     pub last_execution_source: ExecutionSource,
+    pub last_executed_sql: Option<String>,
 }
 
 impl DatabaseContext {
@@ -155,6 +166,7 @@ impl DatabaseContext {
             last_query_kind: None,
             last_rows_affected: 0,
             last_execution_source: ExecutionSource::FullBuffer,
+            last_executed_sql: None,
         }
     }
 
@@ -213,10 +225,15 @@ pub(crate) struct AppState {
     pub should_quit: bool,
     pub active_overlay: Option<Overlay>,
     pub help_scroll: usize,
+    pub history_db: Option<crate::history::HistoryDb>,
 }
 
 impl AppState {
-    pub fn new(db_context: DatabaseContext, config: AppConfig) -> Self {
+    pub fn new(
+        db_context: DatabaseContext,
+        config: AppConfig,
+        history_db: Option<crate::history::HistoryDb>,
+    ) -> Self {
         let theme = match config.theme.mode {
             ThemeMode::Dark => DARK_THEME,
             ThemeMode::Light => LIGHT_THEME,
@@ -230,6 +247,7 @@ impl AppState {
             should_quit: false,
             active_overlay: None,
             help_scroll: 0,
+            history_db,
         }
     }
 
@@ -276,6 +294,7 @@ impl AppState {
                     let db = self.active_db_mut();
                     db.executing = true;
                     db.last_execution_source = *source;
+                    db.last_executed_sql = Some(sql.clone());
                 }
             }
             Action::QueryCompleted(result) => {
@@ -318,6 +337,16 @@ impl AppState {
                     Some(Overlay::Help)
                 };
             }
+            Action::ShowHistory => {
+                self.active_overlay = if let Some(Overlay::History) = self.active_overlay {
+                    None
+                } else {
+                    Some(Overlay::History)
+                };
+            }
+            Action::RecallHistory(_) | Action::RecallAndExecute(_) => {
+                self.active_overlay = None;
+            }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)
             | Action::LoadColumns(_)
@@ -339,6 +368,8 @@ impl AppState {
             | Action::IntegrityCheck
             | Action::IntegrityCheckCompleted(_)
             | Action::IntegrityCheckFailed(_)
+            | Action::HistoryLoaded(_)
+            | Action::DeleteHistoryEntry(_)
             | Action::ClearEditor => {
                 // No AppState mutation needed; dispatched to components
             }
