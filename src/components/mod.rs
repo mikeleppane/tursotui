@@ -1,6 +1,7 @@
 pub(crate) mod editor;
 pub(crate) mod placeholder;
 pub(crate) mod results;
+pub(crate) mod schema;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::prelude::*;
