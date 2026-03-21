@@ -70,10 +70,9 @@ pub(crate) enum Action {
 
 /// Per-database workspace.
 pub(crate) struct DatabaseContext {
-    #[allow(dead_code)]
     pub handle: DatabaseHandle,
     #[allow(dead_code)]
-    pub path: String,
+    pub path: String, // used for multi-tab display (Milestone 7)
     pub label: String,
     pub sub_tab: SubTab,
     pub focus: PanelId,
@@ -152,7 +151,6 @@ pub(crate) struct AppState {
     pub databases: Vec<DatabaseContext>,
     pub active_db: usize,
     pub theme: Theme,
-    #[allow(dead_code)]
     pub transient_message: Option<(String, Instant)>,
     pub should_quit: bool,
 }

@@ -6,56 +6,47 @@ use tokio::sync::mpsc;
 /// A single column definition from query results.
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnDef {
-    #[allow(dead_code)]
     pub name: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used for column type display in later milestones
     pub type_name: String,
 }
 
 /// Result of a completed query.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryResult {
-    #[allow(dead_code)]
     pub columns: Vec<ColumnDef>,
-    #[allow(dead_code)]
     pub rows: Vec<Vec<turso::Value>>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // displayed in status bar (later milestone)
     pub execution_time: Duration,
     /// True if the result was capped at 10,000 rows.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // shown in results title (later milestone)
     pub truncated: bool,
 }
 
 /// A raw schema entry from `sqlite_schema`.
 #[derive(Debug, Clone)]
 pub(crate) struct SchemaEntry {
-    #[allow(dead_code)]
     pub obj_type: String,
-    #[allow(dead_code)]
     pub name: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used for index/trigger grouping (later milestone)
     pub tbl_name: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // shown in SQL preview panel (later milestone)
     pub sql: Option<String>,
 }
 
 /// Column info from PRAGMA `table_info`.
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnInfo {
-    #[allow(dead_code)]
     pub name: String,
-    #[allow(dead_code)]
     pub col_type: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // displayed as column flag (later milestone)
     pub notnull: bool,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // displayed in column detail (later milestone)
     pub default_value: Option<String>,
-    #[allow(dead_code)]
     pub pk: bool,
 }
 
 /// Messages sent from query tasks back to the main loop.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum QueryMessage {
     Completed(QueryResult),
@@ -69,7 +60,6 @@ pub(crate) enum QueryMessage {
 /// One per open database.
 pub(crate) struct DatabaseHandle {
     database: Arc<turso::Database>,
-    #[allow(dead_code)]
     result_rx: mpsc::UnboundedReceiver<QueryMessage>,
     result_tx: mpsc::UnboundedSender<QueryMessage>,
 }
@@ -110,13 +100,11 @@ impl DatabaseHandle {
     /// `Disconnected` cannot occur here because `self` holds `result_tx` — the channel
     /// stays open as long as the handle exists. Spawned tasks clone the sender via
     /// `sender()`, so even if all tasks complete, the original sender keeps the channel alive.
-    #[allow(dead_code)]
     pub fn try_recv(&mut self) -> Option<QueryMessage> {
         self.result_rx.try_recv().ok()
     }
 
     /// Execute a SQL query in the background. Results arrive via `try_recv()`.
-    #[allow(dead_code)]
     pub fn execute(&self, sql: String) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -187,7 +175,6 @@ impl DatabaseHandle {
     }
 
     /// Load the database schema in the background.
-    #[allow(dead_code)]
     pub fn load_schema(&self) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -243,7 +230,6 @@ impl DatabaseHandle {
     }
 
     /// Load column info for a specific table.
-    #[allow(dead_code)]
     pub fn load_columns(&self, table_name: String) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
