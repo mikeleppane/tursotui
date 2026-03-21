@@ -55,6 +55,14 @@ impl ResultsTable {
         }
     }
 
+    pub(crate) fn selected_row(&self) -> Option<usize> {
+        self.state.selected()
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
     /// Reset all state — used when closing a database or clearing results.
     #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {

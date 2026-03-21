@@ -16,6 +16,9 @@ tokio = { version = "1", features = ["full"] }
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
+# Unicode display-width (transitive via ratatui, pinned for direct use)
+unicode-width = "0.2"
+
 [profile.dev]
 opt-level = 0
 debug = false

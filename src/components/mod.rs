@@ -2,6 +2,7 @@ pub(crate) mod editor;
 pub(crate) mod placeholder;
 pub(crate) mod results;
 pub(crate) mod schema;
+pub(crate) mod status_bar;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::prelude::*;

@@ -16,10 +16,8 @@ pub(crate) struct ColumnDef {
 pub(crate) struct QueryResult {
     pub columns: Vec<ColumnDef>,
     pub rows: Vec<Vec<turso::Value>>,
-    #[allow(dead_code)] // displayed in status bar (later milestone)
     pub execution_time: Duration,
     /// True if the result was capped at 10,000 rows.
-    #[allow(dead_code)] // shown in results title (later milestone)
     pub truncated: bool,
 }
 

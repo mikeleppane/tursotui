@@ -127,7 +127,14 @@ fn run_loop(
             }
         }
 
-        // 3. Render
+        // 3. Clear expired transient message
+        if let Some((_, at)) = &app.transient_message
+            && at.elapsed() >= components::status_bar::TRANSIENT_TTL
+        {
+            app.transient_message = None;
+        }
+
+        // 4. Render
         if app.should_quit {
             break;
         }
@@ -243,27 +250,15 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         }
     }
 
-    // Status bar — show transient error message if present (5s TTL), otherwise default hints
-    let (status_text, status_style) = if let Some((ref msg, at)) = app.transient_message
-        && at.elapsed() < Duration::from_secs(5)
-    {
-        (
-            format!(" Error: {msg}"),
-            Style::default()
-                .fg(theme.error)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        let focus = db.focus;
-        (
-            format!(
-                " Focus: {focus}  |  Tab/Esc: cycle  |  Ctrl+B: sidebar  |  Alt+1/2: Query/Admin  |  Ctrl+Q: quit",
-            ),
-            theme.status_bar_style,
-        )
-    };
-    let status = Paragraph::new(status_text).style(status_style);
-    frame.render_widget(status, status_area);
+    // Status bar
+    components::status_bar::render(
+        frame,
+        status_area,
+        app,
+        panels.results.selected_row(),
+        panels.results.row_count(),
+        theme,
+    );
 }
 
 fn render_query_tab(

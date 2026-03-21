@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::db::{ColumnInfo, DatabaseHandle, QueryResult, SchemaEntry};
 use crate::theme::{DARK_THEME, Theme};
@@ -78,6 +78,10 @@ pub(crate) struct DatabaseContext {
     pub focus: PanelId,
     pub sidebar_visible: bool,
     pub bottom_tab: BottomTab,
+    pub executing: bool,
+    pub last_execution_time: Option<Duration>,
+    pub last_row_count: Option<usize>,
+    pub last_truncated: bool,
 }
 
 impl DatabaseContext {
@@ -98,6 +102,10 @@ impl DatabaseContext {
             focus: PanelId::Editor,
             sidebar_visible: true,
             bottom_tab: BottomTab::Results,
+            executing: false,
+            last_execution_time: None,
+            last_row_count: None,
+            last_truncated: false,
         }
     }
 
@@ -203,10 +211,26 @@ impl AppState {
             Action::PopulateEditor(_) => {
                 self.active_db_mut().focus = PanelId::Editor;
             }
-            Action::ExecuteQuery(_)
-            | Action::QueryCompleted(_)
-            | Action::QueryFailed(_)
-            | Action::SchemaLoaded(_)
+            Action::ExecuteQuery(sql) => {
+                if !sql.trim().is_empty() {
+                    self.active_db_mut().executing = true;
+                }
+            }
+            Action::QueryCompleted(result) => {
+                let db = self.active_db_mut();
+                db.executing = false;
+                db.last_execution_time = Some(result.execution_time);
+                db.last_row_count = Some(result.rows.len());
+                db.last_truncated = result.truncated;
+            }
+            Action::QueryFailed(_) => {
+                let db = self.active_db_mut();
+                db.executing = false;
+                db.last_execution_time = None;
+                db.last_row_count = None;
+                db.last_truncated = false;
+            }
+            Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)
             | Action::LoadColumns(_)
             | Action::ToggleTheme
