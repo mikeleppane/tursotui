@@ -15,7 +15,10 @@ use ratatui::widgets::{Paragraph, Tabs};
 
 use app::{AppState, DatabaseContext, PanelId, SubTab};
 use components::Component;
+use components::editor::QueryEditor;
 use components::placeholder::Placeholder;
+use components::results::ResultsTable;
+use components::schema::SchemaExplorer;
 use db::DatabaseHandle;
 use theme::Theme;
 
@@ -28,23 +31,23 @@ struct Cli {
     database: Vec<String>,
 }
 
-/// Placeholder UI panels — replaced by real components in later milestones.
+/// UI panels for the application.
 /// Grouped to reduce parameter counts in render functions.
 /// Will move into `DatabaseContext` when multi-database support lands (Milestone 7).
 struct UiPanels {
-    schema: Placeholder,
-    editor: Placeholder,
-    bottom: Placeholder,
-    db_info: Placeholder,
-    pragmas: Placeholder,
+    schema: SchemaExplorer,
+    editor: QueryEditor,
+    results: ResultsTable,
+    db_info: Placeholder, // Still placeholder — Admin tab (later milestone)
+    pragmas: Placeholder, // Still placeholder — Admin tab (later milestone)
 }
 
 impl UiPanels {
     fn new() -> Self {
         Self {
-            schema: Placeholder::new("Schema Explorer"),
-            editor: Placeholder::new("Query Editor"),
-            bottom: Placeholder::new("Results"),
+            schema: SchemaExplorer::new(),
+            editor: QueryEditor::new(),
+            results: ResultsTable::new(),
             db_info: Placeholder::new("Database Info"),
             pragmas: Placeholder::new("PRAGMA Dashboard"),
         }
@@ -62,6 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("failed to open '{path}': {e}"))?;
     let db_context = DatabaseContext::new(handle, path.to_string());
     let mut app = AppState::new(db_context);
+
+    // Trigger schema load on startup
+    app.active_db_mut().handle.load_schema();
 
     // Install panic hook to restore terminal before printing the panic message
     let prev_hook = std::panic::take_hook();
@@ -84,7 +90,23 @@ fn run_loop(
     let mut panels = UiPanels::new();
 
     loop {
-        // 1. Poll events (16ms ~ 60fps)
+        // 1. Drain async result channel before key handling (multiple messages may arrive per frame)
+        while let Some(msg) = app.active_db_mut().handle.try_recv() {
+            let action = match msg {
+                db::QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
+                db::QueryMessage::Failed(err) | db::QueryMessage::SchemaFailed(err) => {
+                    app::Action::QueryFailed(err)
+                }
+                db::QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
+                db::QueryMessage::ColumnsLoaded(table, cols) => {
+                    app::Action::ColumnsLoaded(table, cols)
+                }
+            };
+            app.update(&action);
+            dispatch_action_to_components(&action, app, &mut panels);
+        }
+
+        // 2. Poll events (16ms ~ 60fps)
         if let Some(Event::Key(key)) = event::poll_event(Duration::from_millis(16))?
             && key.kind == KeyEventKind::Press
         {
@@ -93,18 +115,17 @@ fn run_loop(
             let component_action = match focused {
                 PanelId::Schema => panels.schema.handle_key(key),
                 PanelId::Editor => panels.editor.handle_key(key),
-                PanelId::Bottom => panels.bottom.handle_key(key),
+                PanelId::Bottom => panels.results.handle_key(key),
                 PanelId::DbInfo => panels.db_info.handle_key(key),
                 PanelId::Pragmas => panels.pragmas.handle_key(key),
             };
 
             let action = component_action.or_else(|| event::map_global_key(key));
-            if let Some(action) = action {
-                app.update(&action);
+            if let Some(ref action) = action {
+                app.update(action);
+                dispatch_action_to_components(action, app, &mut panels);
             }
         }
-
-        // 2. Check result channels (placeholder for async query results)
 
         // 3. Render
         if app.should_quit {
@@ -117,6 +138,37 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+/// Dispatch an action to UI components and database handle.
+/// Handles both component state updates and I/O triggers (the handle lives in `AppState`).
+fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panels: &mut UiPanels) {
+    match action {
+        app::Action::ExecuteQuery(sql) => {
+            if !sql.trim().is_empty() {
+                app.active_db_mut().handle.execute(sql.clone());
+            }
+        }
+        app::Action::LoadColumns(table_name) => {
+            app.active_db_mut().handle.load_columns(table_name.clone());
+        }
+        app::Action::PopulateEditor(sql) => {
+            panels.editor.set_contents(sql);
+        }
+        app::Action::QueryCompleted(result) => {
+            panels.results.set_results(result);
+        }
+        app::Action::QueryFailed(err) => {
+            app.transient_message = Some((err.clone(), std::time::Instant::now()));
+        }
+        app::Action::SchemaLoaded(entries) => {
+            panels.schema.set_schema(entries);
+        }
+        app::Action::ColumnsLoaded(table_name, columns) => {
+            panels.schema.set_columns(table_name, columns.clone());
+        }
+        _ => {}
+    }
 }
 
 fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
@@ -191,12 +243,26 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         }
     }
 
-    // Status bar
-    let focus = db.focus;
-    let status_text = format!(
-        " Focus: {focus:?}  |  Tab/Esc: cycle  |  Ctrl+B: sidebar  |  Alt+1/2: Query/Admin  |  Ctrl+Q: quit",
-    );
-    let status = Paragraph::new(status_text).style(theme.status_bar_style);
+    // Status bar — show transient error message if present (5s TTL), otherwise default hints
+    let (status_text, status_style) = if let Some((ref msg, at)) = app.transient_message
+        && at.elapsed() < Duration::from_secs(5)
+    {
+        (
+            format!(" Error: {msg}"),
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        let focus = db.focus;
+        (
+            format!(
+                " Focus: {focus}  |  Tab/Esc: cycle  |  Ctrl+B: sidebar  |  Alt+1/2: Query/Admin  |  Ctrl+Q: quit",
+            ),
+            theme.status_bar_style,
+        )
+    };
+    let status = Paragraph::new(status_text).style(status_style);
     frame.render_widget(status, status_area);
 }
 
@@ -225,7 +291,7 @@ fn render_query_tab(
             .editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
         panels
-            .bottom
+            .results
             .render(frame, bottom_area, focus == PanelId::Bottom, theme);
     } else {
         let [editor_area, bottom_area] =
@@ -235,7 +301,7 @@ fn render_query_tab(
             .editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
         panels
-            .bottom
+            .results
             .render(frame, bottom_area, focus == PanelId::Bottom, theme);
     }
 }

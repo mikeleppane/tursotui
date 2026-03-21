@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "SchemaExplorer is wired into main.rs in a later task"
-)]
-
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};

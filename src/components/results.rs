@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "ResultsTable is wired into main.rs in a later task"
-)]
-
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{
@@ -61,6 +56,7 @@ impl ResultsTable {
     }
 
     /// Reset all state — used when closing a database or clearing results.
+    #[allow(dead_code)]
     pub(crate) fn clear(&mut self) {
         self.columns.clear();
         self.rows.clear();

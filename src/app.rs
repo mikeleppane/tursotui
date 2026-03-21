@@ -29,6 +29,18 @@ pub(crate) enum PanelId {
     Pragmas,
 }
 
+impl std::fmt::Display for PanelId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Schema => write!(f, "Schema"),
+            Self::Editor => write!(f, "Editor"),
+            Self::Bottom => write!(f, "Results"),
+            Self::DbInfo => write!(f, "Database Info"),
+            Self::Pragmas => write!(f, "Pragmas"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Direction {
     Forward,
