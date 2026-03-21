@@ -5,6 +5,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{AppState, BottomTab, PanelId, SubTab};
+use crate::db::QueryKind;
 use crate::theme::Theme;
 
 /// Format a `Duration` for human-readable display in the status bar.
@@ -69,7 +70,7 @@ fn keybindings_for(
                 "j/k Navigate  h/l Columns  s Sort  </> Resize  y/Y Copy  3: Detail  Esc Release"
             }
             BottomTab::Explain => "Tab Mode  Enter Generate  j/k Scroll  Esc Release",
-            BottomTab::Detail => "j/k Navigate  g/G First/Last  Esc Release",
+            BottomTab::Detail => "j/k Navigate  Enter Expand  g/G First/Last  Esc Release",
             BottomTab::ERDiagram => "1-3 Switch Tabs  Esc Release",
         },
         // Admin-tab panels
@@ -105,6 +106,7 @@ pub(crate) const TRANSIENT_TTL: Duration = Duration::from_secs(3);
 ///
 /// This is a render function, not a `Component` — it does not handle keys.
 /// It reads from `AppState` and supplementary data to produce a styled line.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn render(
     frame: &mut Frame,
     area: Rect,
@@ -138,18 +140,68 @@ pub(crate) fn render(
     let (panel_hints, global_hints) = keybindings_for(db.sub_tab, db.focus, db.bottom_tab);
     let left = format!(" {panel_hints}");
 
-    // Center: execution status
     let center = if db.executing {
         "Executing...".to_string()
-    } else if let (Some(count), Some(time)) = (db.last_row_count, db.last_execution_time) {
-        if db.last_truncated {
-            format!(
-                "{}+ rows in {} (truncated)",
-                format_count(count),
-                format_duration(time)
-            )
-        } else {
-            format!("{} rows in {}", format_count(count), format_duration(time))
+    } else if let Some(ref kind) = db.last_query_kind {
+        let time = db
+            .last_execution_time
+            .map(format_duration)
+            .unwrap_or_default();
+        match kind {
+            QueryKind::Select => {
+                let count = db.last_row_count.unwrap_or(0);
+                if db.last_truncated {
+                    format!("{}+ rows in {} (truncated)", format_count(count), time)
+                } else {
+                    format!("{} rows in {}", format_count(count), time)
+                }
+            }
+            QueryKind::Explain => {
+                let count = db.last_row_count.unwrap_or(0);
+                format!("EXPLAIN: {} rows ({})", format_count(count), time)
+            }
+            QueryKind::Insert => {
+                let n = db.last_rows_affected;
+                let word = if n == 1 { "row" } else { "rows" };
+                format!("{n} {word} inserted ({time})")
+            }
+            QueryKind::Update => {
+                let n = db.last_rows_affected;
+                let word = if n == 1 { "row" } else { "rows" };
+                format!("{n} {word} updated ({time})")
+            }
+            QueryKind::Delete => {
+                let n = db.last_rows_affected;
+                let word = if n == 1 { "row" } else { "rows" };
+                format!("{n} {word} deleted ({time})")
+            }
+            QueryKind::Ddl => format!("DDL executed ({time})"),
+            QueryKind::Pragma => {
+                let count = db.last_row_count.unwrap_or(0);
+                if count > 0 {
+                    format!("PRAGMA: {} rows ({})", format_count(count), time)
+                } else {
+                    format!("PRAGMA executed ({time})")
+                }
+            }
+            QueryKind::Batch {
+                statement_count,
+                has_trailing_select,
+            } => {
+                if *has_trailing_select {
+                    let n = statement_count - 1;
+                    let word = if n == 1 { "statement" } else { "statements" };
+                    format!("Batch: {n} {word} + SELECT ({time})")
+                } else {
+                    let word = if *statement_count == 1 {
+                        "statement"
+                    } else {
+                        "statements"
+                    };
+                    format!("Batch: {statement_count} {word} executed ({time})")
+                }
+            }
+            QueryKind::Other => format!("Query executed ({time})"),
         }
     } else {
         String::new()

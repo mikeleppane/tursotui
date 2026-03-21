@@ -119,13 +119,20 @@ impl DbInfoPanel {
         lines.push(("Page count", info.page_count.to_string()));
         lines.push(("Page size", format!("{} bytes", info.page_size)));
         lines.push(("Encoding", info.encoding.clone()));
-        lines.push(("Journal mode", info.journal_mode.clone()));
+        let journal_display = if info.journal_mode.eq_ignore_ascii_case("mvcc") {
+            format!("{} (Turso concurrent writes)", info.journal_mode)
+        } else {
+            info.journal_mode.clone()
+        };
+        lines.push(("Journal mode", journal_display));
         lines.push(("Schema version", info.schema_version.to_string()));
         lines.push(("Freelist pages", info.freelist_count.to_string()));
         lines.push(("Turso version", info.turso_version.to_string()));
 
-        // WAL section: only if journal_mode is "wal" (case-insensitive)
-        if info.journal_mode.eq_ignore_ascii_case("wal") {
+        // WAL section: only if journal_mode is "wal" or "mvcc" (case-insensitive)
+        if info.journal_mode.eq_ignore_ascii_case("wal")
+            || info.journal_mode.eq_ignore_ascii_case("mvcc")
+        {
             let frames = info
                 .wal_frames
                 .map_or_else(|| "0".to_string(), |f| f.to_string());
@@ -167,7 +174,8 @@ impl DbInfoPanel {
         theme: &Theme,
     ) {
         let lines = Self::info_lines(info);
-        let is_wal = info.journal_mode.eq_ignore_ascii_case("wal");
+        let is_wal = info.journal_mode.eq_ignore_ascii_case("wal")
+            || info.journal_mode.eq_ignore_ascii_case("mvcc");
 
         // Total content lines: info lines + optional blank + checkpoint hint
         let extra_lines = usize::from(is_wal) * 2; // blank line + hint line
@@ -293,6 +301,7 @@ impl Component for DbInfoPanel {
         match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshDbInfo),
             (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::WalCheckpoint),
+            (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::IntegrityCheck),
             (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
                 None
@@ -345,7 +354,8 @@ impl Component for DbInfoPanel {
         // Clamp scroll before borrowing self.info to avoid &mut self conflict
         if let Some(info) = &self.info {
             let lines = Self::info_lines(info);
-            let is_wal = info.journal_mode.eq_ignore_ascii_case("wal");
+            let is_wal = info.journal_mode.eq_ignore_ascii_case("wal")
+                || info.journal_mode.eq_ignore_ascii_case("mvcc");
             let extra = usize::from(is_wal) * 2;
             self.clamp_scroll(lines.len() + extra, inner.height as usize);
         }

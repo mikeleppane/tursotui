@@ -200,6 +200,39 @@ const SQL_FUNCTIONS: &[&str] = &[
     "JSON_OBJECT",
     "JSON_EXTRACT",
     "JSON_TYPE",
+    // Turso/libsql-specific functions
+    "UUID4",
+    "UUID7",
+    "UUID7_TIMESTAMP_MS",
+    "UUID_STR",
+    "UUID_BLOB",
+    "VECTOR32",
+    "VECTOR64",
+    "VECTOR_DISTANCE_COS",
+    "VECTOR_DISTANCE_L2",
+    "VECTOR_EXTRACT",
+    "VECTOR_CONCAT",
+    "VECTOR_SLICE",
+    "VECTOR_DIMENSION",
+    "TIME_NOW",
+    "TIME_DATE",
+    "TIME_UNIX",
+    "TIME_ADD",
+    "TIME_SUB",
+    "TIME_FMT_ISO",
+    "TIME_FMT_DATETIME",
+    "TIME_FMT_UNIXEPOCH",
+    "REGEXP_SUBSTR",
+    "REGEXP_CAPTURE",
+    "REGEXP_REPLACE",
+    "FTS_MATCH",
+    "FTS_SCORE",
+    "FTS_HIGHLIGHT",
+    "MEDIAN",
+    "PERCENTILE",
+    "PERCENTILE_CONT",
+    "PERCENTILE_DISC",
+    "GENERATE_SERIES",
 ];
 
 /// Tokenize a single line of SQL into classified tokens.
@@ -592,5 +625,24 @@ mod tests {
     fn test_whitespace_only() {
         let tokens = tokenize("   ");
         assert!(tokens.iter().all(|t| t.kind == TokenKind::Default));
+    }
+
+    #[test]
+    fn turso_specific_functions_highlighted() {
+        let tokens = tokenize("SELECT uuid4(), vector_distance_cos(a, b), time_now()");
+        let fn_tokens: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Function)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert!(fn_tokens.contains(&"uuid4"), "uuid4 should be Function");
+        assert!(
+            fn_tokens.contains(&"vector_distance_cos"),
+            "vector_distance_cos should be Function"
+        );
+        assert!(
+            fn_tokens.contains(&"time_now"),
+            "time_now should be Function"
+        );
     }
 }

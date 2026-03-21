@@ -156,6 +156,8 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
         db::QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
         db::QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
+        db::QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
+        db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
     }
 }
 
@@ -271,6 +273,17 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 panels.record_detail.set_row(cols, vals);
             } else {
                 panels.record_detail.clear();
+            }
+            // Refresh schema if the query contained DDL
+            let has_ddl = matches!(result.query_kind, db::QueryKind::Ddl)
+                || (matches!(result.query_kind, db::QueryKind::Batch { .. }) && {
+                    let sql_lower = result.sql.to_lowercase();
+                    sql_lower.contains("create ")
+                        || sql_lower.contains("alter ")
+                        || sql_lower.contains("drop ")
+                });
+            if has_ddl {
+                app.active_db_mut().handle.load_schema();
             }
         }
         app::Action::QueryFailed(err) => {
@@ -409,10 +422,40 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 .handle
                 .set_pragma(name.clone(), val.clone());
         }
+        app::Action::IntegrityCheck => {
+            // Guard: info must be loaded, not already running an integrity check
+            let info = panels.db_info.info();
+            if info.is_none() {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "Database info not loaded yet".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+            } else {
+                app.active_db().handle.integrity_check();
+            }
+        }
+        app::Action::IntegrityCheckCompleted(msg) => {
+            app.transient_message = Some(app::TransientMessage {
+                text: msg.clone(),
+                created_at: std::time::Instant::now(),
+                is_error: false,
+            });
+        }
+        app::Action::IntegrityCheckFailed(msg) => {
+            app.transient_message = Some(app::TransientMessage {
+                text: format!("Integrity check failed: {msg}"),
+                created_at: std::time::Instant::now(),
+                is_error: true,
+            });
+        }
         app::Action::WalCheckpoint => {
             // Guard: info must be loaded, journal mode must be WAL, not already checkpointing
             let info = panels.db_info.info();
-            let is_wal = info.is_some_and(|i| i.journal_mode.eq_ignore_ascii_case("wal"));
+            let is_wal = info.is_some_and(|i| {
+                i.journal_mode.eq_ignore_ascii_case("wal")
+                    || i.journal_mode.eq_ignore_ascii_case("mvcc")
+            });
             if info.is_none() {
                 app.transient_message = Some(app::TransientMessage {
                     text: "Database info not loaded yet".to_string(),
@@ -518,6 +561,11 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         panels.results.row_count(),
         theme,
     );
+
+    // JSON overlay (renders on top of everything except help)
+    if db.bottom_tab == BottomTab::Detail && panels.record_detail.has_overlay() {
+        panels.record_detail.render_overlay(frame, area, theme);
+    }
 
     // Help overlay (rendered last so it floats on top)
     if app.help_visible {

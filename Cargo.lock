@@ -2831,6 +2831,7 @@ dependencies = [
  "arboard",
  "clap",
  "ratatui",
+ "serde_json",
  "tokio",
  "turso",
  "unicode-width 0.2.2",

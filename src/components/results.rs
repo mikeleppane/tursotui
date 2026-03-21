@@ -667,7 +667,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::db::ColumnDef;
+    use crate::db::{ColumnDef, QueryKind};
 
     fn make_column(name: &str) -> ColumnDef {
         ColumnDef {
@@ -683,6 +683,8 @@ mod tests {
             execution_time: Duration::ZERO,
             truncated: false,
             sql: String::new(),
+            rows_affected: 0,
+            query_kind: QueryKind::Select,
         }
     }
 

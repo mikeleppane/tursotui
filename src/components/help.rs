@@ -84,6 +84,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     )));
     lines.push(Line::from("  r               Refresh database info"));
     lines.push(Line::from("  c               WAL checkpoint (passive)"));
+    lines.push(Line::from("  i               Run integrity check"));
     lines.push(Line::from("  j/k or Up/Down  Scroll"));
     lines.push(Line::from("  Esc             Release focus"));
     lines.push(Line::from(""));

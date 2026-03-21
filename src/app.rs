@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use crate::db::{ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryResult, SchemaEntry};
+use crate::db::{
+    ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryKind, QueryResult, SchemaEntry,
+};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,9 @@ pub(crate) enum Action {
     WalCheckpoint,
     WalCheckpointed(String),
     WalCheckpointFailed(String),
+    IntegrityCheck,
+    IntegrityCheckCompleted(String),
+    IntegrityCheckFailed(String),
 }
 
 /// Per-database workspace.
@@ -104,6 +109,8 @@ pub(crate) struct DatabaseContext {
     pub last_execution_time: Option<Duration>,
     pub last_row_count: Option<usize>,
     pub last_truncated: bool,
+    pub last_query_kind: Option<QueryKind>,
+    pub last_rows_affected: u64,
 }
 
 impl DatabaseContext {
@@ -128,6 +135,8 @@ impl DatabaseContext {
             last_execution_time: None,
             last_row_count: None,
             last_truncated: false,
+            last_query_kind: None,
+            last_rows_affected: 0,
         }
     }
 
@@ -248,6 +257,8 @@ impl AppState {
                 db.last_execution_time = Some(result.execution_time);
                 db.last_row_count = Some(result.rows.len());
                 db.last_truncated = result.truncated;
+                db.last_query_kind = Some(result.query_kind.clone());
+                db.last_rows_affected = result.rows_affected;
             }
             Action::QueryFailed(_) => {
                 let db = self.active_db_mut();
@@ -293,7 +304,10 @@ impl AppState {
             | Action::PragmaFailed(_, _)
             | Action::WalCheckpoint
             | Action::WalCheckpointed(_)
-            | Action::WalCheckpointFailed(_) => {
+            | Action::WalCheckpointFailed(_)
+            | Action::IntegrityCheck
+            | Action::IntegrityCheckCompleted(_)
+            | Action::IntegrityCheckFailed(_) => {
                 // No AppState mutation needed; dispatched to components in M4 Tasks 3-7
             }
         }
