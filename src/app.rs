@@ -3,6 +3,13 @@ use std::time::{Duration, Instant};
 use crate::db::{ColumnInfo, DatabaseHandle, QueryResult, SchemaEntry};
 use crate::theme::{DARK_THEME, Theme};
 
+#[derive(Debug, Clone)]
+pub(crate) struct TransientMessage {
+    pub text: String,
+    pub created_at: Instant,
+    pub is_error: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SubTab {
     Query,
@@ -66,6 +73,7 @@ pub(crate) enum Action {
     ColumnsLoaded(String, Vec<ColumnInfo>),
     PopulateEditor(String),
     LoadColumns(String),
+    SetTransient(String, bool),
 }
 
 /// Per-database workspace.
@@ -159,7 +167,7 @@ pub(crate) struct AppState {
     pub databases: Vec<DatabaseContext>,
     pub active_db: usize,
     pub theme: Theme,
-    pub transient_message: Option<(String, Instant)>,
+    pub transient_message: Option<TransientMessage>,
     pub should_quit: bool,
 }
 
@@ -229,6 +237,13 @@ impl AppState {
                 db.last_execution_time = None;
                 db.last_row_count = None;
                 db.last_truncated = false;
+            }
+            Action::SetTransient(msg, is_error) => {
+                self.transient_message = Some(TransientMessage {
+                    text: msg.clone(),
+                    created_at: Instant::now(),
+                    is_error: *is_error,
+                });
             }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)

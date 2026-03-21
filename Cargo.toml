@@ -19,6 +19,9 @@ clap = { version = "4", features = ["derive"] }
 # Unicode display-width (transitive via ratatui, pinned for direct use)
 unicode-width = "0.2"
 
+# Clipboard access (copy cell/row)
+arboard = { version = "3", default-features = false }
+
 [profile.dev]
 opt-level = 0
 debug = false

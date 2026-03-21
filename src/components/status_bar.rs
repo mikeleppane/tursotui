@@ -61,7 +61,7 @@ fn keybindings_for(sub_tab: SubTab, focus: PanelId) -> (&'static str, &'static s
         (SubTab::Query, PanelId::Editor) => "F5 Execute  Esc Release",
         (SubTab::Query, PanelId::Schema) => "Enter Expand  o Open  Esc Release",
         (SubTab::Query, PanelId::Bottom) => {
-            "j/k Navigate  h/l Columns  s Sort  </> Resize  g/G First/Last  Esc Release"
+            "j/k Navigate  h/l Columns  s Sort  </> Resize  y/Y Copy  g/G First/Last  Esc Release"
         }
         // Admin-tab panels and fallback
         _ => "Tab Cycle",
@@ -101,15 +101,20 @@ pub(crate) fn render(
     total_rows: usize,
     theme: &Theme,
 ) {
-    // Transient messages (errors) take over the entire bar
-    if let Some((ref msg, at)) = app.transient_message
-        && at.elapsed() < TRANSIENT_TTL
+    // Transient messages take over the entire bar for TRANSIENT_TTL
+    if let Some(ref tm) = app.transient_message
+        && tm.created_at.elapsed() < TRANSIENT_TTL
     {
+        let (prefix, fg) = if tm.is_error {
+            ("Error: ", theme.error)
+        } else {
+            ("", theme.success)
+        };
         let style = Style::default()
-            .fg(theme.error)
+            .fg(fg)
             .bg(theme.status_bar_style.bg.unwrap_or(Color::Reset))
             .add_modifier(Modifier::BOLD);
-        let line = Paragraph::new(format!(" Error: {msg}")).style(style);
+        let line = Paragraph::new(format!(" {prefix}{}", tm.text)).style(style);
         frame.render_widget(line, area);
         return;
     }

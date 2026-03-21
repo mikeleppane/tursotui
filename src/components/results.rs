@@ -236,6 +236,49 @@ impl ResultsTable {
         });
     }
 
+    fn copy_cell(&self) -> Option<Action> {
+        let Some(row_idx) = self.state.selected() else {
+            return if self.rows.is_empty() {
+                None // no results at all, silent
+            } else {
+                Some(Action::SetTransient("No row selected".into(), false))
+            };
+        };
+        let text = format_cell_for_copy(&self.rows, row_idx, self.selected_col)
+            .unwrap_or_else(|| "NULL".to_string());
+        match set_clipboard(&text) {
+            Ok(()) => Some(Action::SetTransient(
+                "Copied cell to clipboard".into(),
+                false,
+            )),
+            Err(e) => Some(Action::SetTransient(
+                format!("Clipboard unavailable: {e}"),
+                true,
+            )),
+        }
+    }
+
+    fn copy_row(&self) -> Option<Action> {
+        let Some(row_idx) = self.state.selected() else {
+            return if self.rows.is_empty() {
+                None // no results at all, silent
+            } else {
+                Some(Action::SetTransient("No row selected".into(), false))
+            };
+        };
+        let text = format_row_for_copy(&self.rows, row_idx).unwrap_or_default();
+        match set_clipboard(&text) {
+            Ok(()) => Some(Action::SetTransient(
+                "Copied row to clipboard".into(),
+                false,
+            )),
+            Err(e) => Some(Action::SetTransient(
+                format!("Clipboard unavailable: {e}"),
+                true,
+            )),
+        }
+    }
+
     /// Compute the range of column indices visible in the given width, adjusting
     /// `col_offset` so that `selected_col` stays on screen.
     ///
@@ -338,6 +381,10 @@ impl Component for ResultsTable {
                 self.cycle_sort();
                 None
             }
+
+            // Clipboard
+            (KeyModifiers::NONE, KeyCode::Char('y')) => self.copy_cell(),
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('Y')) => self.copy_row(),
 
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
@@ -522,6 +569,29 @@ fn build_visible_table<'a>(
         .row_highlight_style(theme.selected_style)
         .highlight_symbol("▌ ")
         .highlight_spacing(HighlightSpacing::Always)
+}
+
+/// Format a single cell value for clipboard. Returns the display text.
+fn format_cell_for_copy(rows: &[Vec<Option<String>>], row: usize, col: usize) -> Option<String> {
+    let cell = rows.get(row)?.get(col)?;
+    Some(cell.as_deref().unwrap_or("NULL").to_string())
+}
+
+/// Format an entire row as tab-separated values for clipboard.
+fn format_row_for_copy(rows: &[Vec<Option<String>>], row: usize) -> Option<String> {
+    let row_data = rows.get(row)?;
+    let text = row_data
+        .iter()
+        .map(|v| v.as_deref().unwrap_or("NULL"))
+        .collect::<Vec<_>>()
+        .join("\t");
+    Some(text)
+}
+
+/// Copy text to the system clipboard via `arboard`.
+fn set_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.set_text(text).map_err(|e| e.to_string())
 }
 
 /// Try to parse a string as a finite number for sorting.
@@ -1269,5 +1339,40 @@ mod tests {
                 Some("def".to_string()),
             ]
         );
+    }
+
+    // --- format_cell_for_copy / format_row_for_copy tests ---
+
+    #[test]
+    fn test_format_cell_for_copy_normal() {
+        let rows = vec![vec![Some("hello".to_string()), Some("world".to_string())]];
+        assert_eq!(format_cell_for_copy(&rows, 0, 0), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_format_cell_for_copy_null() {
+        let rows = vec![vec![None, Some("value".to_string())]];
+        assert_eq!(format_cell_for_copy(&rows, 0, 0), Some("NULL".to_string()));
+    }
+
+    #[test]
+    fn test_format_cell_for_copy_out_of_bounds() {
+        let rows = vec![vec![Some("hello".to_string())]];
+        assert_eq!(format_cell_for_copy(&rows, 5, 0), None);
+    }
+
+    #[test]
+    fn test_format_row_for_copy() {
+        let rows = vec![vec![Some("a".to_string()), None, Some("c".to_string())]];
+        assert_eq!(
+            format_row_for_copy(&rows, 0),
+            Some("a\tNULL\tc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_format_row_for_copy_out_of_bounds() {
+        let rows: Vec<Vec<Option<String>>> = vec![];
+        assert_eq!(format_row_for_copy(&rows, 0), None);
     }
 }

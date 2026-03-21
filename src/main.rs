@@ -128,8 +128,8 @@ fn run_loop(
         }
 
         // 3. Clear expired transient message
-        if let Some((_, at)) = &app.transient_message
-            && at.elapsed() >= components::status_bar::TRANSIENT_TTL
+        if let Some(ref tm) = app.transient_message
+            && tm.created_at.elapsed() >= components::status_bar::TRANSIENT_TTL
         {
             app.transient_message = None;
         }
@@ -166,7 +166,11 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             panels.results.set_results(result);
         }
         app::Action::QueryFailed(err) => {
-            app.transient_message = Some((err.clone(), std::time::Instant::now()));
+            app.transient_message = Some(app::TransientMessage {
+                text: err.clone(),
+                created_at: std::time::Instant::now(),
+                is_error: true,
+            });
         }
         app::Action::SchemaLoaded(entries) => {
             panels.schema.set_schema(entries);
