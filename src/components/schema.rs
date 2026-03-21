@@ -60,6 +60,11 @@ pub(crate) struct SchemaExplorer {
     visible: Vec<TreeNode>,
     selected: usize,
     scroll_offset: usize,
+    /// Active search filter. `None` means no filter; `Some("")` means filter bar
+    /// is open but no text has been typed yet (show everything).
+    filter: Option<String>,
+    /// `true` while the user is typing into the filter input bar.
+    filter_active: bool,
 }
 
 impl SchemaExplorer {
@@ -69,6 +74,8 @@ impl SchemaExplorer {
             visible: Vec::new(),
             selected: 0,
             scroll_offset: 0,
+            filter: None,
+            filter_active: false,
         }
     }
 
@@ -147,6 +154,8 @@ impl SchemaExplorer {
 
         self.selected = 0;
         self.scroll_offset = 0;
+        self.filter = None;
+        self.filter_active = false;
         self.rebuild_visible();
     }
 
@@ -295,34 +304,85 @@ impl SchemaExplorer {
     }
 
     /// Rebuild the `visible` list from `categories` and their expanded children.
+    ///
+    /// When a non-empty filter is active, only leaf nodes whose name contains
+    /// the query (case-insensitive) are shown.  Category headers are included
+    /// only when at least one child matches.  Columns are shown when their
+    /// parent table matches and is expanded.
     fn rebuild_visible(&mut self) {
         self.visible.clear();
+
+        let query = self
+            .filter
+            .as_deref()
+            .filter(|q| !q.is_empty())
+            .map(str::to_lowercase);
+
         for (header, children) in &self.categories {
-            self.visible.push(header.clone());
-            if let TreeNode::Category { expanded, .. } = header
-                && *expanded
-            {
-                for child in children {
-                    self.visible.push(child.clone());
-                    // If child is an expanded table, push its columns
-                    if let TreeNode::Table {
-                        name,
-                        expanded: table_expanded,
-                        columns,
-                        ..
-                    } = child
-                        && *table_expanded
-                    {
-                        for col in columns {
-                            self.visible.push(TreeNode::Column {
-                                table_name: name.clone(),
-                                col: col.clone(),
-                            });
+            if let TreeNode::Category { expanded, .. } = header {
+                if *expanded {
+                    // Collect matching children first so we can decide
+                    // whether to show the category header.
+                    let mut matched_children: Vec<TreeNode> = Vec::new();
+                    for child in children {
+                        let child_matches = match (&query, child) {
+                            (
+                                Some(q),
+                                TreeNode::Table { name, .. }
+                                | TreeNode::Index { name, .. }
+                                | TreeNode::Trigger { name, .. },
+                            ) => name.to_lowercase().contains(q.as_str()),
+                            (None, _) => true,
+                            _ => false,
+                        };
+
+                        if child_matches {
+                            matched_children.push(child.clone());
+                            // If child is an expanded table, push its columns
+                            if let TreeNode::Table {
+                                name,
+                                expanded: table_expanded,
+                                columns,
+                                ..
+                            } = child
+                                && *table_expanded
+                            {
+                                for col in columns {
+                                    matched_children.push(TreeNode::Column {
+                                        table_name: name.clone(),
+                                        col: col.clone(),
+                                    });
+                                }
+                            }
                         }
+                    }
+
+                    if query.is_none() || !matched_children.is_empty() {
+                        self.visible.push(header.clone());
+                        self.visible.extend(matched_children);
+                    }
+                } else {
+                    // Collapsed category: show header only if no filter or
+                    // any child would match.
+                    let show = match &query {
+                        None => true,
+                        Some(q) => children.iter().any(|child| {
+                            let (TreeNode::Table { name, .. }
+                            | TreeNode::Index { name, .. }
+                            | TreeNode::Trigger { name, .. }) = child
+                            else {
+                                return false;
+                            };
+                            name.to_lowercase().contains(q.as_str())
+                        }),
+                    };
+                    if show {
+                        self.visible.push(header.clone());
                     }
                 }
             }
         }
+
         // Clamp selection to valid range.
         if self.visible.is_empty() {
             self.selected = 0;
@@ -358,12 +418,60 @@ impl SchemaExplorer {
             self.scroll_offset = self.selected - visible_height + 1;
         }
     }
+
+    /// Handle keystrokes while the filter input bar is active.
+    fn handle_filter_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Esc => {
+                self.filter = None;
+                self.filter_active = false;
+                self.rebuild_visible();
+                None
+            }
+            KeyCode::Enter => {
+                self.filter_active = false;
+                None
+            }
+            KeyCode::Down => {
+                self.filter_active = false;
+                self.move_down();
+                None
+            }
+            KeyCode::Up => {
+                self.filter_active = false;
+                self.move_up();
+                None
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut s) = self.filter {
+                    s.pop();
+                }
+                self.rebuild_visible();
+                None
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut s) = self.filter {
+                    s.push(c);
+                } else {
+                    self.filter = Some(String::from(c));
+                }
+                self.rebuild_visible();
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Component for SchemaExplorer {
+    #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind != KeyEventKind::Press {
             return None;
+        }
+
+        if self.filter_active {
+            return self.handle_filter_key(key);
         }
 
         match (key.modifiers, key.code) {
@@ -411,6 +519,12 @@ impl Component for SchemaExplorer {
                     }
                     _ => None, // no-op for Category, Index, Trigger, Column
                 }
+            }
+
+            // Re-activate filter for editing when filter bar is visible
+            (KeyModifiers::NONE, KeyCode::Backspace) if self.filter.is_some() => {
+                self.filter_active = true;
+                self.handle_filter_key(key)
             }
 
             // Collapse / move to parent
@@ -462,6 +576,21 @@ impl Component for SchemaExplorer {
                 }
             }
 
+            // Search filter
+            (KeyModifiers::NONE, KeyCode::Char('/')) => {
+                self.filter = Some(String::new());
+                self.filter_active = true;
+                None
+            }
+
+            // Clear accepted filter on Esc (first press clears filter, second press releases focus)
+            (KeyModifiers::NONE, KeyCode::Esc) if self.filter.is_some() => {
+                self.filter = None;
+                self.filter_active = false;
+                self.rebuild_visible();
+                None
+            }
+
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
                 Some(Action::CycleFocus(Direction::Forward))
@@ -499,7 +628,12 @@ impl Component for SchemaExplorer {
             return;
         }
 
-        let visible_height = inner.height as usize;
+        let filter_bar_showing = self.filter.is_some();
+        let visible_height = if filter_bar_showing {
+            (inner.height as usize).saturating_sub(1)
+        } else {
+            inner.height as usize
+        };
         self.adjust_scroll(visible_height);
 
         let show_scrollbar = self.visible.len() > visible_height;
@@ -636,16 +770,41 @@ impl Component for SchemaExplorer {
         }
 
         if show_scrollbar {
+            let scrollbar_height = if filter_bar_showing {
+                inner.height.saturating_sub(1)
+            } else {
+                inner.height
+            };
             let scrollbar_area = Rect {
                 x: inner.x + content_width,
                 y: inner.y,
                 width: 1,
-                height: inner.height,
+                height: scrollbar_height,
             };
             let mut scrollbar_state =
                 ScrollbarState::new(self.visible.len()).position(self.scroll_offset);
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+
+        // Render filter bar at the bottom of the inner area.
+        if let Some(ref query) = self.filter {
+            let filter_y = inner.y + inner.height.saturating_sub(1);
+            let filter_area = Rect {
+                x: inner.x,
+                y: filter_y,
+                width: inner.width,
+                height: 1,
+            };
+            let prompt = Span::styled("/ ", Style::default().fg(theme.accent));
+            let text = Span::styled(query.as_str(), Style::default().fg(theme.fg));
+            let cursor = if self.filter_active {
+                Span::styled("\u{2588}", Style::default().fg(theme.accent))
+            } else {
+                Span::raw("")
+            };
+            let line = Line::from(vec![prompt, text, cursor]);
+            frame.render_widget(Paragraph::new(line), filter_area);
         }
     }
 }
@@ -1438,5 +1597,373 @@ mod tests {
             explorer.scroll_offset,
             explorer.visible.len()
         );
+    }
+
+    // --- Filter tests ---
+
+    #[test]
+    fn test_filter_narrows_visible() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+            make_schema_entry("table", "products"),
+        ];
+        explorer.set_schema(&entries);
+
+        // Without filter: Tables header + 3 tables = 4
+        assert_eq!(explorer.visible.len(), 4);
+
+        // Apply filter "user"
+        explorer.filter = Some("user".to_string());
+        explorer.rebuild_visible();
+
+        // Should show: Tables category + users only
+        assert_eq!(explorer.visible.len(), 2);
+        assert!(matches!(
+            &explorer.visible[0],
+            TreeNode::Category {
+                kind: CategoryKind::Tables,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &explorer.visible[1],
+            TreeNode::Table { name, .. } if name == "users"
+        ));
+    }
+
+    #[test]
+    fn test_filter_case_insensitive() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        // Filter with uppercase
+        explorer.filter = Some("USER".to_string());
+        explorer.rebuild_visible();
+
+        // Should still match "users"
+        assert_eq!(explorer.visible.len(), 2);
+        assert!(matches!(
+            &explorer.visible[1],
+            TreeNode::Table { name, .. } if name == "users"
+        ));
+    }
+
+    #[test]
+    fn test_filter_clear_restores() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+            make_schema_entry("table", "products"),
+        ];
+        explorer.set_schema(&entries);
+
+        let full_count = explorer.visible.len();
+        assert_eq!(full_count, 4);
+
+        // Apply filter
+        explorer.filter = Some("user".to_string());
+        explorer.rebuild_visible();
+        assert_eq!(explorer.visible.len(), 2);
+
+        // Clear filter
+        explorer.filter = None;
+        explorer.rebuild_visible();
+        assert_eq!(explorer.visible.len(), full_count);
+    }
+
+    #[test]
+    fn test_filter_empty_shows_all() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+        ];
+        explorer.set_schema(&entries);
+
+        let full_count = explorer.visible.len();
+
+        // Set filter to empty string (user just pressed '/' but hasn't typed)
+        explorer.filter = Some(String::new());
+        explorer.rebuild_visible();
+
+        assert_eq!(explorer.visible.len(), full_count);
+    }
+
+    #[test]
+    fn test_filter_matches_indexes() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry_with_tbl("index", "idx_email", "users"),
+            make_schema_entry_with_tbl("index", "idx_name", "users"),
+        ];
+        explorer.set_schema(&entries);
+
+        // Expand Indexes category so children are visible
+        // Find the Indexes category position
+        let idx_cat_pos = explorer
+            .visible
+            .iter()
+            .position(|n| {
+                matches!(
+                    n,
+                    TreeNode::Category {
+                        kind: CategoryKind::Indexes,
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        explorer.selected = idx_cat_pos;
+        explorer.toggle_expand();
+
+        // Now filter for "idx_email"
+        explorer.filter = Some("idx_email".to_string());
+        explorer.rebuild_visible();
+
+        // Should show: Tables category (has no matching children? No, "users" doesn't match)
+        // Indexes category + idx_email
+        // Tables category should be hidden since "users" doesn't match "idx_email"
+        assert_eq!(explorer.visible.len(), 2);
+        assert!(matches!(
+            &explorer.visible[0],
+            TreeNode::Category {
+                kind: CategoryKind::Indexes,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &explorer.visible[1],
+            TreeNode::Index { name, .. } if name == "idx_email"
+        ));
+    }
+
+    #[test]
+    fn test_filter_hides_categories_with_no_matches() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+            make_schema_entry_with_tbl("index", "idx_email", "users"),
+        ];
+        explorer.set_schema(&entries);
+
+        // Filter for something that matches nothing
+        explorer.filter = Some("zzzzz".to_string());
+        explorer.rebuild_visible();
+
+        assert_eq!(explorer.visible.len(), 0);
+    }
+
+    #[test]
+    fn test_filter_key_activation() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        assert!(!explorer.filter_active);
+        assert!(explorer.filter.is_none());
+
+        // Press '/' to activate filter
+        let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(key);
+
+        assert!(explorer.filter_active);
+        assert_eq!(explorer.filter, Some(String::new()));
+    }
+
+    #[test]
+    fn test_filter_key_typing_and_esc() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+        ];
+        explorer.set_schema(&entries);
+
+        // Activate filter
+        let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(key);
+
+        // Type "u"
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        explorer.handle_key(key);
+        assert_eq!(explorer.filter, Some("u".to_string()));
+        // Should show Tables header + users = 2
+        assert_eq!(explorer.visible.len(), 2);
+
+        // Press Esc to clear
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        explorer.handle_key(key);
+        assert!(!explorer.filter_active);
+        assert!(explorer.filter.is_none());
+        // All items restored: Tables header + users + orders = 3
+        assert_eq!(explorer.visible.len(), 3);
+    }
+
+    #[test]
+    fn test_filter_key_enter_accepts() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+        ]);
+
+        // Activate filter and type "user"
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(slash);
+        for c in "user".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            explorer.handle_key(key);
+        }
+
+        // Press Enter to accept
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        explorer.handle_key(key);
+
+        // Filter still applied but not active
+        assert!(!explorer.filter_active);
+        assert_eq!(explorer.filter, Some("user".to_string()));
+        // Still filtered: Tables header + users = 2
+        assert_eq!(explorer.visible.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_backspace_clears_on_empty() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        // Activate filter and type "u"
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(slash);
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        explorer.handle_key(key);
+        assert_eq!(explorer.filter, Some("u".to_string()));
+
+        // Backspace removes the char; filter bar stays open with empty string
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        explorer.handle_key(key);
+        assert_eq!(explorer.filter, Some(String::new()));
+        assert!(explorer.filter_active);
+    }
+
+    #[test]
+    fn test_esc_clears_accepted_filter_before_cycling_focus() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+            make_schema_entry("table", "products"),
+        ];
+        explorer.set_schema(&entries);
+
+        let full_count = explorer.visible.len(); // 4
+
+        // Activate filter and type "user"
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(slash);
+        for c in "user".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            explorer.handle_key(key);
+        }
+
+        // Press Enter to accept filter (filter_active = false, filter = Some("user"))
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        explorer.handle_key(enter);
+        assert!(!explorer.filter_active);
+        assert_eq!(explorer.filter, Some("user".to_string()));
+
+        // Press Esc -> should clear filter, NOT cycle focus
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let action = explorer.handle_key(esc);
+        assert!(
+            action.is_none(),
+            "First Esc should clear filter, not cycle focus"
+        );
+        assert!(explorer.filter.is_none());
+        assert_eq!(explorer.visible.len(), full_count);
+
+        // Press Esc again -> now should cycle focus
+        let action = explorer.handle_key(esc);
+        assert!(
+            matches!(action, Some(Action::CycleFocus(_))),
+            "Second Esc should cycle focus"
+        );
+    }
+
+    #[test]
+    fn test_filter_collapsed_category_with_matches() {
+        let mut explorer = SchemaExplorer::new();
+        let entries = vec![
+            make_schema_entry("table", "users"),
+            make_schema_entry_with_tbl("index", "idx_users_email", "users"),
+            make_schema_entry_with_tbl("index", "idx_posts_author", "posts"),
+        ];
+        explorer.set_schema(&entries);
+
+        // Indexes category starts collapsed
+        assert!(!is_category_expanded(&explorer, 1));
+
+        // Apply a filter that matches an index name
+        explorer.filter = Some("idx_users".to_string());
+        explorer.rebuild_visible();
+
+        // The Indexes category header should still appear even though collapsed,
+        // because a child matches the filter.
+        assert!(explorer.visible.iter().any(|n| matches!(
+            n,
+            TreeNode::Category {
+                kind: CategoryKind::Indexes,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn test_filter_down_up_exits_filter() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+        ]);
+
+        // Activate filter and type something
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(slash);
+        let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE);
+        explorer.handle_key(key);
+        assert!(explorer.filter_active);
+
+        let prev_selected = explorer.selected;
+
+        // Press Down
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        explorer.handle_key(down);
+
+        // filter_active should be false and selected should have changed
+        assert!(!explorer.filter_active);
+        assert_ne!(explorer.selected, prev_selected);
+    }
+
+    #[test]
+    fn test_filter_backspace_on_empty_stays_open() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        // Activate filter (empty string)
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+        explorer.handle_key(slash);
+        assert_eq!(explorer.filter, Some(String::new()));
+        assert!(explorer.filter_active);
+
+        // Press Backspace on empty filter
+        let bs = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        explorer.handle_key(bs);
+
+        // Filter should still be Some("") and filter_active should still be true
+        assert_eq!(explorer.filter, Some(String::new()));
+        assert!(explorer.filter_active);
     }
 }
