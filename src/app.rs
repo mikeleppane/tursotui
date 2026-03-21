@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crate::db::{ColumnInfo, DatabaseHandle, QueryResult, SchemaEntry};
-use crate::theme::{DARK_THEME, Theme};
+use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransientMessage {
@@ -245,10 +245,16 @@ impl AppState {
                     is_error: *is_error,
                 });
             }
+            Action::ToggleTheme => {
+                self.theme = if self.theme.bg == DARK_THEME.bg {
+                    LIGHT_THEME
+                } else {
+                    DARK_THEME
+                };
+            }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)
             | Action::LoadColumns(_)
-            | Action::ToggleTheme
             | Action::ShowHelp => {
                 // Handled elsewhere (main.rs) or implemented in later milestones
             }

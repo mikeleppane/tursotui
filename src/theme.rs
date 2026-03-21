@@ -81,3 +81,44 @@ pub(crate) const DARK_THEME: Theme = Theme {
     er_fk_style: Style::new().fg(TEAL),
     er_relationship: Style::new().fg(SUBTEXT0),
 };
+
+/// Catppuccin Latte-inspired light theme.
+pub(crate) const LIGHT_THEME: Theme = Theme {
+    bg: Color::Rgb(239, 241, 245),
+    fg: Color::Rgb(76, 79, 105),
+    border: Color::Rgb(172, 176, 190),
+    border_focused: Color::Rgb(30, 102, 245),
+    accent: Color::Rgb(30, 102, 245),
+    error: Color::Rgb(210, 15, 57),
+    success: Color::Rgb(64, 160, 43),
+    warning: Color::Rgb(223, 142, 29),
+
+    null_style: Style::new()
+        .fg(Color::Rgb(172, 176, 190))
+        .add_modifier(Modifier::ITALIC),
+    header_style: Style::new()
+        .fg(Color::Rgb(76, 79, 105))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
+    selected_style: Style::new()
+        .fg(Color::Rgb(239, 241, 245))
+        .bg(Color::Rgb(30, 102, 245)),
+    status_bar_style: Style::new()
+        .fg(Color::Rgb(76, 79, 105))
+        .bg(Color::Rgb(204, 208, 218)),
+
+    sql_keyword: Style::new()
+        .fg(Color::Rgb(30, 102, 245))
+        .add_modifier(Modifier::BOLD),
+    sql_string: Style::new().fg(Color::Rgb(64, 160, 43)),
+    sql_number: Style::new().fg(Color::Rgb(223, 142, 29)),
+    sql_comment: Style::new().fg(Color::Rgb(172, 176, 190)),
+    sql_function: Style::new().fg(Color::Rgb(23, 146, 153)),
+    sql_operator: Style::new().add_modifier(Modifier::BOLD),
+
+    er_table_border: Style::new().fg(Color::Rgb(30, 102, 245)),
+    er_pk_style: Style::new()
+        .fg(Color::Rgb(223, 142, 29))
+        .add_modifier(Modifier::BOLD),
+    er_fk_style: Style::new().fg(Color::Rgb(23, 146, 153)),
+    er_relationship: Style::new().fg(Color::Rgb(172, 176, 190)),
+};
