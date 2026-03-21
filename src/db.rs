@@ -7,14 +7,14 @@ use tokio::sync::mpsc;
 const TURSO_VERSION: &str = "0.6.0-pre.5";
 
 /// Writable pragmas that can be set via `set_pragma`. Used as a whitelist for validation.
+/// Note: `mmap_size` and `wal_autocheckpoint` are standard `SQLite` pragmas but not supported by
+/// turso/libsql — they return "Not a valid pragma name".
 const WRITABLE_PRAGMAS: &[&str] = &[
     "cache_size",
     "busy_timeout",
     "synchronous",
     "foreign_keys",
     "temp_store",
-    "mmap_size",
-    "wal_autocheckpoint",
 ];
 
 /// A single column definition from query results.
@@ -69,7 +69,7 @@ pub(crate) struct DbInfo {
     pub journal_mode: String,
     pub schema_version: i64,
     pub freelist_count: i64,
-    pub data_version: i64,
+    // data_version not supported by turso/libsql
     pub turso_version: &'static str,
     pub wal_frames: Option<u64>,
 }
@@ -428,7 +428,7 @@ impl DatabaseHandle {
         let journal_mode = Self::pragma_string(&conn, "journal_mode").await?;
         let schema_version = Self::pragma_i64(&conn, "schema_version").await?;
         let freelist_count = Self::pragma_i64(&conn, "freelist_count").await?;
-        let data_version = Self::pragma_i64(&conn, "data_version").await?;
+        // data_version is not supported by turso/libsql
 
         let (file_size, wal_frames) = if path == ":memory:" {
             (None, None)
@@ -461,7 +461,6 @@ impl DatabaseHandle {
             journal_mode,
             schema_version,
             freelist_count,
-            data_version,
             turso_version: TURSO_VERSION,
             wal_frames,
         })
@@ -500,10 +499,10 @@ impl DatabaseHandle {
         let writable_pragmas = WRITABLE_PRAGMAS;
 
         // Read-only pragmas with notes
+        // Note: auto_vacuum returns 0-column rows in turso/libsql, so it's excluded
         let readonly_pragmas: &[(&str, &str)] = &[
             ("journal_mode", "(run in query editor)"),
             ("page_size", "(set at creation time)"),
-            ("auto_vacuum", "(set at creation time)"),
         ];
 
         let mut entries = Vec::new();
@@ -628,11 +627,15 @@ impl DatabaseHandle {
     // ── Shared PRAGMA helpers ──────────────────────────────────────────
 
     /// Read a single PRAGMA value as an i64.
+    /// Returns 0 if the pragma returns no rows or 0 columns (unsupported by turso/libsql).
     async fn pragma_i64(
         conn: &turso::Connection,
         name: &str,
     ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let mut rows = conn.query(&format!("PRAGMA {name}"), ()).await?;
+        if rows.column_count() == 0 {
+            return Ok(0);
+        }
         if let Some(row) = rows.next().await? {
             Ok(row.get_value(0)?.as_integer().copied().unwrap_or(0))
         } else {
@@ -641,11 +644,15 @@ impl DatabaseHandle {
     }
 
     /// Read a single PRAGMA value as a String.
+    /// Returns empty string if the pragma returns no rows or 0 columns (unsupported by turso/libsql).
     async fn pragma_string(
         conn: &turso::Connection,
         name: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let mut rows = conn.query(&format!("PRAGMA {name}"), ()).await?;
+        if rows.column_count() == 0 {
+            return Ok(String::new());
+        }
         if let Some(row) = rows.next().await? {
             // PRAGMA values can be integer or text depending on the pragma.
             // Try text first, fall back to integer-to-string.

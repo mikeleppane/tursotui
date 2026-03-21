@@ -122,7 +122,6 @@ impl DbInfoPanel {
         lines.push(("Journal mode", info.journal_mode.clone()));
         lines.push(("Schema version", info.schema_version.to_string()));
         lines.push(("Freelist pages", info.freelist_count.to_string()));
-        lines.push(("Data version", info.data_version.to_string()));
         lines.push(("Turso version", info.turso_version.to_string()));
 
         // WAL section: only if journal_mode is "wal" (case-insensitive)

@@ -32,7 +32,7 @@ struct InlineEdit {
 /// NOTE: The pragma names here must stay in sync with `db::WRITABLE_PRAGMAS`.
 fn validate_pragma_value(name: &str, value: &str) -> Result<(), String> {
     match name {
-        "cache_size" | "busy_timeout" | "mmap_size" | "wal_autocheckpoint" => value
+        "cache_size" | "busy_timeout" => value
             .parse::<i64>()
             .map(|_| ())
             .map_err(|_| format!("{name} must be a number")),
