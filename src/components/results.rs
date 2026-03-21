@@ -113,7 +113,6 @@ impl ResultsTable {
     /// Returns column defs and the display values for the row at `idx`.
     /// Returns `None` (outer) if no results or `idx` is out of bounds.
     /// Inner `Option<String>`: `None` = SQL NULL, `Some(s)` = display text.
-    #[allow(dead_code)] // called by RecordDetail population (M4 Task 7)
     pub(crate) fn row_data(&self, idx: usize) -> Option<(&[ColumnDef], &[Option<String>])> {
         if self.columns.is_empty() || idx >= self.rows.len() {
             return None;

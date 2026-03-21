@@ -78,7 +78,6 @@ pub(crate) struct PragmaDashboard {
 }
 
 impl PragmaDashboard {
-    #[allow(dead_code)] // constructed in UiPanels::new (M4 Task 7)
     pub(crate) fn new() -> Self {
         Self {
             pragmas: Vec::new(),
@@ -94,7 +93,6 @@ impl PragmaDashboard {
     /// Attempt initial load. Returns true (and sets `loading = true`) only if
     /// pragmas haven't been loaded yet and no load is in progress.
     /// Used by `SwitchSubTab(Admin)` for lazy one-time initialization.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn try_start_load(&mut self) -> bool {
         if self.loading || !self.pragmas.is_empty() {
             return false;
@@ -106,7 +104,6 @@ impl PragmaDashboard {
     /// Force a refresh even when data is already loaded. Returns true (and sets
     /// `loading = true`) if no load is already in progress.
     /// Used by the `r` key (`RefreshPragmas` action).
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn try_start_refresh(&mut self) -> bool {
         if self.loading {
             return false;
@@ -116,7 +113,6 @@ impl PragmaDashboard {
     }
 
     /// Store loaded pragma entries. Clears any active edit and clamps selection.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_pragmas(&mut self, entries: Vec<PragmaEntry>) {
         self.editing = None;
         self.pragmas = entries;
@@ -126,7 +122,6 @@ impl PragmaDashboard {
     }
 
     /// Confirm a successful pragma edit: update the matching entry's value.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn confirm_edit(&mut self, name: &str, value: String) {
         if let Some(entry) = self.pragmas.iter_mut().find(|e| e.name == name) {
             entry.value = value;
@@ -137,7 +132,6 @@ impl PragmaDashboard {
 
     /// Cancel an in-progress edit and clear the in-flight guard.
     /// Called from dispatch on `PragmaFailed`.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn cancel_edit(&mut self) {
         self.editing = None;
         self.pragma_in_flight = false;
@@ -145,14 +139,20 @@ impl PragmaDashboard {
     }
 
     /// Clear only the in-flight guard without touching edit state.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
+    #[allow(dead_code)] // available for future use; confirm_edit/cancel_edit cover current needs
     pub(crate) fn clear_in_flight(&mut self) {
         self.pragma_in_flight = false;
         self.in_flight_index = None;
     }
 
+    /// Clear only the editing state without affecting the in-flight guard.
+    /// Used by `RefreshPragmas` to discard a stale edit buffer while
+    /// preserving `pragma_in_flight` for any pending `set_pragma` response.
+    pub(crate) fn clear_editing(&mut self) {
+        self.editing = None;
+    }
+
     /// Clear loading flag on failure (pragmas stay empty or stale).
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_loading_failed(&mut self) {
         self.loading = false;
     }

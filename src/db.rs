@@ -21,7 +21,6 @@ const WRITABLE_PRAGMAS: &[&str] = &[
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnDef {
     pub name: String,
-    #[allow(dead_code)] // used by RecordDetail (M4 Task 3)
     pub type_name: String,
 }
 
@@ -34,7 +33,6 @@ pub(crate) struct QueryResult {
     /// True if the result was capped at 10,000 rows.
     pub truncated: bool,
     /// The SQL statement that produced this result.
-    #[allow(dead_code)] // used by ExplainView mark_stale (M4 Task 7)
     pub sql: String,
 }
 
@@ -63,40 +61,25 @@ pub(crate) struct ColumnInfo {
 /// Database metadata from PRAGMAs and file system.
 #[derive(Debug, Clone)]
 pub(crate) struct DbInfo {
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub file_path: String,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub file_size: Option<u64>,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub page_count: i64,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub page_size: i64,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub encoding: String,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub journal_mode: String,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub schema_version: i64,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub freelist_count: i64,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub data_version: i64,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub turso_version: &'static str,
-    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
     pub wal_frames: Option<u64>,
 }
 
 /// A single PRAGMA entry for the dashboard.
 #[derive(Debug, Clone)]
 pub(crate) struct PragmaEntry {
-    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
     pub name: String,
-    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
     pub value: String,
-    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
     pub writable: bool,
-    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
     pub note: Option<String>,
 }
 
@@ -108,25 +91,15 @@ pub(crate) enum QueryMessage {
     SchemaLoaded(Vec<SchemaEntry>),
     SchemaFailed(String),
     ColumnsLoaded(String, Vec<ColumnInfo>),
-    #[allow(dead_code)] // constructed by DatabaseHandle::explain (M4 Task 2)
     ExplainCompleted(Vec<Vec<String>>, Vec<String>),
-    #[allow(dead_code)] // constructed by DatabaseHandle::explain (M4 Task 2)
     ExplainFailed(String),
-    #[allow(dead_code)] // constructed by DatabaseHandle::load_db_info (M4 Task 2)
     DbInfoLoaded(DbInfo),
-    #[allow(dead_code)] // constructed by DatabaseHandle::load_db_info (M4 Task 2)
     DbInfoFailed(String),
-    #[allow(dead_code)] // constructed by DatabaseHandle::load_pragmas (M4 Task 2)
     PragmasLoaded(Vec<PragmaEntry>),
-    #[allow(dead_code)] // constructed by DatabaseHandle::load_pragmas (M4 Task 2)
     PragmasFailed(String),
-    #[allow(dead_code)] // constructed by DatabaseHandle::set_pragma (M4 Task 2)
     PragmaSet(String, String),
-    #[allow(dead_code)] // constructed by DatabaseHandle::set_pragma (M4 Task 2)
     PragmaFailed(String, String), // (pragma_name, error_message)
-    #[allow(dead_code)] // constructed by DatabaseHandle::wal_checkpoint (M4 Task 2)
     WalCheckpointed(String),
-    #[allow(dead_code)] // constructed by DatabaseHandle::wal_checkpoint (M4 Task 2)
     WalCheckpointFailed(String),
 }
 
@@ -361,7 +334,6 @@ impl DatabaseHandle {
     }
 
     /// Run EXPLAIN and EXPLAIN QUERY PLAN for a SQL statement in the background.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub fn explain(&self, sql: String) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -420,7 +392,6 @@ impl DatabaseHandle {
     }
 
     /// Load database metadata (PRAGMAs + file system info) in the background.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub fn load_db_info(&self, path: String) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -497,7 +468,6 @@ impl DatabaseHandle {
     }
 
     /// Load all monitored PRAGMA values in the background.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub fn load_pragmas(&self) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -562,7 +532,6 @@ impl DatabaseHandle {
     }
 
     /// Set a PRAGMA value and read back the confirmed value.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub fn set_pragma(&self, name: String, value: String) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
@@ -614,7 +583,6 @@ impl DatabaseHandle {
     }
 
     /// Run a passive WAL checkpoint in the background.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub fn wal_checkpoint(&self) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();

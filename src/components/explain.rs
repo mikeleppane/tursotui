@@ -41,7 +41,6 @@ const BYTECODE_MIN_WIDTHS: &[u16] = &[5, 16, 6, 6, 6, 20, 4];
 const _: () = assert!(BYTECODE_MIN_WIDTHS.len() + 1 == BYTECODE_HEADERS.len());
 
 impl ExplainView {
-    #[allow(dead_code)] // constructed in UiPanels::new (M4 Task 7)
     pub(crate) fn new() -> Self {
         Self {
             mode: ExplainMode::Bytecode,
@@ -57,7 +56,6 @@ impl ExplainView {
 
     /// Mark the view as stale after a new query execution.
     /// Stores the SQL for later EXPLAIN generation and clears old data.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn mark_stale(&mut self, sql: String) {
         self.stale = true;
         self.last_query = Some(sql);
@@ -68,7 +66,6 @@ impl ExplainView {
     }
 
     /// Store EXPLAIN results from the async task.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_results(&mut self, bytecode: Vec<Vec<String>>, plan: Vec<String>) {
         self.bytecode_rows = bytecode;
         self.plan_lines = plan;
@@ -79,9 +76,13 @@ impl ExplainView {
     }
 
     /// Mark as loading to prevent duplicate EXPLAIN tasks.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_loading(&mut self) {
         self.loading = true;
+    }
+
+    /// Clear loading flag on failure (data stays stale).
+    pub(crate) fn set_loading_failed(&mut self) {
+        self.loading = false;
     }
 
     /// Number of content rows in the current mode.

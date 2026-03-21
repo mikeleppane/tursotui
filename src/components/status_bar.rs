@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{AppState, PanelId, SubTab};
+use crate::app::{AppState, BottomTab, PanelId, SubTab};
 use crate::theme::Theme;
 
 /// Format a `Duration` for human-readable display in the status bar.
@@ -54,16 +54,28 @@ fn format_count(n: usize) -> String {
 ///
 /// Returns `(panel_hints, global_hints)` — panel-specific on the left,
 /// always-available shortcuts on the right.
-fn keybindings_for(sub_tab: SubTab, focus: PanelId) -> (&'static str, &'static str) {
+fn keybindings_for(
+    sub_tab: SubTab,
+    focus: PanelId,
+    bottom_tab: BottomTab,
+) -> (&'static str, &'static str) {
     let global = "F1 Help  Alt+1/2 Tabs  Ctrl+Q Quit";
     let panel = match (sub_tab, focus) {
         // Query-tab panels
         (SubTab::Query, PanelId::Editor) => "F5 Execute  Esc Release",
         (SubTab::Query, PanelId::Schema) => "Enter Expand  o Open  Esc Release",
-        (SubTab::Query, PanelId::Bottom) => {
-            "j/k Navigate  h/l Columns  s Sort  </> Resize  y/Y Copy  g/G First/Last  Esc Release"
-        }
-        // Admin-tab panels and fallback
+        (SubTab::Query, PanelId::Bottom) => match bottom_tab {
+            BottomTab::Results => {
+                "j/k Navigate  h/l Columns  s Sort  </> Resize  y/Y Copy  3: Detail  Esc Release"
+            }
+            BottomTab::Explain => "Tab Mode  Enter Generate  j/k Scroll  Esc Release",
+            BottomTab::Detail => "j/k Navigate  g/G First/Last  Esc Release",
+            BottomTab::ERDiagram => "1-3 Switch Tabs  Esc Release",
+        },
+        // Admin-tab panels
+        (SubTab::Admin, PanelId::DbInfo) => "r Refresh  c Checkpoint  j/k Scroll  Esc Release",
+        (SubTab::Admin, PanelId::Pragmas) => "Enter Edit  r Refresh  j/k Navigate  Esc Release",
+        // Fallback
         _ => "Tab Cycle",
     };
     (panel, global)
@@ -123,7 +135,7 @@ pub(crate) fn render(
     let width = area.width as usize;
 
     // Left: panel-specific keybinding hints
-    let (panel_hints, global_hints) = keybindings_for(db.sub_tab, db.focus);
+    let (panel_hints, global_hints) = keybindings_for(db.sub_tab, db.focus, db.bottom_tab);
     let left = format!(" {panel_hints}");
 
     // Center: execution status

@@ -32,7 +32,6 @@ pub(crate) struct RecordDetail {
 }
 
 impl RecordDetail {
-    #[allow(dead_code)] // constructed in UiPanels::new (M4 Task 7)
     pub(crate) fn new() -> Self {
         Self {
             columns: Vec::new(),
@@ -45,7 +44,6 @@ impl RecordDetail {
     /// Populate the detail view with a row's data.
     /// Columns come from `ColumnDef` (name + `type_name`).
     /// Values are `Option<String>` — `None` = SQL NULL, `Some(s)` = display text.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_row(&mut self, columns: &[ColumnDef], values: &[Option<String>]) {
         self.columns = columns.to_vec();
         self.values = values.to_vec();
@@ -54,7 +52,6 @@ impl RecordDetail {
     }
 
     /// Clear all data (e.g. when there are no results).
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn clear(&mut self) {
         self.columns.clear();
         self.values.clear();

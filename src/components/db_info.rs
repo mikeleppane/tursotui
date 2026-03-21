@@ -48,7 +48,6 @@ pub(crate) struct DbInfoPanel {
 }
 
 impl DbInfoPanel {
-    #[allow(dead_code)] // constructed in UiPanels::new (M4 Task 7)
     pub(crate) fn new() -> Self {
         Self {
             info: None,
@@ -61,7 +60,6 @@ impl DbInfoPanel {
     /// Attempt initial load. Returns true (and sets `loading = true`) only if
     /// data hasn't been loaded yet and no load is in progress.
     /// Used by `SwitchSubTab(Admin)` for lazy one-time initialization.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn try_start_load(&mut self) -> bool {
         if self.loading || self.info.is_some() {
             return false;
@@ -73,7 +71,6 @@ impl DbInfoPanel {
     /// Force a refresh even when data is already loaded. Returns true (and sets
     /// `loading = true`) if no load is already in progress.
     /// Used by the `r` key (`RefreshDbInfo` action).
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn try_start_refresh(&mut self) -> bool {
         if self.loading {
             return false;
@@ -83,32 +80,27 @@ impl DbInfoPanel {
     }
 
     /// Store loaded database info.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_info(&mut self, info: DbInfo) {
         self.info = Some(info);
         self.loading = false;
     }
 
     /// Clear loading flag on failure (info stays None or stale).
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_loading_failed(&mut self) {
         self.loading = false;
     }
 
     /// Whether the panel is currently running a checkpoint task.
-    #[allow(dead_code)] // read/written from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn checkpointing(&self) -> bool {
         self.checkpointing
     }
 
     /// Set the checkpointing flag.
-    #[allow(dead_code)] // called from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn set_checkpointing(&mut self, v: bool) {
         self.checkpointing = v;
     }
 
     /// Whether info has been loaded.
-    #[allow(dead_code)] // read from dispatch_action_to_components (M4 Task 7)
     pub(crate) fn info(&self) -> Option<&DbInfo> {
         self.info.as_ref()
     }
