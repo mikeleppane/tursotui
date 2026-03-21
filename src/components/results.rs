@@ -4,6 +4,7 @@ use ratatui::widgets::{
     Block, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
     Table, TableState,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, Direction};
 use crate::db::{ColumnDef, QueryResult};
@@ -30,6 +31,8 @@ pub(crate) struct ResultsTable {
     /// Display strings for each cell. `None` = SQL NULL, `Some(s)` = display text.
     rows: Vec<Vec<Option<String>>>,
     column_widths: Vec<u16>,
+    /// Per-column minimum width based on header display width (floor of `MIN_COL_WIDTH`).
+    min_widths: Vec<u16>,
     state: TableState,
     /// Currently selected column index.
     selected_col: usize,
@@ -49,6 +52,7 @@ impl ResultsTable {
             columns: Vec::new(),
             rows: Vec::new(),
             column_widths: Vec::new(),
+            min_widths: Vec::new(),
             state: TableState::default(),
             selected_col: 0,
             col_offset: 0,
@@ -68,6 +72,14 @@ impl ResultsTable {
             .map(|row| row.iter().map(value_to_display).collect())
             .collect();
         self.column_widths = compute_column_widths(&self.columns, &self.rows);
+        self.min_widths = self
+            .columns
+            .iter()
+            .map(|col| {
+                let header_w = UnicodeWidthStr::width(col.name.as_str()) as u16;
+                header_w.max(MIN_COL_WIDTH)
+            })
+            .collect();
         self.original_rows = self.rows.clone();
         self.sort_col = None;
         self.sort_order = SortOrder::Ascending;
@@ -104,6 +116,7 @@ impl ResultsTable {
         self.columns.clear();
         self.rows.clear();
         self.column_widths.clear();
+        self.min_widths.clear();
         self.state = TableState::default();
         self.selected_col = 0;
         self.col_offset = 0;
@@ -156,6 +169,23 @@ impl ResultsTable {
     fn prev_col(&mut self) {
         if !self.columns.is_empty() && self.selected_col > 0 {
             self.selected_col -= 1;
+        }
+    }
+
+    fn grow_column(&mut self) {
+        if let Some(w) = self.column_widths.get_mut(self.selected_col) {
+            *w = (*w).saturating_add(1).min(MAX_COL_WIDTH);
+        }
+    }
+
+    fn shrink_column(&mut self) {
+        let min = self
+            .min_widths
+            .get(self.selected_col)
+            .copied()
+            .unwrap_or(MIN_COL_WIDTH);
+        if let Some(w) = self.column_widths.get_mut(self.selected_col) {
+            *w = (*w).saturating_sub(1).max(min);
         }
     }
 
@@ -290,6 +320,16 @@ impl Component for ResultsTable {
             }
             (KeyModifiers::NONE, KeyCode::Char('h') | KeyCode::Left) => {
                 self.prev_col();
+                None
+            }
+
+            // Column resize
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('>')) => {
+                self.grow_column();
+                None
+            }
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('<')) => {
+                self.shrink_column();
                 None
             }
 
@@ -516,29 +556,28 @@ fn value_to_display(val: &turso::Value) -> Option<String> {
     }
 }
 
-/// Auto-size column widths: `max(header_len, longest_value_in_first_50_rows, MIN)`, capped at MAX.
+/// Auto-size column widths: `max(header_width, longest_value_in_first_50_rows, MIN)`, capped at MAX.
+/// Uses unicode display widths for correct handling of multi-byte/wide characters.
 fn compute_column_widths(columns: &[ColumnDef], rows: &[Vec<Option<String>>]) -> Vec<u16> {
     columns
         .iter()
         .enumerate()
         .map(|(col_idx, col)| {
-            let header_len = col.name.len().min(MAX_COL_WIDTH as usize) as u16;
-            let max_val_len = rows
+            let header_w = col.name.as_str().width().min(MAX_COL_WIDTH as usize) as u16;
+            let max_val_w = rows
                 .iter()
                 .take(WIDTH_SAMPLE_ROWS)
                 .filter_map(|row| row.get(col_idx))
                 .map(|v| {
-                    let len = match v {
-                        Some(s) => s.len(),
+                    let w = match v {
+                        Some(s) => s.as_str().width(),
                         None => 4, // "NULL" display width
                     };
-                    len.min(MAX_COL_WIDTH as usize) as u16
+                    w.min(MAX_COL_WIDTH as usize) as u16
                 })
                 .max()
                 .unwrap_or(0);
-            header_len
-                .max(max_val_len)
-                .clamp(MIN_COL_WIDTH, MAX_COL_WIDTH)
+            header_w.max(max_val_w).clamp(MIN_COL_WIDTH, MAX_COL_WIDTH)
         })
         .collect()
 }
@@ -979,6 +1018,72 @@ mod tests {
             range.contains(&0),
             "wide column 0 should still be included in range {range:?}"
         );
+    }
+
+    // --- column resize tests ---
+
+    #[test]
+    fn test_column_resize_grow() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 1);
+        table.set_results(&result);
+        let original_width = table.column_widths[0];
+        table.grow_column();
+        assert_eq!(table.column_widths[0], original_width + 1);
+    }
+
+    #[test]
+    fn test_column_resize_shrink() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 1);
+        table.set_results(&result);
+        let original_width = table.column_widths[0];
+        table.grow_column();
+        table.shrink_column();
+        assert_eq!(table.column_widths[0], original_width);
+    }
+
+    #[test]
+    fn test_column_resize_clamp_min() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(1, 1);
+        table.set_results(&result);
+        let expected_min = table.min_widths[0]; // "col_0" → 5, which > MIN_COL_WIDTH
+        for _ in 0..100 {
+            table.shrink_column();
+        }
+        assert_eq!(table.column_widths[0], expected_min);
+    }
+
+    #[test]
+    fn test_column_resize_clamp_max() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(1, 1);
+        table.set_results(&result);
+        for _ in 0..100 {
+            table.grow_column();
+        }
+        assert_eq!(table.column_widths[0], MAX_COL_WIDTH);
+    }
+
+    #[test]
+    fn test_column_resize_empty_table() {
+        let mut table = ResultsTable::new();
+        table.grow_column(); // should not panic
+        table.shrink_column(); // should not panic
+    }
+
+    #[test]
+    fn test_column_resize_non_zero_col() {
+        let mut table = ResultsTable::new();
+        let result = make_test_result(3, 1);
+        table.set_results(&result);
+        let orig_col0 = table.column_widths[0];
+        let orig_col1 = table.column_widths[1];
+        table.next_col(); // select column 1
+        table.grow_column();
+        assert_eq!(table.column_widths[0], orig_col0); // col 0 unchanged
+        assert_eq!(table.column_widths[1], orig_col1 + 1); // col 1 grew
     }
 
     // --- sorting tests ---

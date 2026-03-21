@@ -51,17 +51,22 @@ fn format_count(n: usize) -> String {
 }
 
 /// Keybinding hints for each focused panel, varying by sub-tab context.
-fn keybindings_for(sub_tab: SubTab, focus: PanelId) -> &'static str {
-    match (sub_tab, focus) {
+///
+/// Returns `(panel_hints, global_hints)` — panel-specific on the left,
+/// always-available shortcuts on the right.
+fn keybindings_for(sub_tab: SubTab, focus: PanelId) -> (&'static str, &'static str) {
+    let global = "F1 Help  Alt+1/2 Tabs  Ctrl+Q Quit";
+    let panel = match (sub_tab, focus) {
         // Query-tab panels
         (SubTab::Query, PanelId::Editor) => "F5 Execute  Esc Release",
         (SubTab::Query, PanelId::Schema) => "Enter Expand  o Open  Esc Release",
         (SubTab::Query, PanelId::Bottom) => {
-            "j/k Navigate  h/l Columns  g/G First/Last  Esc Release"
+            "j/k Navigate  h/l Columns  s Sort  </> Resize  g/G First/Last  Esc Release"
         }
         // Admin-tab panels and fallback
         _ => "Tab Cycle",
-    }
+    };
+    (panel, global)
 }
 
 /// Truncate a string to fit within `max_width` display columns,
@@ -112,8 +117,9 @@ pub(crate) fn render(
     let db = app.active_db();
     let width = area.width as usize;
 
-    // Left: keybinding hints
-    let left = format!(" {}", keybindings_for(db.sub_tab, db.focus));
+    // Left: panel-specific keybinding hints
+    let (panel_hints, global_hints) = keybindings_for(db.sub_tab, db.focus);
+    let left = format!(" {panel_hints}");
 
     // Center: execution status
     let center = if db.executing {
@@ -132,15 +138,19 @@ pub(crate) fn render(
         String::new()
     };
 
-    // Right: row position when results focused, otherwise DB label
+    // Right: row position when results focused, otherwise global hints
     let right = if db.focus == PanelId::Bottom && total_rows > 0 {
         if let Some(sel) = selected_row {
-            format!("Row {} of {} ", sel + 1, format_count(total_rows))
+            format!(
+                "Row {} of {}  {global_hints} ",
+                sel + 1,
+                format_count(total_rows)
+            )
         } else {
-            format!("{} rows ", format_count(total_rows))
+            format!("{} rows  {global_hints} ", format_count(total_rows))
         }
     } else {
-        format!("{} ", db.label)
+        format!("{global_hints} ")
     };
 
     // Compose the three sections into a single line
