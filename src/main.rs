@@ -4,7 +4,6 @@ mod config;
 mod db;
 mod event;
 mod highlight;
-#[allow(dead_code)] // Used by later milestone tasks (buffer save/load on quit/startup)
 mod persistence;
 mod theme;
 
@@ -111,6 +110,19 @@ fn run_loop(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut panels = UiPanels::new(&app.config);
 
+    // Restore saved editor buffer
+    if let Some(saved) = persistence::load_buffer(&app.active_db().path)
+        && !saved.is_empty()
+    {
+        panels.editor.set_contents(&saved);
+        panels.editor.mark_saved();
+        app.transient_message = Some(app::TransientMessage {
+            text: "Restored editor buffer".to_string(),
+            created_at: std::time::Instant::now(),
+            is_error: false,
+        });
+    }
+
     loop {
         // 1. Drain async result channel before key handling
         drain_async_messages(app, &mut panels);
@@ -122,14 +134,30 @@ fn run_loop(
             handle_key_event(key, app, &mut panels);
         }
 
-        // 3. Clear expired transient message
+        // 3. Auto-save editor buffer (debounced, 1s).
+        // Synchronous write — sub-KB buffers are sub-millisecond on local disk.
+        // If slow-filesystem jank is reported, migrate to spawn_blocking.
+        if panels.editor.is_dirty() && panels.editor.last_save_elapsed() > Duration::from_secs(1) {
+            let path = app.active_db().path.clone();
+            if let Err(e) = persistence::save_buffer(&path, &panels.editor.contents()) {
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Auto-save failed: {e}"),
+                    created_at: std::time::Instant::now(),
+                    is_error: true,
+                });
+            } else {
+                panels.editor.mark_saved();
+            }
+        }
+
+        // 4. Clear expired transient message
         if let Some(ref tm) = app.transient_message
             && tm.created_at.elapsed() >= components::status_bar::TRANSIENT_TTL
         {
             app.transient_message = None;
         }
 
-        // 4. Render
+        // 5. Render
         if app.should_quit {
             break;
         }
@@ -137,6 +165,11 @@ fn run_loop(
         terminal.draw(|frame| {
             render_ui(frame, app, &mut panels);
         })?;
+    }
+
+    // Final buffer save on quit
+    if panels.editor.is_dirty() {
+        let _ = persistence::save_buffer(&app.active_db().path, &panels.editor.contents());
     }
 
     Ok(())
@@ -478,6 +511,11 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 created_at: std::time::Instant::now(),
                 is_error: true,
             });
+        }
+        app::Action::ClearEditor => {
+            panels.editor.clear();
+            let path = app.active_db().path.clone();
+            let _ = persistence::delete_buffer(&path);
         }
         app::Action::ToggleTheme => {
             if let Err(e) = crate::config::save_config(&app.config) {

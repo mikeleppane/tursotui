@@ -89,6 +89,8 @@ pub(crate) struct QueryEditor {
     redo_stack: Vec<Vec<String>>,
     tab_size: usize,
     selection: Option<Selection>,
+    dirty: bool,
+    last_save: std::time::Instant,
 }
 
 impl QueryEditor {
@@ -101,6 +103,8 @@ impl QueryEditor {
             redo_stack: Vec::new(),
             tab_size: TAB_SIZE,
             selection: None,
+            dirty: false,
+            last_save: std::time::Instant::now(),
         }
     }
 
@@ -126,12 +130,35 @@ impl QueryEditor {
         self.scroll_offset = 0;
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.save_undo();
+        self.buffer = vec![String::new()];
+        self.cursor = (0, 0);
+        self.scroll_offset = 0;
+        self.selection = None;
+        self.dirty = false;
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    pub(crate) fn mark_saved(&mut self) {
+        self.dirty = false;
+        self.last_save = std::time::Instant::now();
+    }
+
+    pub(crate) fn last_save_elapsed(&self) -> std::time::Duration {
+        self.last_save.elapsed()
+    }
+
     fn save_undo(&mut self) {
         self.undo_stack.push(self.buffer.clone());
         if self.undo_stack.len() > MAX_UNDO {
             self.undo_stack.remove(0);
         }
         self.redo_stack.clear();
+        self.dirty = true;
     }
 
     fn undo(&mut self) {
@@ -139,6 +166,7 @@ impl QueryEditor {
             self.redo_stack.push(self.buffer.clone());
             self.buffer = prev;
             self.selection = None;
+            self.dirty = true;
             self.clamp_cursor();
         }
     }
@@ -148,6 +176,7 @@ impl QueryEditor {
             self.undo_stack.push(self.buffer.clone());
             self.buffer = next;
             self.selection = None;
+            self.dirty = true;
             self.clamp_cursor();
         }
     }
@@ -522,14 +551,7 @@ impl Component for QueryEditor {
             }
 
             // Clear buffer
-            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
-                self.save_undo();
-                self.selection = None;
-                self.buffer = vec![String::new()];
-                self.cursor = (0, 0);
-                self.scroll_offset = 0;
-                None
-            }
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => Some(Action::ClearEditor),
 
             // Shift+Arrow: extend selection
             (KeyModifiers::SHIFT, KeyCode::Up) => {
@@ -977,9 +999,11 @@ mod tests {
     fn test_clear_and_undo() {
         let mut editor = QueryEditor::new();
         editor.set_contents("hello");
-        editor.handle_key(ctrl_press(KeyCode::Char('l')));
+        // Ctrl+L now returns Action::ClearEditor; dispatch calls editor.clear()
+        editor.clear();
         assert_eq!(editor.contents(), "");
         assert_eq!(editor.cursor, (0, 0));
+        assert!(!editor.is_dirty());
         // undo restores
         editor.handle_key(ctrl_press(KeyCode::Char('z')));
         assert_eq!(editor.contents(), "hello");

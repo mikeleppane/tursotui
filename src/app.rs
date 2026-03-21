@@ -83,6 +83,7 @@ pub(crate) enum Action {
     ToggleTheme,
     ShowHelp,
     Quit,
+    ClearEditor,
     ExecuteQuery(String, ExecutionSource),
     QueryCompleted(QueryResult),
     QueryFailed(String),
@@ -337,8 +338,9 @@ impl AppState {
             | Action::WalCheckpointFailed(_)
             | Action::IntegrityCheck
             | Action::IntegrityCheckCompleted(_)
-            | Action::IntegrityCheckFailed(_) => {
-                // No AppState mutation needed; dispatched to components in M4 Tasks 3-7
+            | Action::IntegrityCheckFailed(_)
+            | Action::ClearEditor => {
+                // No AppState mutation needed; dispatched to components
             }
         }
     }
