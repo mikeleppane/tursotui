@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::db::{ColumnInfo, DatabaseHandle, QueryResult, SchemaEntry};
+use crate::db::{ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryResult, SchemaEntry};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
 #[derive(Debug, Clone)]
@@ -19,11 +19,11 @@ pub(crate) enum SubTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BottomTab {
     Results,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used by bottom tab routing (M4 Task 7)
     Explain,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // used by bottom tab routing (M4 Task 7)
     Detail,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // stays placeholder until ER Diagram milestone
     ERDiagram,
 }
 
@@ -62,7 +62,7 @@ pub(crate) enum Action {
     FocusPanel(PanelId),
     CycleFocus(Direction),
     ToggleSidebar,
-    #[allow(dead_code)] // constructed when bottom tab bar is interactive (later milestone)
+    #[allow(dead_code)] // constructed by bottom tab number-key routing (M4 Task 7)
     SwitchBottomTab(BottomTab),
     ToggleTheme,
     ShowHelp,
@@ -75,13 +75,41 @@ pub(crate) enum Action {
     PopulateEditor(String),
     LoadColumns(String),
     SetTransient(String, bool),
+    #[allow(dead_code)] // constructed by ExplainView (M4 Task 4)
+    GenerateExplain(String),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    ExplainCompleted(Vec<Vec<String>>, Vec<String>),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    ExplainFailed(String),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    DbInfoLoaded(DbInfo),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    DbInfoFailed(String),
+    #[allow(dead_code)] // constructed by DbInfoPanel (M4 Task 5)
+    RefreshDbInfo,
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    PragmasLoaded(Vec<PragmaEntry>),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    PragmasFailed(String),
+    #[allow(dead_code)] // constructed by PragmaDashboard (M4 Task 6)
+    RefreshPragmas,
+    #[allow(dead_code)] // constructed by PragmaDashboard (M4 Task 6)
+    SetPragma(String, String),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    PragmaSet(String, String),
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    PragmaFailed(String, String), // (pragma_name, error_message)
+    #[allow(dead_code)] // constructed by DbInfoPanel (M4 Task 5)
+    WalCheckpoint,
+    #[allow(dead_code)] // mapped from QueryMessage (M4 Task 7)
+    WalCheckpointed(String),
 }
 
 /// Per-database workspace.
 pub(crate) struct DatabaseContext {
     pub handle: DatabaseHandle,
-    #[allow(dead_code)]
-    pub path: String, // used for multi-tab display (Milestone 7)
+    #[allow(dead_code)] // used by load_db_info (M4 Task 7)
+    pub path: String,
     pub label: String,
     pub sub_tab: SubTab,
     pub focus: PanelId,
@@ -263,8 +291,24 @@ impl AppState {
                     self.help_scroll = 0;
                 }
             }
-            Action::SchemaLoaded(_) | Action::ColumnsLoaded(_, _) | Action::LoadColumns(_) => {
-                // Handled elsewhere (main.rs) or implemented in later milestones
+            Action::SchemaLoaded(_)
+            | Action::ColumnsLoaded(_, _)
+            | Action::LoadColumns(_)
+            | Action::GenerateExplain(_)
+            | Action::ExplainCompleted(_, _)
+            | Action::ExplainFailed(_)
+            | Action::DbInfoLoaded(_)
+            | Action::DbInfoFailed(_)
+            | Action::RefreshDbInfo
+            | Action::PragmasLoaded(_)
+            | Action::PragmasFailed(_)
+            | Action::RefreshPragmas
+            | Action::SetPragma(_, _)
+            | Action::PragmaSet(_, _)
+            | Action::PragmaFailed(_, _)
+            | Action::WalCheckpoint
+            | Action::WalCheckpointed(_) => {
+                // No AppState mutation needed; dispatched to components in M4 Tasks 3-7
             }
         }
     }

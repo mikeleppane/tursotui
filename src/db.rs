@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnDef {
     pub name: String,
-    #[allow(dead_code)] // used for column type display in later milestones
+    #[allow(dead_code)] // used by RecordDetail (M4 Task 3)
     pub type_name: String,
 }
 
@@ -19,6 +19,9 @@ pub(crate) struct QueryResult {
     pub execution_time: Duration,
     /// True if the result was capped at 10,000 rows.
     pub truncated: bool,
+    /// The SQL statement that produced this result.
+    #[allow(dead_code)] // used by ExplainView mark_stale (M4 Task 7)
+    pub sql: String,
 }
 
 /// A raw schema entry from `sqlite_schema`.
@@ -43,6 +46,46 @@ pub(crate) struct ColumnInfo {
     pub pk: bool,
 }
 
+/// Database metadata from PRAGMAs and file system.
+#[derive(Debug, Clone)]
+pub(crate) struct DbInfo {
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub file_path: String,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub file_size: Option<u64>,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub page_count: i64,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub page_size: i64,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub encoding: String,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub journal_mode: String,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub schema_version: i64,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub freelist_count: i64,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub data_version: i64,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub turso_version: String,
+    #[allow(dead_code)] // read by DbInfoPanel (M4 Task 5)
+    pub wal_frames: Option<u64>,
+}
+
+/// A single PRAGMA entry for the dashboard.
+#[derive(Debug, Clone)]
+pub(crate) struct PragmaEntry {
+    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
+    pub name: String,
+    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
+    pub value: String,
+    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
+    pub writable: bool,
+    #[allow(dead_code)] // read by PragmaDashboard (M4 Task 6)
+    pub note: Option<String>,
+}
+
 /// Messages sent from query tasks back to the main loop.
 #[derive(Debug)]
 pub(crate) enum QueryMessage {
@@ -51,6 +94,24 @@ pub(crate) enum QueryMessage {
     SchemaLoaded(Vec<SchemaEntry>),
     SchemaFailed(String),
     ColumnsLoaded(String, Vec<ColumnInfo>),
+    #[allow(dead_code)] // constructed by DatabaseHandle::explain (M4 Task 2)
+    ExplainCompleted(Vec<Vec<String>>, Vec<String>),
+    #[allow(dead_code)] // constructed by DatabaseHandle::explain (M4 Task 2)
+    ExplainFailed(String),
+    #[allow(dead_code)] // constructed by DatabaseHandle::load_db_info (M4 Task 2)
+    DbInfoLoaded(DbInfo),
+    #[allow(dead_code)] // constructed by DatabaseHandle::load_db_info (M4 Task 2)
+    DbInfoFailed(String),
+    #[allow(dead_code)] // constructed by DatabaseHandle::load_pragmas (M4 Task 2)
+    PragmasLoaded(Vec<PragmaEntry>),
+    #[allow(dead_code)] // constructed by DatabaseHandle::load_pragmas (M4 Task 2)
+    PragmasFailed(String),
+    #[allow(dead_code)] // constructed by DatabaseHandle::set_pragma (M4 Task 2)
+    PragmaSet(String, String),
+    #[allow(dead_code)] // constructed by DatabaseHandle::set_pragma (M4 Task 2)
+    PragmaFailed(String, String), // (pragma_name, error_message)
+    #[allow(dead_code)] // constructed by DatabaseHandle::wal_checkpoint (M4 Task 2)
+    WalCheckpointed(String),
 }
 
 /// Wraps an `Arc<Database>` and provides a channel for receiving query results.
@@ -120,6 +181,7 @@ impl DatabaseHandle {
                         rows,
                         execution_time: elapsed,
                         truncated,
+                        sql,
                     }),
                     Err(e) => QueryMessage::Failed(e.to_string()),
                 }

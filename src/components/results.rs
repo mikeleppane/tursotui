@@ -672,6 +672,7 @@ mod tests {
             rows,
             execution_time: Duration::ZERO,
             truncated: false,
+            sql: String::new(),
         }
     }
 

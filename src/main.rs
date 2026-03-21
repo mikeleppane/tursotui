@@ -94,13 +94,23 @@ fn run_loop(
         while let Some(msg) = app.active_db_mut().handle.try_recv() {
             let action = match msg {
                 db::QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
-                db::QueryMessage::Failed(err) | db::QueryMessage::SchemaFailed(err) => {
-                    app::Action::QueryFailed(err)
-                }
+                db::QueryMessage::Failed(err) => app::Action::QueryFailed(err),
+                db::QueryMessage::SchemaFailed(err) => app::Action::SetTransient(err, true),
                 db::QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
                 db::QueryMessage::ColumnsLoaded(table, cols) => {
                     app::Action::ColumnsLoaded(table, cols)
                 }
+                db::QueryMessage::ExplainCompleted(bytecode, plan) => {
+                    app::Action::ExplainCompleted(bytecode, plan)
+                }
+                db::QueryMessage::ExplainFailed(err) => app::Action::ExplainFailed(err),
+                db::QueryMessage::DbInfoLoaded(info) => app::Action::DbInfoLoaded(info),
+                db::QueryMessage::DbInfoFailed(err) => app::Action::DbInfoFailed(err),
+                db::QueryMessage::PragmasLoaded(entries) => app::Action::PragmasLoaded(entries),
+                db::QueryMessage::PragmasFailed(err) => app::Action::PragmasFailed(err),
+                db::QueryMessage::PragmaSet(name, val) => app::Action::PragmaSet(name, val),
+                db::QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
+                db::QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
             };
             app.update(&action);
             dispatch_action_to_components(&action, app, &mut panels);
@@ -203,7 +213,7 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
         app::Action::ColumnsLoaded(table_name, columns) => {
             panels.schema.set_columns(table_name, columns.clone());
         }
-        _ => {}
+        _ => {} // M4 action handlers land in Tasks 3-7
     }
 }
 
