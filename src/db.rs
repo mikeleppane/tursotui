@@ -26,7 +26,6 @@ pub(crate) struct QueryResult {
 pub(crate) struct SchemaEntry {
     pub obj_type: String,
     pub name: String,
-    #[allow(dead_code)] // used for index/trigger grouping (later milestone)
     pub tbl_name: String,
     #[allow(dead_code)] // shown in SQL preview panel (later milestone)
     pub sql: Option<String>,
