@@ -28,20 +28,17 @@ pub(crate) struct AutocompletePopup {
     selected: usize,
     /// Scroll offset when candidates exceed `MAX_VISIBLE`.
     scroll_offset: usize,
-    /// Editor cursor position (row, col) when autocomplete was triggered.
-    pub(crate) anchor: (usize, usize),
     /// Current typing prefix used for filtering.
     pub(crate) prefix: String,
 }
 
 impl AutocompletePopup {
-    /// Create a new empty popup anchored at the given editor cursor position.
-    pub(crate) fn new(anchor: (usize, usize), prefix: String) -> Self {
+    /// Create a new empty popup with the given typing prefix.
+    pub(crate) fn new(prefix: String) -> Self {
         Self {
             candidates: Vec::new(),
             selected: 0,
             scroll_offset: 0,
-            anchor,
             prefix,
         }
     }
@@ -336,14 +333,14 @@ mod tests {
 
     #[test]
     fn new_popup_is_empty() {
-        let popup = AutocompletePopup::new((0, 0), String::new());
+        let popup = AutocompletePopup::new(String::new());
         assert!(popup.is_empty());
         assert!(popup.selected_text().is_none());
     }
 
     #[test]
     fn update_candidates_resets_state() {
-        let mut popup = AutocompletePopup::new((0, 5), "us".into());
+        let mut popup = AutocompletePopup::new("us".into());
         popup.selected = 2;
         popup.scroll_offset = 1;
         popup.update_candidates(sample_candidates());
@@ -355,7 +352,7 @@ mod tests {
 
     #[test]
     fn selected_text_returns_current() {
-        let mut popup = AutocompletePopup::new((0, 0), String::new());
+        let mut popup = AutocompletePopup::new(String::new());
         popup.update_candidates(sample_candidates());
 
         assert_eq!(popup.selected_text(), Some("users"));
@@ -365,7 +362,7 @@ mod tests {
 
     #[test]
     fn move_down_wraps() {
-        let mut popup = AutocompletePopup::new((0, 0), String::new());
+        let mut popup = AutocompletePopup::new(String::new());
         popup.update_candidates(sample_candidates());
 
         popup.move_down(); // -> 1
@@ -376,7 +373,7 @@ mod tests {
 
     #[test]
     fn move_up_wraps() {
-        let mut popup = AutocompletePopup::new((0, 0), String::new());
+        let mut popup = AutocompletePopup::new(String::new());
         popup.update_candidates(sample_candidates());
 
         popup.move_up(); // -> 2 (wrap from 0)
@@ -385,7 +382,7 @@ mod tests {
 
     #[test]
     fn move_on_empty_is_noop() {
-        let mut popup = AutocompletePopup::new((0, 0), String::new());
+        let mut popup = AutocompletePopup::new(String::new());
         popup.move_up();
         popup.move_down();
         assert_eq!(popup.selected, 0);
@@ -393,7 +390,7 @@ mod tests {
 
     #[test]
     fn scroll_adjusts_when_exceeding_visible() {
-        let mut popup = AutocompletePopup::new((0, 0), String::new());
+        let mut popup = AutocompletePopup::new(String::new());
         // Create more than MAX_VISIBLE candidates
         let many: Vec<Candidate> = (0..15)
             .map(|i| Candidate {

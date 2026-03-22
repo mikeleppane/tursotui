@@ -49,15 +49,23 @@ pub(crate) enum CompletionContext {
     Keyword,
     /// General expression context (after `(`, in function args) — columns + functions.
     Expression { tables: Vec<String> },
+    /// After INNER/LEFT/RIGHT/OUTER/CROSS/NATURAL — suggest `JOIN` keyword.
+    JoinQualifier,
     /// After AS — user is defining an alias, no suggestions appropriate.
     NoSuggestion,
 }
 
-/// SQL keywords that introduce a table name context.
-const TABLE_CONTEXT_KEYWORDS: &[&str] = &[
-    "FROM", "JOIN", "INTO", "UPDATE", "TABLE", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS",
-    "NATURAL",
-];
+/// SQL keywords that directly introduce a table name (the next token is a table).
+const TABLE_CONTEXT_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
+
+/// Join qualifier keywords — after these the next expected token is `JOIN`, not a table.
+const JOIN_QUALIFIER_KEYWORDS: &[&str] = &["INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "NATURAL"];
+
+/// Combined: any keyword that's part of a table-referencing clause.
+/// Used by alias resolution and `is_in_table_list` to scan backward through FROM/JOIN.
+fn is_table_clause_keyword(word: &str) -> bool {
+    TABLE_CONTEXT_KEYWORDS.contains(&word) || JOIN_QUALIFIER_KEYWORDS.contains(&word)
+}
 
 /// SQL keywords that introduce a column/expression context.
 const COLUMN_CONTEXT_KEYWORDS: &[&str] = &[
@@ -214,6 +222,7 @@ pub(crate) fn detect_context(
     let context = match last_keyword.as_deref() {
         Some("AS") => CompletionContext::NoSuggestion,
         Some(kw) if TABLE_CONTEXT_KEYWORDS.contains(&kw) => CompletionContext::TableName,
+        Some(kw) if JOIN_QUALIFIER_KEYWORDS.contains(&kw) => CompletionContext::JoinQualifier,
         Some(kw) if COLUMN_CONTEXT_KEYWORDS.contains(&kw) => {
             let tables = extract_referenced_tables(&full_text, schema);
             CompletionContext::ColumnName { tables }
@@ -315,6 +324,7 @@ fn extract_last_keyword(text: &str) -> Option<String> {
     }
     let upper = last_word.to_uppercase();
     if TABLE_CONTEXT_KEYWORDS.contains(&upper.as_str())
+        || JOIN_QUALIFIER_KEYWORDS.contains(&upper.as_str())
         || COLUMN_CONTEXT_KEYWORDS.contains(&upper.as_str())
         || upper == "AS"
     {
@@ -354,8 +364,8 @@ fn is_in_table_list(text: &str) -> bool {
         }
         let upper = word.to_uppercase();
 
-        // Found a table-context keyword — we're in a table list
-        if TABLE_CONTEXT_KEYWORDS.contains(&upper.as_str()) {
+        // Found a table-clause keyword — we're in a table list
+        if is_table_clause_keyword(&upper) {
             return true;
         }
 
@@ -518,6 +528,7 @@ fn tokenize_simple(text: &str) -> Vec<String> {
 /// Check if a string (already uppercased) is a SQL keyword.
 fn is_sql_keyword(word: &str) -> bool {
     TABLE_CONTEXT_KEYWORDS.contains(&word)
+        || JOIN_QUALIFIER_KEYWORDS.contains(&word)
         || COLUMN_CONTEXT_KEYWORDS.contains(&word)
         || matches!(
             word,
@@ -612,6 +623,9 @@ pub(crate) fn generate_candidates(
         }
         CompletionContext::Keyword => {
             add_keyword_candidates(&mut candidates, STATEMENT_KEYWORDS, &prefix_lower, 100);
+        }
+        CompletionContext::JoinQualifier => {
+            add_keyword_candidates(&mut candidates, &["JOIN"], &prefix_lower, 300);
         }
         CompletionContext::NoSuggestion => {}
     }
@@ -1028,5 +1042,142 @@ mod tests {
         for window in candidates.windows(2) {
             assert!(window[0].score >= window[1].score);
         }
+    }
+
+    // ─── Join qualifier context ──────────────────────────────────────────
+
+    #[test]
+    fn context_after_inner_is_join_qualifier() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users INNER ".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 26, &schema);
+        assert_eq!(ctx, CompletionContext::JoinQualifier);
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn context_after_left_is_join_qualifier() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users LEFT ".into()];
+        let (ctx, _) = detect_context(&lines, 0, 25, &schema);
+        assert_eq!(ctx, CompletionContext::JoinQualifier);
+    }
+
+    #[test]
+    fn context_after_left_with_prefix_j() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users LEFT J".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 26, &schema);
+        assert_eq!(ctx, CompletionContext::JoinQualifier);
+        assert_eq!(prefix, "J");
+    }
+
+    #[test]
+    fn candidates_join_qualifier_suggests_join() {
+        let schema = test_schema();
+        let candidates = generate_candidates(&CompletionContext::JoinQualifier, "", &schema);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].text, "JOIN");
+        assert_eq!(candidates[0].kind, CandidateKind::Keyword);
+    }
+
+    #[test]
+    fn candidates_join_qualifier_filters_by_prefix() {
+        let schema = test_schema();
+        let candidates = generate_candidates(&CompletionContext::JoinQualifier, "X", &schema);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn context_after_join_is_table_name() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users LEFT JOIN ".into()];
+        let (ctx, _) = detect_context(&lines, 0, 30, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
+    }
+
+    // ─── Multi-line and edge cases ───────────────────────────────────────
+
+    #[test]
+    fn context_multi_line_from_after_cursor() {
+        let schema = test_schema();
+        // Cursor on line 0; FROM clause on line 1 — alias resolution needs full buffer
+        let lines = vec!["SELECT u.".into(), "FROM users u".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 9, &schema);
+        assert!(matches!(ctx, CompletionContext::QualifiedColumn { table } if table == "users"));
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn context_values_parenthesis_is_expression() {
+        let schema = test_schema();
+        let lines = vec!["INSERT INTO users VALUES (".into()];
+        let (ctx, _) = detect_context(&lines, 0, 26, &schema);
+        assert!(matches!(ctx, CompletionContext::Expression { .. }));
+    }
+
+    #[test]
+    fn context_after_semicolon_multiline() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users;".into(), String::new(), "INS".into()];
+        let (ctx, prefix) = detect_context(&lines, 2, 3, &schema);
+        assert_eq!(ctx, CompletionContext::Keyword);
+        assert_eq!(prefix, "INS");
+    }
+
+    #[test]
+    fn context_delete_from_is_table() {
+        let schema = test_schema();
+        let lines = vec!["DELETE FROM ".into()];
+        let (ctx, _) = detect_context(&lines, 0, 12, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
+    }
+
+    #[test]
+    fn context_insert_into_is_table() {
+        let schema = test_schema();
+        let lines = vec!["INSERT INTO ".into()];
+        let (ctx, _) = detect_context(&lines, 0, 12, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
+    }
+
+    #[test]
+    fn alias_resolution_left_join() {
+        let schema = test_schema();
+        let text = "SELECT * FROM users u LEFT JOIN orders o";
+        let map = build_alias_map(text, &schema);
+        assert_eq!(map.get("u"), Some(&"users".to_string()));
+        assert_eq!(map.get("o"), Some(&"orders".to_string()));
+    }
+
+    #[test]
+    fn context_empty_buffer_is_keyword() {
+        let schema = test_schema();
+        let lines = vec![String::new()];
+        let (ctx, prefix) = detect_context(&lines, 0, 0, &schema);
+        assert_eq!(ctx, CompletionContext::Keyword);
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn candidates_empty_schema_table_context() {
+        let schema = SchemaCache::default();
+        let candidates = generate_candidates(&CompletionContext::TableName, "", &schema);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn context_comma_in_select_is_column() {
+        let schema = test_schema();
+        // After comma in SELECT list — should be column context, not table list
+        let lines = vec!["SELECT id, na".into(), "FROM users".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 13, &schema);
+        // The comma is in SELECT, not FROM — should not be detected as table list.
+        // Last keyword scanning finds nothing special, falls through to Expression.
+        assert!(matches!(
+            ctx,
+            CompletionContext::ColumnName { .. } | CompletionContext::Expression { .. }
+        ));
+        assert_eq!(prefix, "na");
     }
 }

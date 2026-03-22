@@ -306,21 +306,23 @@ fn handle_key_event(
         dispatch_action_to_components(action, app, panels);
     }
 
-    // Refresh autocomplete after buffer-modifying keys only (typing, backspace).
-    // Navigation keys (Up/Down/Esc/Tab) are handled by the popup interceptor and
-    // should NOT trigger a refresh — that would dismiss the popup when prefix is
-    // below min_chars.
+    // Refresh or auto-trigger autocomplete after buffer-modifying keys
+    // (typing, backspace, delete). Navigation keys (Up/Down/Esc/Tab) are handled
+    // by the popup interceptor and should NOT trigger a refresh.
     let buffer_changed = matches!(
         (key.modifiers, key.code),
         (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(_))
-            | (KeyModifiers::NONE, KeyCode::Backspace)
+            | (KeyModifiers::NONE, KeyCode::Backspace | KeyCode::Delete)
     );
-    if buffer_changed
-        && app.active_db().focus == PanelId::Editor
-        && panels.editor.autocomplete_popup.is_some()
-    {
+    if buffer_changed && app.active_db().focus == PanelId::Editor {
         let schema = &app.active_db().schema_cache;
-        panels.editor.refresh_autocomplete(schema);
+        if panels.editor.autocomplete_popup.is_some() {
+            panels.editor.refresh_autocomplete(schema);
+        } else if panels.editor.autocomplete_enabled() {
+            // Auto-trigger: open the popup when enabled and the user types
+            // enough characters to meet the min_chars threshold.
+            panels.editor.auto_trigger_autocomplete(schema);
+        }
     }
 }
 

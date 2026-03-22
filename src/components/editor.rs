@@ -518,9 +518,14 @@ impl QueryEditor {
         self.autocomplete_min_chars = min_chars;
     }
 
-    /// Trigger autocomplete at the current cursor position.
-    /// Note: always works regardless of `autocomplete_enabled` — that flag
-    /// gates automatic triggering (not yet implemented), not explicit Ctrl+Space.
+    /// Whether automatic autocomplete triggering is enabled.
+    pub(crate) fn autocomplete_enabled(&self) -> bool {
+        self.autocomplete_enabled
+    }
+
+    /// Trigger autocomplete at the current cursor position (explicit Ctrl+Space).
+    /// Always works regardless of `autocomplete_enabled` — that flag gates
+    /// automatic triggering only, not explicit invocation.
     pub(crate) fn trigger_autocomplete(&mut self, schema: &SchemaCache) {
         let (context, prefix) =
             autocomplete::detect_context(&self.buffer, self.cursor.0, self.cursor.1, schema);
@@ -528,7 +533,23 @@ impl QueryEditor {
         if candidates.is_empty() {
             self.autocomplete_popup = None;
         } else {
-            let mut popup = AutocompletePopup::new(self.cursor, prefix);
+            let mut popup = AutocompletePopup::new(prefix);
+            popup.update_candidates(candidates);
+            self.autocomplete_popup = Some(popup);
+        }
+    }
+
+    /// Auto-trigger autocomplete when enabled and prefix meets `min_chars`.
+    /// Called by the event loop after buffer-modifying keys when no popup is open.
+    pub(crate) fn auto_trigger_autocomplete(&mut self, schema: &SchemaCache) {
+        let (context, prefix) =
+            autocomplete::detect_context(&self.buffer, self.cursor.0, self.cursor.1, schema);
+        if prefix.chars().count() < self.autocomplete_min_chars {
+            return;
+        }
+        let candidates = autocomplete::generate_candidates(&context, &prefix, schema);
+        if !candidates.is_empty() {
+            let mut popup = AutocompletePopup::new(prefix);
             popup.update_candidates(candidates);
             self.autocomplete_popup = Some(popup);
         }
@@ -538,8 +559,7 @@ impl QueryEditor {
     pub(crate) fn refresh_autocomplete(&mut self, schema: &SchemaCache) {
         let (context, prefix) =
             autocomplete::detect_context(&self.buffer, self.cursor.0, self.cursor.1, schema);
-        if prefix.chars().count() < self.autocomplete_min_chars && self.autocomplete_popup.is_some()
-        {
+        if prefix.chars().count() < self.autocomplete_min_chars {
             self.autocomplete_popup = None;
             return;
         }
@@ -624,10 +644,10 @@ impl Component for QueryEditor {
                     self.dismiss_autocomplete();
                     return None;
                 }
-                // Character input and backspace: fall through to normal handling,
-                // autocomplete is refreshed by main.rs after the action dispatches
+                // Character input, backspace, and delete: fall through to normal
+                // handling. Autocomplete is refreshed by main.rs after the action.
                 (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(_))
-                | (KeyModifiers::NONE, KeyCode::Backspace) => {}
+                | (KeyModifiers::NONE, KeyCode::Backspace | KeyCode::Delete) => {}
                 // Any other key dismisses autocomplete and falls through
                 _ => {
                     self.dismiss_autocomplete();
@@ -1465,5 +1485,520 @@ mod tests {
         editor.move_word_left();
         // Should jump back over "user_id" as one word
         assert_eq!(editor.cursor.1, 7);
+    }
+
+    // ─── Autocomplete integration tests ──────────────────────────────────
+
+    use crate::app::SchemaCache;
+    use crate::db::{ColumnInfo, SchemaEntry};
+    use std::collections::HashMap;
+
+    fn test_schema() -> SchemaCache {
+        SchemaCache {
+            entries: vec![
+                SchemaEntry {
+                    obj_type: "table".into(),
+                    name: "users".into(),
+                    tbl_name: "users".into(),
+                    sql: None,
+                },
+                SchemaEntry {
+                    obj_type: "table".into(),
+                    name: "orders".into(),
+                    tbl_name: "orders".into(),
+                    sql: None,
+                },
+                SchemaEntry {
+                    obj_type: "view".into(),
+                    name: "active_users".into(),
+                    tbl_name: "active_users".into(),
+                    sql: None,
+                },
+            ],
+            columns: HashMap::from([
+                (
+                    "users".into(),
+                    vec![
+                        ColumnInfo {
+                            name: "id".into(),
+                            col_type: "INTEGER".into(),
+                            notnull: true,
+                            default_value: None,
+                            pk: true,
+                        },
+                        ColumnInfo {
+                            name: "name".into(),
+                            col_type: "TEXT".into(),
+                            notnull: false,
+                            default_value: None,
+                            pk: false,
+                        },
+                        ColumnInfo {
+                            name: "email".into(),
+                            col_type: "TEXT".into(),
+                            notnull: false,
+                            default_value: None,
+                            pk: false,
+                        },
+                    ],
+                ),
+                (
+                    "orders".into(),
+                    vec![
+                        ColumnInfo {
+                            name: "id".into(),
+                            col_type: "INTEGER".into(),
+                            notnull: true,
+                            default_value: None,
+                            pk: true,
+                        },
+                        ColumnInfo {
+                            name: "user_id".into(),
+                            col_type: "INTEGER".into(),
+                            notnull: false,
+                            default_value: None,
+                            pk: false,
+                        },
+                        ColumnInfo {
+                            name: "total".into(),
+                            col_type: "REAL".into(),
+                            notnull: false,
+                            default_value: None,
+                            pk: false,
+                        },
+                    ],
+                ),
+            ]),
+            fully_loaded: true,
+        }
+    }
+
+    #[test]
+    fn trigger_autocomplete_opens_popup() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert!(!popup.is_empty());
+        assert_eq!(popup.prefix, "");
+    }
+
+    #[test]
+    fn trigger_autocomplete_with_prefix_filters() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert_eq!(popup.prefix, "us");
+        // "users" should match, "orders" should not
+        assert_eq!(popup.selected_text(), Some("users"));
+    }
+
+    #[test]
+    fn trigger_autocomplete_no_matches_closes_popup() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM zzz");
+        editor.cursor = (0, 17);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn refresh_autocomplete_updates_candidates() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM u");
+        editor.cursor = (0, 15);
+
+        // First trigger to open popup
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // Simulate typing 's' — update buffer and cursor, then refresh
+        editor.buffer[0] = "SELECT * FROM us".into();
+        editor.cursor = (0, 16);
+        editor.refresh_autocomplete(&schema);
+
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert_eq!(popup.prefix, "us");
+        assert_eq!(popup.selected_text(), Some("users"));
+    }
+
+    #[test]
+    fn refresh_autocomplete_dismisses_when_no_match() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM u");
+        editor.cursor = (0, 15);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // Simulate typing so prefix no longer matches anything
+        editor.buffer[0] = "SELECT * FROM uzz".into();
+        editor.cursor = (0, 17);
+        editor.refresh_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn refresh_autocomplete_dismisses_when_prefix_below_min_chars() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_autocomplete_config(true, 2);
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // Simulate backspace: prefix drops to 1 char, below min_chars=2
+        editor.buffer[0] = "SELECT * FROM u".into();
+        editor.cursor = (0, 15);
+        editor.refresh_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn accept_completion_replaces_prefix() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        let result = editor.accept_completion();
+
+        assert_eq!(result, Some("users".into()));
+        assert_eq!(editor.contents(), "SELECT * FROM users");
+        assert_eq!(editor.cursor, (0, 19)); // cursor at end of "users"
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn accept_completion_undoable() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        editor.accept_completion();
+        assert_eq!(editor.contents(), "SELECT * FROM users");
+
+        // Undo should restore the pre-completion state
+        editor.handle_key(ctrl_press(KeyCode::Char('z')));
+        assert_eq!(editor.contents(), "SELECT * FROM us");
+    }
+
+    #[test]
+    fn accept_completion_empty_prefix() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        editor.trigger_autocomplete(&schema);
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        let first_table = popup.selected_text().unwrap().to_string();
+
+        let result = editor.accept_completion();
+        assert_eq!(result, Some(first_table.clone()));
+        assert!(editor.contents().ends_with(&first_table));
+    }
+
+    #[test]
+    fn dismiss_autocomplete_clears_popup() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        editor.dismiss_autocomplete();
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn popup_esc_dismisses_via_handle_key() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // Esc should dismiss without accepting
+        editor.handle_key(press(KeyCode::Esc));
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn popup_tab_accepts_via_handle_key() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        let action = editor.handle_key(press(KeyCode::Tab));
+
+        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert!(editor.autocomplete_popup.is_none());
+        assert_eq!(editor.contents(), "SELECT * FROM users");
+    }
+
+    #[test]
+    fn popup_enter_accepts_via_handle_key() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        let action = editor.handle_key(press(KeyCode::Enter));
+
+        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn popup_up_down_navigates() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        editor.trigger_autocomplete(&schema);
+        let first = editor
+            .autocomplete_popup
+            .as_ref()
+            .unwrap()
+            .selected_text()
+            .unwrap()
+            .to_string();
+
+        // Move down to second candidate
+        editor.handle_key(press(KeyCode::Down));
+        let second = editor
+            .autocomplete_popup
+            .as_ref()
+            .unwrap()
+            .selected_text()
+            .unwrap()
+            .to_string();
+        assert_ne!(first, second);
+
+        // Move back up to first candidate
+        editor.handle_key(press(KeyCode::Up));
+        let back = editor
+            .autocomplete_popup
+            .as_ref()
+            .unwrap()
+            .selected_text()
+            .unwrap()
+            .to_string();
+        assert_eq!(first, back);
+    }
+
+    #[test]
+    fn popup_char_input_falls_through() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM u");
+        editor.cursor = (0, 15);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // Typing a character should fall through to normal insertion
+        let action = editor.handle_key(press(KeyCode::Char('s')));
+        // The char insertion happens, popup still exists (refresh happens in main.rs)
+        assert!(editor.autocomplete_popup.is_some());
+        assert_eq!(editor.contents(), "SELECT * FROM us");
+        // No special action — buffer modification
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn popup_backspace_falls_through() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+
+        // Backspace should fall through — popup stays, char removed
+        editor.handle_key(press(KeyCode::Backspace));
+        assert!(editor.autocomplete_popup.is_some());
+        assert_eq!(editor.contents(), "SELECT * FROM u");
+    }
+
+    #[test]
+    fn popup_delete_falls_through() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM users WHERE");
+        editor.cursor = (0, 19); // after "users" before " WHERE"
+
+        editor.trigger_autocomplete(&schema);
+
+        // Delete key should fall through — popup stays, forward-delete happens
+        editor.handle_key(press(KeyCode::Delete));
+        assert!(editor.autocomplete_popup.is_some());
+        assert_eq!(editor.contents(), "SELECT * FROM usersWHERE");
+    }
+
+    #[test]
+    fn popup_left_arrow_dismisses() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        editor.trigger_autocomplete(&schema);
+        editor.handle_key(press(KeyCode::Left));
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn auto_trigger_opens_popup_when_enabled() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_autocomplete_config(true, 1);
+        editor.set_contents("SELECT * FROM u");
+        editor.cursor = (0, 15);
+
+        editor.auto_trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+    }
+
+    #[test]
+    fn auto_trigger_respects_min_chars() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_autocomplete_config(true, 3);
+        editor.set_contents("SELECT * FROM us");
+        editor.cursor = (0, 16);
+
+        // Prefix "us" has 2 chars, min_chars is 3 — should not open
+        editor.auto_trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+
+        // Now with 3 chars
+        editor.buffer[0] = "SELECT * FROM use".into();
+        editor.cursor = (0, 17);
+        editor.auto_trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+    }
+
+    #[test]
+    fn auto_trigger_does_not_open_when_disabled() {
+        let mut editor = QueryEditor::new();
+        editor.set_autocomplete_config(false, 1);
+        assert!(!editor.autocomplete_enabled());
+
+        // When disabled, main.rs won't call auto_trigger_autocomplete —
+        // verify the flag is correctly stored and returned.
+        editor.set_autocomplete_config(true, 1);
+        assert!(editor.autocomplete_enabled());
+    }
+
+    #[test]
+    fn auto_trigger_no_candidates_does_not_open() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_autocomplete_config(true, 1);
+        editor.set_contents("SELECT * FROM zzz");
+        editor.cursor = (0, 17);
+
+        editor.auto_trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn accept_completion_multiline_buffer() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT u.na\nFROM users u");
+        editor.cursor = (0, 11); // after "u.na"
+
+        editor.trigger_autocomplete(&schema);
+        // Should be QualifiedColumn context, suggests "name"
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert_eq!(popup.selected_text(), Some("name"));
+
+        let result = editor.accept_completion();
+        assert_eq!(result, Some("name".into()));
+        assert_eq!(editor.buffer[0], "SELECT u.name");
+        assert_eq!(editor.cursor, (0, 13));
+    }
+
+    #[test]
+    fn trigger_autocomplete_keyword_context() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SEL");
+        editor.cursor = (0, 3);
+
+        editor.trigger_autocomplete(&schema);
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert_eq!(popup.prefix, "SEL");
+        assert_eq!(popup.selected_text(), Some("SELECT"));
+    }
+
+    #[test]
+    fn trigger_autocomplete_after_as_gives_no_popup() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT name AS ");
+        editor.cursor = (0, 15);
+
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_none());
+    }
+
+    #[test]
+    fn full_cycle_trigger_type_accept() {
+        let schema = test_schema();
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM ");
+        editor.cursor = (0, 14);
+
+        // 1. Trigger autocomplete
+        editor.trigger_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+
+        // 2. Type 'u' — simulate char insertion + refresh
+        editor.handle_key(press(KeyCode::Char('u')));
+        editor.refresh_autocomplete(&schema);
+        assert!(editor.autocomplete_popup.is_some());
+        assert_eq!(editor.autocomplete_popup.as_ref().unwrap().prefix, "u");
+
+        // 3. Type 's' — simulate another char + refresh
+        editor.handle_key(press(KeyCode::Char('s')));
+        editor.refresh_autocomplete(&schema);
+        let popup = editor.autocomplete_popup.as_ref().unwrap();
+        assert_eq!(popup.prefix, "us");
+        assert_eq!(popup.selected_text(), Some("users"));
+
+        // 4. Accept via Tab
+        let action = editor.handle_key(press(KeyCode::Tab));
+        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert_eq!(editor.contents(), "SELECT * FROM users");
+        assert!(editor.autocomplete_popup.is_none());
     }
 }
