@@ -21,6 +21,7 @@ const PINK: Color = Color::Rgb(245, 194, 231);
 
 /// Visual theme for the entire application.
 /// Every styled element references a field here — no hardcoded colors elsewhere.
+#[derive(Clone, Copy)]
 #[allow(
     dead_code,
     reason = "fields used incrementally as components are added"

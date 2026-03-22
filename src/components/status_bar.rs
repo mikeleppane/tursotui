@@ -125,9 +125,13 @@ pub(crate) fn render(
     let db = app.active_db();
     let width = area.width as usize;
 
-    // Left: focused panel name
+    // Left: focused panel name (with optional database label in multi-db mode)
     let label = panel_label(db.sub_tab, db.focus, db.bottom_tab);
-    let left = format!(" {label}");
+    let left = if app.databases.len() > 1 {
+        format!(" [{}] {label}", db.label)
+    } else {
+        format!(" {label}")
+    };
 
     let center = if db.executing {
         match db.last_execution_source {

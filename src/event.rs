@@ -4,6 +4,9 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 
 use crate::app::{Action, Direction, SubTab};
 
+// Note: Multi-database key bindings (Ctrl+PgUp/PgDn/W) are documented in
+// the help overlay (components/help.rs).
+
 /// Poll for a crossterm event with the given timeout.
 /// Returns `None` if no event occurred within the timeout.
 pub(crate) fn poll_event(timeout: Duration) -> std::io::Result<Option<Event>> {
@@ -74,6 +77,11 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         (m, KeyCode::Char('c' | 'C')) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
             Some(Action::CopyAllResults)
         }
+
+        // Multi-database tab switching
+        (KeyModifiers::CONTROL, KeyCode::PageDown) => Some(Action::NextDatabase),
+        (KeyModifiers::CONTROL, KeyCode::PageUp) => Some(Action::PrevDatabase),
+        (KeyModifiers::CONTROL, KeyCode::Char('w')) => Some(Action::CloseActiveDatabase),
 
         _ => None,
     }

@@ -1,6 +1,16 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::components::data_editor::DataEditor;
+use crate::components::db_info::DbInfoPanel;
+use crate::components::editor::QueryEditor;
+use crate::components::er_diagram::ERDiagram;
+use crate::components::explain::ExplainView;
+use crate::components::export::ExportPopup;
+use crate::components::pragmas::PragmaDashboard;
+use crate::components::record::RecordDetail;
+use crate::components::results::ResultsTable;
+use crate::components::schema::SchemaExplorer;
 use crate::config::{AppConfig, ThemeMode};
 use crate::db::{
     ColumnInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind, QueryResult,
@@ -38,9 +48,9 @@ impl SchemaCache {
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransientMessage {
-    pub text: String,
-    pub created_at: Instant,
-    pub is_error: bool,
+    pub(crate) text: String,
+    pub(crate) created_at: Instant,
+    pub(crate) is_error: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,30 +200,49 @@ pub(crate) enum Action {
     FKNavigateBack,
     #[allow(dead_code)]
     FKLoaded(String, Vec<crate::db::ForeignKeyInfo>),
+    // Multi-database actions
+    #[allow(dead_code)] // constructed by file picker (Phase 3)
+    SwitchDatabase(usize),
+    NextDatabase,
+    PrevDatabase,
+    CloseActiveDatabase,
+    #[allow(dead_code)] // constructed by file picker (Phase 3)
+    OpenDatabase(std::path::PathBuf),
 }
 
 /// Per-database workspace.
 pub(crate) struct DatabaseContext {
-    pub handle: DatabaseHandle,
-    pub path: String,
-    pub label: String,
-    pub sub_tab: SubTab,
-    pub focus: PanelId,
-    pub sidebar_visible: bool,
-    pub bottom_tab: BottomTab,
-    pub executing: bool,
-    pub last_execution_time: Option<Duration>,
-    pub last_row_count: Option<usize>,
-    pub last_truncated: bool,
-    pub last_query_kind: Option<QueryKind>,
-    pub last_rows_affected: u64,
-    pub last_execution_source: ExecutionSource,
-    pub last_executed_sql: Option<String>,
-    pub schema_cache: SchemaCache,
+    pub(crate) handle: DatabaseHandle,
+    pub(crate) path: String,
+    pub(crate) label: String,
+    pub(crate) sub_tab: SubTab,
+    pub(crate) focus: PanelId,
+    pub(crate) sidebar_visible: bool,
+    pub(crate) bottom_tab: BottomTab,
+    pub(crate) executing: bool,
+    pub(crate) last_execution_time: Option<Duration>,
+    pub(crate) last_row_count: Option<usize>,
+    pub(crate) last_truncated: bool,
+    pub(crate) last_query_kind: Option<QueryKind>,
+    pub(crate) last_rows_affected: u64,
+    pub(crate) last_execution_source: ExecutionSource,
+    pub(crate) last_executed_sql: Option<String>,
+    pub(crate) schema_cache: SchemaCache,
+    // Components (owned per-database)
+    pub(crate) schema: SchemaExplorer,
+    pub(crate) editor: QueryEditor,
+    pub(crate) results: ResultsTable,
+    pub(crate) explain: ExplainView,
+    pub(crate) record_detail: RecordDetail,
+    pub(crate) db_info: DbInfoPanel,
+    pub(crate) pragmas: PragmaDashboard,
+    pub(crate) data_editor: DataEditor,
+    pub(crate) er_diagram: ERDiagram,
+    pub(crate) export_popup: Option<ExportPopup>,
 }
 
 impl DatabaseContext {
-    pub fn new(handle: DatabaseHandle, path: String) -> Self {
+    pub(crate) fn new(handle: DatabaseHandle, path: String, config: &AppConfig) -> Self {
         let label = if path == ":memory:" {
             "[in-memory]".to_string()
         } else {
@@ -221,6 +250,12 @@ impl DatabaseContext {
                 .file_name()
                 .map_or_else(|| path.clone(), |f| f.to_string_lossy().to_string())
         };
+
+        let mut editor = QueryEditor::with_tab_size(config.editor.tab_size);
+        editor.set_autocomplete_config(
+            config.editor.autocomplete,
+            config.editor.autocomplete_min_chars,
+        );
 
         Self {
             handle,
@@ -239,11 +274,24 @@ impl DatabaseContext {
             last_execution_source: ExecutionSource::FullBuffer,
             last_executed_sql: None,
             schema_cache: SchemaCache::default(),
+            schema: SchemaExplorer::new(),
+            editor,
+            results: ResultsTable::with_config(
+                config.results.max_column_width,
+                config.results.null_display.clone(),
+            ),
+            explain: ExplainView::new(),
+            record_detail: RecordDetail::new(),
+            db_info: DbInfoPanel::new(),
+            pragmas: PragmaDashboard::new(),
+            data_editor: DataEditor::new(),
+            er_diagram: ERDiagram::new(),
+            export_popup: None,
         }
     }
 
     /// Returns the ordered list of focusable panels for the current sub-tab.
-    pub fn focusable_panels(&self) -> Vec<PanelId> {
+    pub(crate) fn focusable_panels(&self) -> Vec<PanelId> {
         match self.sub_tab {
             SubTab::Query => {
                 let mut panels = vec![];
@@ -259,7 +307,7 @@ impl DatabaseContext {
     }
 
     /// Cycle focus to the next/previous panel.
-    pub fn cycle_focus(&mut self, direction: Direction) {
+    pub(crate) fn cycle_focus(&mut self, direction: Direction) {
         let panels = self.focusable_panels();
         if panels.is_empty() {
             return;
@@ -289,26 +337,26 @@ impl DatabaseContext {
 
 /// Global application state.
 pub(crate) struct AppState {
-    pub databases: Vec<DatabaseContext>,
-    pub active_db: usize,
-    pub theme: Theme,
-    pub config: AppConfig,
-    pub transient_message: Option<TransientMessage>,
-    pub should_quit: bool,
-    pub active_overlay: Option<Overlay>,
-    pub help_scroll: usize,
-    pub history_db: Option<crate::history::HistoryDb>,
+    pub(crate) databases: Vec<DatabaseContext>,
+    pub(crate) active_db: usize,
+    pub(crate) theme: Theme,
+    pub(crate) config: AppConfig,
+    pub(crate) transient_message: Option<TransientMessage>,
+    pub(crate) should_quit: bool,
+    pub(crate) active_overlay: Option<Overlay>,
+    pub(crate) help_scroll: usize,
+    pub(crate) history_db: Option<crate::history::HistoryDb>,
     #[allow(dead_code)]
-    pub pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
+    pub(crate) pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
     /// Set to true by `FollowFK` before dispatching `ExecuteQuery`,
     /// cleared by `QueryCompleted`. Used to distinguish FK navigation
     /// activations (preserve stack) from manual queries (clear stack).
-    pub pending_fk_activation: bool,
+    pub(crate) pending_fk_activation: bool,
 }
 
 impl AppState {
-    pub fn new(
-        db_context: DatabaseContext,
+    pub(crate) fn new(
+        databases: Vec<DatabaseContext>,
         config: AppConfig,
         history_db: Option<crate::history::HistoryDb>,
     ) -> Self {
@@ -317,7 +365,7 @@ impl AppState {
             ThemeMode::Light => LIGHT_THEME,
         };
         Self {
-            databases: vec![db_context],
+            databases,
             active_db: 0,
             theme,
             config,
@@ -331,25 +379,24 @@ impl AppState {
         }
     }
 
-    pub fn active_db(&self) -> &DatabaseContext {
+    pub(crate) fn active_db(&self) -> &DatabaseContext {
         debug_assert!(self.active_db < self.databases.len());
         &self.databases[self.active_db]
     }
 
-    pub fn active_db_mut(&mut self) -> &mut DatabaseContext {
+    pub(crate) fn active_db_mut(&mut self) -> &mut DatabaseContext {
         debug_assert!(self.active_db < self.databases.len());
         &mut self.databases[self.active_db]
     }
 
-    /// Process an action and update state.
+    /// Process an action targeting a specific database by index.
     #[allow(clippy::too_many_lines)]
-    pub fn update(&mut self, action: &Action) {
+    pub(crate) fn update_for_db(&mut self, db_idx: usize, action: &Action) {
+        let db = &mut self.databases[db_idx];
         match action {
-            Action::Quit => self.should_quit = true,
-            Action::CycleFocus(dir) => self.active_db_mut().cycle_focus(*dir),
-            Action::FocusPanel(panel) => self.active_db_mut().focus = *panel,
+            Action::CycleFocus(dir) => db.cycle_focus(*dir),
+            Action::FocusPanel(panel) => db.focus = *panel,
             Action::SwitchSubTab(tab) => {
-                let db = self.active_db_mut();
                 db.sub_tab = *tab;
                 let panels = db.focusable_panels();
                 if let Some(&first) = panels.first() {
@@ -357,28 +404,25 @@ impl AppState {
                 }
             }
             Action::ToggleSidebar => {
-                let db = self.active_db_mut();
                 db.sidebar_visible = !db.sidebar_visible;
                 if !db.sidebar_visible && db.focus == PanelId::Schema {
                     db.focus = PanelId::Editor;
                 }
             }
             Action::SwitchBottomTab(tab) => {
-                self.active_db_mut().bottom_tab = *tab;
+                db.bottom_tab = *tab;
             }
             Action::PopulateEditor(_) => {
-                self.active_db_mut().focus = PanelId::Editor;
+                db.focus = PanelId::Editor;
             }
             Action::ExecuteQuery(sql, source, _source_table) => {
                 if !sql.trim().is_empty() {
-                    let db = self.active_db_mut();
                     db.executing = true;
                     db.last_execution_source = *source;
                     db.last_executed_sql = Some(sql.clone());
                 }
             }
             Action::QueryCompleted(result) => {
-                let db = self.active_db_mut();
                 db.executing = false;
                 db.last_execution_time = Some(result.execution_time);
                 db.last_row_count = Some(result.rows.len());
@@ -387,12 +431,20 @@ impl AppState {
                 db.last_rows_affected = result.rows_affected;
             }
             Action::QueryFailed(_) => {
-                let db = self.active_db_mut();
                 db.executing = false;
                 db.last_execution_time = None;
                 db.last_row_count = None;
                 db.last_truncated = false;
             }
+            Action::FKLoaded(table, fks) => {
+                db.schema_cache.fk_info.insert(table.clone(), fks.clone());
+            }
+            // Actions that only mutate global state — handled below
+            _ => {}
+        }
+        // Global state mutations (not per-database)
+        match action {
+            Action::Quit => self.should_quit = true,
             Action::SetTransient(msg, is_error) => {
                 self.transient_message = Some(TransientMessage {
                     text: msg.clone(),
@@ -440,58 +492,46 @@ impl AppState {
             Action::ShowDmlPreview(b) => {
                 self.active_overlay = Some(Overlay::DmlPreview { submit_enabled: *b });
             }
-            Action::FKLoaded(table, fks) => {
-                self.active_db_mut()
-                    .schema_cache
-                    .fk_info
-                    .insert(table.clone(), fks.clone());
+            Action::SwitchDatabase(idx) => {
+                if *idx < self.databases.len() {
+                    self.active_db = *idx;
+                }
             }
-            Action::SchemaLoaded(_)
-            | Action::ColumnsLoaded(_, _)
-            | Action::LoadColumns(_)
-            | Action::GenerateExplain(_)
-            | Action::ExplainCompleted(_, _)
-            | Action::ExplainFailed(_)
-            | Action::DbInfoLoaded(_)
-            | Action::DbInfoFailed(_)
-            | Action::RefreshDbInfo
-            | Action::PragmasLoaded(_)
-            | Action::PragmasFailed(_)
-            | Action::RefreshPragmas
-            | Action::SetPragma(_, _)
-            | Action::PragmaSet(_, _)
-            | Action::PragmaFailed(_, _)
-            | Action::WalCheckpoint
-            | Action::WalCheckpointed(_)
-            | Action::WalCheckpointFailed(_)
-            | Action::IntegrityCheck
-            | Action::IntegrityCheckCompleted(_)
-            | Action::IntegrityCheckFailed(_)
-            | Action::HistoryLoaded(_)
-            | Action::DeleteHistoryEntry(_)
-            | Action::HistoryReloadRequested
-            | Action::ClearEditor
-            | Action::TriggerAutocomplete
-            | Action::AcceptCompletion(_)
-            | Action::DismissAutocomplete
-            | Action::ExecuteExport
-            | Action::CopyAllResults
-            | Action::StartCellEdit
-            | Action::ConfirmCellEdit(_)
-            | Action::CancelCellEdit
-            | Action::AddRow
-            | Action::ToggleDeleteRow
-            | Action::CloneRow(_)
-            | Action::RevertCell
-            | Action::RevertRow
-            | Action::RevertAll
-            | Action::SubmitDataEdits
-            | Action::FollowFK
-            | Action::FKNavigateBack
-            | Action::DataEditorActivated { .. }
-            | Action::DataEditorDeactivated => {
-                // No AppState mutation needed; dispatched to components
+            Action::NextDatabase => {
+                if !self.databases.is_empty() {
+                    self.active_db = (self.active_db + 1) % self.databases.len();
+                }
             }
+            Action::PrevDatabase => {
+                if !self.databases.is_empty() {
+                    self.active_db =
+                        (self.active_db + self.databases.len() - 1) % self.databases.len();
+                }
+            }
+            Action::CloseActiveDatabase => {
+                if self.databases.len() <= 1 {
+                    self.transient_message = Some(TransientMessage {
+                        text: "Cannot close last database".to_string(),
+                        created_at: Instant::now(),
+                        is_error: false,
+                    });
+                } else {
+                    self.databases.remove(self.active_db);
+                    if self.active_db >= self.databases.len() {
+                        self.active_db = self.databases.len() - 1;
+                    }
+                }
+            }
+            Action::OpenDatabase(_path) => {
+                // Handled in dispatch — requires async DatabaseHandle::open
+            }
+            _ => {}
         }
+    }
+
+    /// Process an action and update state (routes to active database).
+    pub(crate) fn update(&mut self, action: &Action) {
+        let active = self.active_db;
+        self.update_for_db(active, action);
     }
 }
