@@ -132,6 +132,15 @@ impl ResultsTable {
     /// Returns column defs and the display values for the row at `idx`.
     /// Returns `None` (outer) if no results or `idx` is out of bounds.
     /// Inner `Option<String>`: `None` = SQL NULL, `Some(s)` = display text.
+    /// Return all columns and rows for export. Returns `None` when there are no results.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn export_data(&self) -> Option<(&[ColumnDef], &[Vec<Option<String>>])> {
+        if self.columns.is_empty() {
+            return None;
+        }
+        Some((&self.columns, &self.rows))
+    }
+
     pub(crate) fn row_data(&self, idx: usize) -> Option<(&[ColumnDef], &[Option<String>])> {
         if self.columns.is_empty() || idx >= self.rows.len() {
             return None;

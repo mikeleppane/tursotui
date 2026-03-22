@@ -19,6 +19,8 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Alt+1 / Alt+2   Switch Query / Admin tab"));
     lines.push(Line::from("  Ctrl+T          Toggle dark/light theme"));
     lines.push(Line::from("  F1 / ?          Toggle this help overlay"));
+    lines.push(Line::from("  Ctrl+Shift+E    Export results popup"));
+    lines.push(Line::from("  Ctrl+Shift+C    Quick copy results (TSV)"));
     lines.push(Line::from(""));
 
     // --- Query Editor ---
@@ -30,11 +32,16 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Ctrl+Z / Ctrl+Y Undo / redo"));
     lines.push(Line::from("  Ctrl+L          Clear editor buffer"));
     lines.push(Line::from("  Ctrl+H          Query history"));
-    lines.push(Line::from("  Tab / Shift+Tab Indent / dedent"));
+    lines.push(Line::from("  Ctrl+Space      Trigger autocomplete"));
+    lines.push(Line::from(
+        "  Tab / Shift+Tab Accept autocomplete / indent / dedent",
+    ));
     lines.push(Line::from("  Shift+Arrow     Extend selection"));
     lines.push(Line::from("  Ctrl+Shift+A    Select all"));
     lines.push(Line::from("  Ctrl+Arrow      Word movement"));
-    lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(
+        "  Esc             Dismiss autocomplete / release focus",
+    ));
     lines.push(Line::from(""));
 
     // --- Schema Explorer ---

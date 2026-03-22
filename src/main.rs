@@ -52,6 +52,7 @@ struct UiPanels {
     db_info: DbInfoPanel,
     pragmas: PragmaDashboard,
     history: QueryHistoryPanel,
+    export_popup: Option<components::export::ExportPopup>,
 }
 
 impl UiPanels {
@@ -73,6 +74,7 @@ impl UiPanels {
             db_info: DbInfoPanel::new(),
             pragmas: PragmaDashboard::new(),
             history: QueryHistoryPanel::new(),
+            export_popup: None,
         }
     }
 }
@@ -269,6 +271,21 @@ fn handle_key_event(
             if let Some(action) = panels.history.handle_key(key) {
                 app.update(&action);
                 dispatch_action_to_components(&action, app, panels);
+            }
+            return;
+        }
+        Some(app::Overlay::Export) => {
+            if let Some(ref mut popup) = panels.export_popup
+                && let Some(action) = popup.handle_key(key)
+            {
+                if matches!(&action, app::Action::ExecuteExport) {
+                    execute_export(app, panels);
+                    app.active_overlay = None;
+                    panels.export_popup = None;
+                } else {
+                    app.update(&action);
+                    dispatch_action_to_components(&action, app, panels);
+                }
             }
             return;
         }
@@ -714,6 +731,58 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             let schema = &app.active_db().schema_cache;
             panels.editor.trigger_autocomplete(schema);
         }
+        app::Action::ShowExport => {
+            if app.active_overlay == Some(app::Overlay::Export) {
+                // Create the popup with current result data
+                if panels.results.export_data().is_some() {
+                    let row_count = panels.results.row_count();
+                    let table_name = app.active_db().last_executed_sql.as_deref().map_or_else(
+                        || "table_name".to_string(),
+                        components::export::infer_table_name,
+                    );
+                    panels.export_popup =
+                        Some(components::export::ExportPopup::new(row_count, table_name));
+                } else {
+                    // No results to export
+                    app.active_overlay = None;
+                    app.transient_message = Some(app::TransientMessage {
+                        text: "No results to export".to_string(),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+            } else {
+                panels.export_popup = None;
+            }
+        }
+        app::Action::CopyAllResults => {
+            if let Some((columns, rows)) = panels.results.export_data() {
+                let tsv = export::format_tsv(columns, rows);
+                let row_count = rows.len();
+                match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&tsv)) {
+                    Ok(()) => {
+                        app.transient_message = Some(app::TransientMessage {
+                            text: format!("{row_count} rows copied as TSV"),
+                            created_at: std::time::Instant::now(),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        app.transient_message = Some(app::TransientMessage {
+                            text: format!("Clipboard unavailable: {e}"),
+                            created_at: std::time::Instant::now(),
+                            is_error: true,
+                        });
+                    }
+                }
+            } else {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "No results to copy".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+            }
+        }
         _ => {}
     }
 }
@@ -809,6 +878,13 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     // History overlay
     if app.active_overlay == Some(app::Overlay::History) {
         panels.history.render(frame, area, theme);
+    }
+
+    // Export overlay
+    if app.active_overlay == Some(app::Overlay::Export)
+        && let Some(ref popup) = panels.export_popup
+    {
+        popup.render(frame, area, theme);
     }
 
     // Help overlay (rendered last so it floats on top)
@@ -976,4 +1052,77 @@ fn render_admin_tab(
     panels
         .pragmas
         .render(frame, right, focus == PanelId::Pragmas, theme);
+}
+
+fn execute_export(app: &mut AppState, panels: &UiPanels) {
+    let Some(ref popup) = panels.export_popup else {
+        return;
+    };
+    let Some((columns, rows)) = panels.results.export_data() else {
+        return;
+    };
+
+    let formatted = match popup.format {
+        components::export::ExportFormat::Csv => export::format_csv(columns, rows),
+        components::export::ExportFormat::Json => export::format_json(columns, rows),
+        components::export::ExportFormat::SqlInsert => {
+            export::format_sql_insert(columns, rows, &popup.table_name)
+        }
+    };
+
+    let row_count = rows.len();
+
+    match popup.target {
+        components::export::ExportTarget::Clipboard => {
+            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&formatted)) {
+                Ok(()) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!("{row_count} rows copied as {}", popup.format.label()),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+                Err(e) => {
+                    // Fallback: try to write to file
+                    let fallback_path = format!("./export.{}", popup.format.extension());
+                    match std::fs::write(&fallback_path, &formatted) {
+                        Ok(()) => {
+                            app.transient_message = Some(app::TransientMessage {
+                                text: format!(
+                                    "Clipboard unavailable -- saved to {fallback_path} ({e})"
+                                ),
+                                created_at: std::time::Instant::now(),
+                                is_error: false,
+                            });
+                        }
+                        Err(write_err) => {
+                            app.transient_message = Some(app::TransientMessage {
+                                text: format!("Export failed: {write_err}"),
+                                created_at: std::time::Instant::now(),
+                                is_error: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        components::export::ExportTarget::File => {
+            match std::fs::write(&popup.file_path, &formatted) {
+                Ok(()) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!("{row_count} rows exported to {}", popup.file_path),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+                Err(e) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!("Export failed: {e}"),
+                        created_at: std::time::Instant::now(),
+                        is_error: true,
+                    });
+                }
+            }
+        }
+    }
 }

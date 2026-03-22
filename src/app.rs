@@ -44,6 +44,7 @@ pub(crate) struct TransientMessage {
 pub(crate) enum Overlay {
     Help,
     History,
+    Export,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +145,9 @@ pub(crate) enum Action {
     AcceptCompletion(#[allow(dead_code)] String),
     #[allow(dead_code)] // editor handles dismissal internally without emitting this action
     DismissAutocomplete,
+    ShowExport,
+    ExecuteExport,
+    CopyAllResults,
 }
 
 /// Per-database workspace.
@@ -373,6 +377,13 @@ impl AppState {
             Action::RecallHistory(_) | Action::RecallAndExecute(_) => {
                 self.active_overlay = None;
             }
+            Action::ShowExport => {
+                self.active_overlay = if let Some(Overlay::Export) = self.active_overlay {
+                    None
+                } else {
+                    Some(Overlay::Export)
+                };
+            }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)
             | Action::LoadColumns(_)
@@ -400,7 +411,9 @@ impl AppState {
             | Action::ClearEditor
             | Action::TriggerAutocomplete
             | Action::AcceptCompletion(_)
-            | Action::DismissAutocomplete => {
+            | Action::DismissAutocomplete
+            | Action::ExecuteExport
+            | Action::CopyAllResults => {
                 // No AppState mutation needed; dispatched to components
             }
         }

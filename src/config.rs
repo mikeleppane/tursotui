@@ -172,6 +172,8 @@ mod tests {
         let deserialized: AppConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.theme.mode, ThemeMode::Dark);
         assert_eq!(deserialized.editor.tab_size, 4);
+        assert!(deserialized.editor.autocomplete);
+        assert_eq!(deserialized.editor.autocomplete_min_chars, 1);
         assert_eq!(deserialized.results.max_column_width, 40);
         assert_eq!(deserialized.history.max_entries, 5000);
     }
@@ -182,6 +184,15 @@ mod tests {
         let config: AppConfig = toml::from_str(partial).unwrap();
         assert_eq!(config.theme.mode, ThemeMode::Light);
         assert_eq!(config.editor.tab_size, 4);
+    }
+
+    #[test]
+    fn partial_config_autocomplete_defaults() {
+        let partial = "[editor]\ntab_size = 2\n";
+        let config: AppConfig = toml::from_str(partial).unwrap();
+        assert_eq!(config.editor.tab_size, 2);
+        assert!(config.editor.autocomplete);
+        assert_eq!(config.editor.autocomplete_min_chars, 1);
     }
 
     #[test]

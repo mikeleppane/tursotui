@@ -2,6 +2,7 @@ pub(crate) mod autocomplete;
 pub(crate) mod db_info;
 pub(crate) mod editor;
 pub(crate) mod explain;
+pub(crate) mod export;
 pub(crate) mod help;
 pub(crate) mod history;
 pub(crate) mod pragmas;
