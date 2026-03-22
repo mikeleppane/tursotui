@@ -2,7 +2,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::app::{Action, Direction, ExecutionSource};
+use crate::app::{Action, Direction, ExecutionSource, SchemaCache};
+use crate::autocomplete;
+use crate::components::autocomplete::AutocompletePopup;
 use crate::highlight;
 use crate::theme::Theme;
 
@@ -86,6 +88,9 @@ pub(crate) struct QueryEditor {
     selection: Option<Selection>,
     dirty: bool,
     last_save: std::time::Instant,
+    pub(crate) autocomplete_popup: Option<AutocompletePopup>,
+    autocomplete_enabled: bool,
+    autocomplete_min_chars: usize,
 }
 
 impl QueryEditor {
@@ -100,6 +105,9 @@ impl QueryEditor {
             selection: None,
             dirty: false,
             last_save: std::time::Instant::now(),
+            autocomplete_popup: None,
+            autocomplete_enabled: true,
+            autocomplete_min_chars: 1,
         }
     }
 
@@ -502,6 +510,86 @@ impl QueryEditor {
             self.scroll_offset = row - visible_height + 1;
         }
     }
+
+    // ─── Autocomplete ───────────────────────────────────────────────────
+
+    pub(crate) fn set_autocomplete_config(&mut self, enabled: bool, min_chars: usize) {
+        self.autocomplete_enabled = enabled;
+        self.autocomplete_min_chars = min_chars;
+    }
+
+    /// Trigger autocomplete at the current cursor position.
+    /// Note: always works regardless of `autocomplete_enabled` — that flag
+    /// gates automatic triggering (not yet implemented), not explicit Ctrl+Space.
+    pub(crate) fn trigger_autocomplete(&mut self, schema: &SchemaCache) {
+        let (context, prefix) =
+            autocomplete::detect_context(&self.buffer, self.cursor.0, self.cursor.1, schema);
+        let candidates = autocomplete::generate_candidates(&context, &prefix, schema);
+        if candidates.is_empty() {
+            self.autocomplete_popup = None;
+        } else {
+            let mut popup = AutocompletePopup::new(self.cursor, prefix);
+            popup.update_candidates(candidates);
+            self.autocomplete_popup = Some(popup);
+        }
+    }
+
+    /// Refresh the autocomplete popup with updated candidates (after typing).
+    pub(crate) fn refresh_autocomplete(&mut self, schema: &SchemaCache) {
+        let (context, prefix) =
+            autocomplete::detect_context(&self.buffer, self.cursor.0, self.cursor.1, schema);
+        if prefix.chars().count() < self.autocomplete_min_chars && self.autocomplete_popup.is_some()
+        {
+            self.autocomplete_popup = None;
+            return;
+        }
+        let candidates = autocomplete::generate_candidates(&context, &prefix, schema);
+        if let Some(ref mut popup) = self.autocomplete_popup {
+            popup.prefix = prefix;
+            popup.update_candidates(candidates);
+            if popup.is_empty() {
+                self.autocomplete_popup = None;
+            }
+        }
+    }
+
+    /// Accept the currently selected completion candidate.
+    /// Replaces the prefix with the full completion text.
+    pub(crate) fn accept_completion(&mut self) -> Option<String> {
+        let popup = self.autocomplete_popup.take()?;
+        let text = popup.selected_text()?.to_string();
+        let prefix_len = popup.prefix.chars().count();
+
+        self.save_undo();
+        let (row, col) = self.cursor;
+        let start_col = col.saturating_sub(prefix_len);
+        let start_byte = char_to_byte(&self.buffer[row], start_col);
+        let end_byte = char_to_byte(&self.buffer[row], col);
+        self.buffer[row].replace_range(start_byte..end_byte, &text);
+        self.cursor.1 = start_col + text.chars().count();
+
+        Some(text)
+    }
+
+    /// Dismiss the autocomplete popup without accepting.
+    pub(crate) fn dismiss_autocomplete(&mut self) {
+        self.autocomplete_popup = None;
+    }
+
+    /// Returns the cursor position for autocomplete popup rendering.
+    pub(crate) fn cursor_position(&self) -> (usize, usize) {
+        self.cursor
+    }
+
+    /// Returns a reference to the buffer lines (for autocomplete engine).
+    pub(crate) fn buffer_lines(&self) -> &[String] {
+        &self.buffer
+    }
+
+    /// Returns the current scroll offset.
+    pub(crate) fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
 }
 
 impl Component for QueryEditor {
@@ -511,7 +599,46 @@ impl Component for QueryEditor {
             return None;
         }
 
+        // Autocomplete popup intercepts keys when active
+        if self.autocomplete_popup.is_some() {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Up) => {
+                    if let Some(ref mut popup) = self.autocomplete_popup {
+                        popup.move_up();
+                    }
+                    return None;
+                }
+                (KeyModifiers::NONE, KeyCode::Down) => {
+                    if let Some(ref mut popup) = self.autocomplete_popup {
+                        popup.move_down();
+                    }
+                    return None;
+                }
+                (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Enter) => {
+                    if let Some(text) = self.accept_completion() {
+                        return Some(Action::AcceptCompletion(text));
+                    }
+                    return None;
+                }
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    self.dismiss_autocomplete();
+                    return None;
+                }
+                // Character input and backspace: fall through to normal handling,
+                // autocomplete is refreshed by main.rs after the action dispatches
+                (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(_))
+                | (KeyModifiers::NONE, KeyCode::Backspace) => {}
+                // Any other key dismisses autocomplete and falls through
+                _ => {
+                    self.dismiss_autocomplete();
+                }
+            }
+        }
+
         match (key.modifiers, key.code) {
+            // Trigger autocomplete
+            (KeyModifiers::CONTROL, KeyCode::Char(' ')) => Some(Action::TriggerAutocomplete),
+
             // Execute selection or statement at cursor: Ctrl+Shift+Enter
             (m, KeyCode::Enter) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
                 let (text, source) = self.text_to_execute();

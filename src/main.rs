@@ -4,6 +4,7 @@ mod components;
 mod config;
 mod db;
 mod event;
+mod export;
 mod highlight;
 mod history;
 mod persistence;
@@ -55,9 +56,14 @@ struct UiPanels {
 
 impl UiPanels {
     fn new(config: &crate::config::AppConfig) -> Self {
+        let mut editor = QueryEditor::with_tab_size(config.editor.tab_size);
+        editor.set_autocomplete_config(
+            config.editor.autocomplete,
+            config.editor.autocomplete_min_chars,
+        );
         Self {
             schema: SchemaExplorer::new(),
-            editor: QueryEditor::with_tab_size(config.editor.tab_size),
+            editor,
             results: ResultsTable::with_config(
                 config.results.max_column_width,
                 config.results.null_display.clone(),
@@ -277,6 +283,12 @@ fn handle_key_event(
     if let Some(ref action) = action {
         app.update(action);
         dispatch_action_to_components(action, app, panels);
+    }
+
+    // Refresh autocomplete after editor key input (typing, backspace)
+    if app.active_db().focus == PanelId::Editor && panels.editor.autocomplete_popup.is_some() {
+        let schema = &app.active_db().schema_cache;
+        panels.editor.refresh_autocomplete(schema);
     }
 }
 
@@ -698,6 +710,10 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 app.active_db_mut().handle.wal_checkpoint();
             }
         }
+        app::Action::TriggerAutocomplete => {
+            let schema = &app.active_db().schema_cache;
+            panels.editor.trigger_autocomplete(schema);
+        }
         _ => {}
     }
 }
@@ -826,6 +842,7 @@ fn render_query_tab(
         panels
             .editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
+        render_autocomplete_popup(frame, &panels.editor, editor_area, theme);
         render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, panels);
     } else {
         let [editor_area, bottom_area] =
@@ -834,8 +851,34 @@ fn render_query_tab(
         panels
             .editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
+        render_autocomplete_popup(frame, &panels.editor, editor_area, theme);
         render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, panels);
     }
+}
+
+/// Render the autocomplete popup over the editor if active.
+fn render_autocomplete_popup(
+    frame: &mut Frame,
+    editor: &components::editor::QueryEditor,
+    editor_area: Rect,
+    theme: &Theme,
+) {
+    let Some(ref popup) = editor.autocomplete_popup else {
+        return;
+    };
+    let (cursor_row, cursor_col) = editor.cursor_position();
+    let line_count = editor.buffer_lines().len();
+    let gutter_digits = line_count.to_string().len();
+    let gutter_width = (gutter_digits + 1) as u16;
+    // editor_area inner (subtract border)
+    let inner_x = editor_area.x + 1 + gutter_width;
+    let inner_y = editor_area.y + 1;
+    // Use char index (not display width) to match the editor's own cursor
+    // placement at editor.rs:920. Both are wrong for wide chars (CJK/emoji)
+    // but must stay consistent so the popup aligns with the terminal cursor.
+    let cursor_x = inner_x + cursor_col as u16;
+    let cursor_y = inner_y + cursor_row.saturating_sub(editor.scroll_offset()) as u16;
+    popup.render(frame, cursor_x, cursor_y, theme);
 }
 
 fn render_bottom_panel(

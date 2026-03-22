@@ -1,3 +1,4 @@
+pub(crate) mod autocomplete;
 pub(crate) mod db_info;
 pub(crate) mod editor;
 pub(crate) mod explain;

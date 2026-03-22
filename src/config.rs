@@ -73,6 +73,10 @@ pub(crate) struct EditorConfig {
     /// Parsed from config but not yet wired to editor rendering (planned for M6).
     #[serde(default = "default_show_line_numbers")]
     pub(crate) show_line_numbers: bool,
+    #[serde(default = "default_autocomplete")]
+    pub(crate) autocomplete: bool,
+    #[serde(default = "default_autocomplete_min_chars")]
+    pub(crate) autocomplete_min_chars: usize,
 }
 
 fn default_tab_size() -> usize {
@@ -83,11 +87,21 @@ fn default_show_line_numbers() -> bool {
     true
 }
 
+fn default_autocomplete() -> bool {
+    true
+}
+
+fn default_autocomplete_min_chars() -> usize {
+    1
+}
+
 impl Default for EditorConfig {
     fn default() -> Self {
         Self {
             tab_size: default_tab_size(),
             show_line_numbers: default_show_line_numbers(),
+            autocomplete: default_autocomplete(),
+            autocomplete_min_chars: default_autocomplete_min_chars(),
         }
     }
 }

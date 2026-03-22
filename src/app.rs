@@ -140,6 +140,10 @@ pub(crate) enum Action {
     RecallAndExecute(String),
     DeleteHistoryEntry(i64),
     HistoryReloadRequested,
+    TriggerAutocomplete,
+    AcceptCompletion(#[allow(dead_code)] String),
+    #[allow(dead_code)] // editor handles dismissal internally without emitting this action
+    DismissAutocomplete,
 }
 
 /// Per-database workspace.
@@ -393,7 +397,10 @@ impl AppState {
             | Action::HistoryLoaded(_)
             | Action::DeleteHistoryEntry(_)
             | Action::HistoryReloadRequested
-            | Action::ClearEditor => {
+            | Action::ClearEditor
+            | Action::TriggerAutocomplete
+            | Action::AcceptCompletion(_)
+            | Action::DismissAutocomplete => {
                 // No AppState mutation needed; dispatched to components
             }
         }
