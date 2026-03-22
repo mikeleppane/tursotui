@@ -138,6 +138,16 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  r               Refresh all values"));
     lines.push(Line::from("  j/k or Up/Down  Navigate"));
     lines.push(Line::from("  g / G           Jump to first / last"));
+    lines.push(Line::from(""));
+
+    // --- Multi-Database ---
+    lines.push(Line::from(Span::styled("Multi-Database", header_style)));
+    lines.push(Line::from("  Ctrl+PgDn       Switch to next database tab"));
+    lines.push(Line::from(
+        "  Ctrl+PgUp       Switch to previous database tab",
+    ));
+    lines.push(Line::from("  Ctrl+W          Close current database tab"));
+    lines.push(Line::from("  Ctrl+O          Open database (coming soon)"));
 
     lines
 }

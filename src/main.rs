@@ -90,13 +90,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = AppState::new(databases, cfg, history_db);
 
-    // Show config, history, or duplicate error as transient message
-    let startup_err = config_err.or(history_err).or(duplicate_warning);
-    if let Some(err_msg) = startup_err {
+    // Show errors first (they take priority), then warnings
+    let startup_msg = config_err.or(history_err);
+    if let Some(err_msg) = startup_msg {
         app.transient_message = Some(app::TransientMessage {
             text: err_msg,
             created_at: std::time::Instant::now(),
             is_error: true,
+        });
+    } else if let Some(warn_msg) = duplicate_warning {
+        app.transient_message = Some(app::TransientMessage {
+            text: warn_msg,
+            created_at: std::time::Instant::now(),
+            is_error: false,
         });
     }
 
@@ -135,7 +141,7 @@ fn run_loop(
         }
     }
     // Show restore message only if active db had a buffer
-    if app.active_db().editor.contents() != "" {
+    if !app.active_db().editor.contents().is_empty() {
         app.transient_message = Some(app::TransientMessage {
             text: "Restored editor buffer".to_string(),
             created_at: std::time::Instant::now(),
@@ -221,6 +227,9 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
         .as_mut()
         .map(|db| std::iter::from_fn(|| db.try_recv()).collect())
         .unwrap_or_default();
+    // History messages (HistoryLoaded, etc.) are dispatched to active_db
+    // because they only affect the global QueryHistoryPanel — db_idx is
+    // not meaningfully used in those handlers.
     for msg in history_msgs {
         let action = map_history_message(msg);
         app.update(&action);
@@ -495,9 +504,9 @@ fn dispatch_action_to_db(
             }
             // Editability detection: determine if result targets a single editable table.
             // Clear any pending deferred check — only the latest query matters.
-            app.pending_edit_table = None;
-            let is_fk_activation = app.pending_fk_activation;
-            app.pending_fk_activation = false;
+            app.databases[db_idx].pending_edit_table = None;
+            let is_fk_activation = app.databases[db_idx].pending_fk_activation;
+            app.databases[db_idx].pending_fk_activation = false;
             let source_table = if result.source_table.is_some() {
                 result.source_table.clone() // Tier 1: hint from ExecuteQuery
             } else {
@@ -512,7 +521,7 @@ fn dispatch_action_to_db(
                     if pk_cols.is_empty() {
                         app.databases[db_idx].data_editor.deactivate();
                         app.transient_message = Some(app::TransientMessage {
-                            text: format!("'{table}' has no primary key -- read-only"),
+                            text: format!("'{table}' has no primary key \u{2014} read-only"),
                             created_at: std::time::Instant::now(),
                             is_error: false,
                         });
@@ -568,7 +577,8 @@ fn dispatch_action_to_db(
                     // Columns not cached — defer activation until ColumnsLoaded arrives.
                     // Store both table name and activating SQL so the deferred path
                     // doesn't rely on last_executed_sql (which may change).
-                    app.pending_edit_table = Some((table.clone(), result.sql.clone()));
+                    app.databases[db_idx].pending_edit_table =
+                        Some((table.clone(), result.sql.clone()));
                     app.databases[db_idx].handle.load_columns(table.clone());
                     app.databases[db_idx].data_editor.deactivate();
                 }
@@ -578,7 +588,7 @@ fn dispatch_action_to_db(
         }
         app::Action::QueryFailed(err) => {
             // Clear any pending deferred editability check — the query failed
-            app.pending_edit_table = None;
+            app.databases[db_idx].pending_edit_table = None;
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
                 created_at: std::time::Instant::now(),
@@ -633,7 +643,7 @@ fn dispatch_action_to_db(
                     .build_from_schema(&db.schema_cache.entries, &db.schema_cache.columns);
             }
             // Check if this completes a deferred editability check
-            let pending = app.pending_edit_table.clone();
+            let pending = app.databases[db_idx].pending_edit_table.clone();
             if let Some((ref pending_table, ref activating_sql)) = pending
                 && pending_table == table_name
             {
@@ -680,7 +690,7 @@ fn dispatch_action_to_db(
                         db.data_editor.update_fk_columns(&fks);
                     }
                 }
-                app.pending_edit_table = None;
+                app.databases[db_idx].pending_edit_table = None;
             }
         }
         app::Action::SwitchBottomTab(BottomTab::Detail) => {
@@ -1024,7 +1034,7 @@ fn dispatch_action_to_db(
             let Some((cols, row_vals)) = db.results.row_data(row_idx) else {
                 // Row is a pending insert (beyond query-returned rows) — not yet editable
                 app.transient_message = Some(app::TransientMessage {
-                    text: "Pending insert rows cannot be edited -- submit first".to_string(),
+                    text: "Pending insert rows cannot be edited \u{2014} submit first".to_string(),
                     created_at: std::time::Instant::now(),
                     is_error: false,
                 });
@@ -1246,7 +1256,7 @@ fn dispatch_action_to_db(
                 .flatten();
             let Some(cell_val) = cell_val else {
                 app.transient_message = Some(app::TransientMessage {
-                    text: "NULL -- cannot follow FK".to_string(),
+                    text: "NULL \u{2014} cannot follow FK".to_string(),
                     created_at: std::time::Instant::now(),
                     is_error: false,
                 });
@@ -1279,7 +1289,7 @@ fn dispatch_action_to_db(
             let sql = format!("SELECT * FROM {quoted_table} WHERE {quoted_col} = {quoted_val}");
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)
-            app.pending_fk_activation = true;
+            app.databases[db_idx].pending_fk_activation = true;
             let execute_action = app::Action::ExecuteQuery(
                 sql,
                 app::ExecutionSource::FullBuffer,
@@ -1309,16 +1319,8 @@ fn dispatch_action_to_db(
                 db.data_editor.update_fk_columns(&fks);
             }
         }
-        app::Action::CloseActiveDatabase => {
-            // Auto-save the editor buffer before removing the database
-            if db_idx < app.databases.len() {
-                let db = &app.databases[db_idx];
-                if db.editor.is_dirty() {
-                    let _ = persistence::save_buffer(&db.path, &db.editor.contents());
-                }
-            }
-            // The actual removal is handled by AppState::update_for_db
-        }
+        // CloseActiveDatabase: auto-save + removal handled entirely in
+        // AppState::update_for_db (before the Vec entry is removed).
         _ => {}
     }
 }
@@ -1332,10 +1334,16 @@ fn build_tab_labels(databases: &[DatabaseContext]) -> Vec<String> {
         // Check if this label appears more than once
         let count = labels.iter().filter(|l| *l == label).count();
         if count > 1 {
-            // Disambiguate with parent directory
-            let path = std::path::Path::new(&databases[i].path);
-            if let Some(parent) = path.parent().and_then(|p| p.file_name()) {
-                result[i] = format!("{} [{}/]", label, parent.to_string_lossy());
+            if label == "[in-memory]" {
+                // Disambiguate :memory: databases with sequential index
+                let nth = labels[..=i].iter().filter(|l| *l == label).count();
+                result[i] = format!("[in-memory] #{nth}");
+            } else {
+                // Disambiguate file-backed databases with parent directory
+                let path = std::path::Path::new(&databases[i].path);
+                if let Some(parent) = path.parent().and_then(|p| p.file_name()) {
+                    result[i] = format!("{} [{}/]", label, parent.to_string_lossy());
+                }
             }
         }
     }
@@ -1713,7 +1721,7 @@ fn execute_export(app: &mut AppState, global_ui: &mut GlobalUi) {
                         Ok(()) => {
                             app.transient_message = Some(app::TransientMessage {
                                 text: format!(
-                                    "Clipboard unavailable -- saved to {fallback_path} ({e})"
+                                    "Clipboard unavailable \u{2014} saved to {fallback_path} ({e})"
                                 ),
                                 created_at: std::time::Instant::now(),
                                 is_error: false,
