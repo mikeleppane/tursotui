@@ -20,6 +20,7 @@ use ratatui::widgets::{Paragraph, Tabs};
 
 use app::{AppState, BottomTab, DatabaseContext, PanelId, SubTab};
 use components::Component;
+use components::data_editor::DataEditor;
 use components::db_info::DbInfoPanel;
 use components::editor::QueryEditor;
 use components::explain::ExplainView;
@@ -53,6 +54,7 @@ struct UiPanels {
     pragmas: PragmaDashboard,
     history: QueryHistoryPanel,
     export_popup: Option<components::export::ExportPopup>,
+    data_editor: DataEditor,
     /// Persistent clipboard handle — kept alive for the app's lifetime so that
     /// clipboard contents survive on Linux/Wayland (arboard drops contents on Drop).
     clipboard: Option<arboard::Clipboard>,
@@ -78,6 +80,7 @@ impl UiPanels {
             pragmas: PragmaDashboard::new(),
             history: QueryHistoryPanel::new(),
             export_popup: None,
+            data_editor: DataEditor::new(),
             clipboard: arboard::Clipboard::new().ok(),
         }
     }
@@ -383,7 +386,15 @@ fn route_key_to_component(
                 Some(app::Action::SwitchBottomTab(BottomTab::ERDiagram))
             }
             _ => match app.active_db().bottom_tab {
-                BottomTab::Results => panels.results.handle_key(key),
+                BottomTab::Results => {
+                    // DataEditor intercepts before ResultsTable when active
+                    if panels.data_editor.is_active()
+                        && let Some(action) = panels.data_editor.handle_key(key)
+                    {
+                        return Some(action);
+                    }
+                    panels.results.handle_key(key)
+                }
                 BottomTab::Explain => panels.explain.handle_key(key),
                 BottomTab::Detail => panels.record_detail.handle_key(key),
                 BottomTab::ERDiagram => None,
@@ -455,6 +466,47 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                     origin,
                 });
             }
+            // Editability detection: determine if result targets a single editable table.
+            // Clear any pending deferred check — only the latest query matters.
+            app.pending_edit_table = None;
+            let source_table = if result.source_table.is_some() {
+                result.source_table.clone() // Tier 1: hint from ExecuteQuery
+            } else {
+                components::data_editor::detect_source_table(&result.sql) // Tier 2: SQL parse
+            };
+            if let Some(ref table) = source_table {
+                let entries = &app.active_db().schema_cache.entries;
+                if components::data_editor::check_view_rejection(table, entries) {
+                    panels.data_editor.deactivate();
+                } else if let Some(cols) = app.active_db().schema_cache.get_columns(table) {
+                    let pk_cols = components::data_editor::find_pk_columns(cols);
+                    if pk_cols.is_empty() {
+                        panels.data_editor.deactivate();
+                        app.transient_message = Some(app::TransientMessage {
+                            text: format!("'{table}' has no primary key — read-only"),
+                            created_at: std::time::Instant::now(),
+                            is_error: false,
+                        });
+                    } else {
+                        let cols_cloned = cols.clone();
+                        panels.data_editor.activate(
+                            table.clone(),
+                            pk_cols,
+                            cols_cloned,
+                            result.sql.clone(),
+                        );
+                    }
+                } else {
+                    // Columns not cached — defer activation until ColumnsLoaded arrives.
+                    // Store both table name and activating SQL so the deferred path
+                    // doesn't rely on last_executed_sql (which may change).
+                    app.pending_edit_table = Some((table.clone(), result.sql.clone()));
+                    app.active_db_mut().handle.load_columns(table.clone());
+                    panels.data_editor.deactivate();
+                }
+            } else {
+                panels.data_editor.deactivate();
+            }
         }
         app::Action::QueryFailed(err) => {
             app.transient_message = Some(app::TransientMessage {
@@ -506,6 +558,24 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 .count();
             if db.schema_cache.columns.len() >= expected {
                 db.schema_cache.fully_loaded = true;
+            }
+            // Check if this completes a deferred editability check
+            let pending = app.pending_edit_table.clone();
+            if let Some((ref pending_table, ref activating_sql)) = pending
+                && pending_table == table_name
+            {
+                let pk_cols = components::data_editor::find_pk_columns(columns);
+                if pk_cols.is_empty() {
+                    panels.data_editor.deactivate();
+                } else {
+                    panels.data_editor.activate(
+                        table_name.clone(),
+                        pk_cols,
+                        columns.clone(),
+                        activating_sql.clone(),
+                    );
+                }
+                app.pending_edit_table = None;
             }
         }
         app::Action::SwitchBottomTab(BottomTab::Detail) => {

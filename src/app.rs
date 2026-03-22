@@ -300,7 +300,7 @@ pub(crate) struct AppState {
     pub help_scroll: usize,
     pub history_db: Option<crate::history::HistoryDb>,
     #[allow(dead_code)]
-    pub pending_edit_table: Option<String>,
+    pub pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
 }
 
 impl AppState {
