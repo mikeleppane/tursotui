@@ -1046,39 +1046,101 @@ impl DatabaseHandle {
     /// Load foreign key info for a table in the background.
     /// Sends `ForeignKeysLoaded` on success; silently ignores errors.
     #[allow(dead_code)] // will be called when FK navigation lands (Task 13)
-    pub(crate) fn load_foreign_keys(&self, table: String) {
-        let db = Arc::clone(&self.database);
-        let tx = self.result_tx.clone();
+    /// Parse foreign key constraints from a `CREATE TABLE` SQL statement.
+    ///
+    /// turso/libsql does not support `PRAGMA foreign_key_list` ("Not a valid pragma
+    /// name"), so we extract FK info from the `CREATE TABLE` SQL stored in
+    /// `sqlite_schema`. This is a heuristic parser — it handles the common
+    /// `FOREIGN KEY (col) REFERENCES table (col)` syntax.
+    pub(crate) fn parse_foreign_keys(create_sql: &str) -> Vec<ForeignKeyInfo> {
+        let upper = create_sql.to_uppercase();
+        let mut fks = Vec::new();
 
-        tokio::spawn(async move {
-            let tx_panic = tx.clone();
-            let handle = tokio::spawn(async move {
-                let conn = db.connect()?;
-                let quoted = table.replace('"', "\"\"");
-                let sql = format!("PRAGMA foreign_key_list(\"{quoted}\")");
-                let mut rows = conn.query(&sql, ()).await?;
-                let mut fks = Vec::new();
-                while let Some(row) = rows.next().await? {
-                    // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
-                    let to_table: String = row.get_value(2)?.as_text().cloned().unwrap_or_default();
-                    let from_column: String =
-                        row.get_value(3)?.as_text().cloned().unwrap_or_default();
-                    let to_column: String =
-                        row.get_value(4)?.as_text().cloned().unwrap_or_default();
-                    fks.push(ForeignKeyInfo {
-                        from_column,
-                        to_table,
-                        to_column,
-                    });
-                }
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((table, fks))
-            });
-            let msg = match handle.await {
-                Ok(Ok((table, fks))) => QueryMessage::ForeignKeysLoaded(table, fks),
-                Ok(Err(_)) | Err(_) => return, // silently ignore FK load failures
+        // Find all "FOREIGN KEY (col) REFERENCES table (col)" patterns
+        let mut search_from = 0;
+        while let Some(fk_pos) = upper[search_from..].find("FOREIGN KEY") {
+            let abs_pos = search_from + fk_pos;
+            search_from = abs_pos + 11;
+
+            // Extract from_column: text between first ( and )
+            let Some(open) = create_sql[search_from..].find('(') else {
+                continue;
             };
-            let _ = tx_panic.send(msg);
-        });
+            let paren_start = search_from + open + 1;
+            let Some(close) = create_sql[paren_start..].find(')') else {
+                continue;
+            };
+            let from_col = create_sql[paren_start..paren_start + close].trim();
+
+            // Find REFERENCES keyword after the closing paren
+            let after_paren = paren_start + close + 1;
+            let rest_upper = &upper[after_paren..];
+            let Some(ref_pos) = rest_upper.find("REFERENCES") else {
+                continue;
+            };
+            let after_ref = after_paren + ref_pos + 10; // len("REFERENCES")
+
+            // Extract target table name (may be quoted)
+            let target_start = create_sql[after_ref..].trim_start();
+            let offset = create_sql.len() - target_start.len();
+            let (to_table, rest) = Self::extract_identifier(target_start);
+            if to_table.is_empty() {
+                continue;
+            }
+
+            // Extract target column: text between ( and )
+            let rest_trimmed = rest.trim_start();
+            if !rest_trimmed.starts_with('(') {
+                continue;
+            }
+            let inner = &rest_trimmed[1..];
+            let Some(end) = inner.find(')') else {
+                continue;
+            };
+            let to_col = inner[..end].trim();
+
+            let table_len = to_table.len();
+            fks.push(ForeignKeyInfo {
+                from_column: Self::unquote(from_col),
+                to_table,
+                to_column: Self::unquote(to_col),
+            });
+
+            search_from = offset + table_len;
+        }
+
+        fks
+    }
+
+    /// Extract an identifier (possibly quoted with `"` or `` ` ``) from the start of `s`.
+    /// Returns (identifier, `rest_of_string`).
+    fn extract_identifier(s: &str) -> (String, &str) {
+        let s = s.trim_start();
+        if let Some(rest) = s.strip_prefix('"') {
+            // Double-quoted identifier
+            if let Some(end) = rest.find('"') {
+                return (s[1..=end].to_string(), &s[2 + end..]);
+            }
+        } else if let Some(rest) = s.strip_prefix('`')
+            && let Some(end) = rest.find('`')
+        {
+            return (s[1..=end].to_string(), &s[2 + end..]);
+        }
+        // Unquoted: read until non-identifier char
+        let end = s
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(s.len());
+        (s[..end].to_string(), &s[end..])
+    }
+
+    /// Remove surrounding quotes from a column name if present.
+    fn unquote(s: &str) -> String {
+        let s = s.trim();
+        if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('`') && s.ends_with('`')) {
+            s[1..s.len() - 1].to_string()
+        } else {
+            s.to_string()
+        }
     }
 
     // ── Shared PRAGMA helpers ──────────────────────────────────────────
@@ -1612,5 +1674,120 @@ mod tests {
             result.is_none(),
             "ok result should not produce a QueryResult"
         );
+    }
+
+    // ── parse_foreign_keys tests ──────────────────────────────────────
+
+    #[test]
+    fn parse_fk_single_constraint() {
+        let sql = r"CREATE TABLE employees (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            department_id INTEGER NOT NULL,
+            FOREIGN KEY (department_id) REFERENCES departments (id)
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "department_id");
+        assert_eq!(fks[0].to_table, "departments");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_multiple_constraints() {
+        let sql = r"CREATE TABLE project_assignments (
+            id INTEGER PRIMARY KEY,
+            employee_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            FOREIGN KEY (employee_id) REFERENCES employees (id),
+            FOREIGN KEY (project_id) REFERENCES projects (id)
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        assert_eq!(fks[0].from_column, "employee_id");
+        assert_eq!(fks[0].to_table, "employees");
+        assert_eq!(fks[0].to_column, "id");
+        assert_eq!(fks[1].from_column, "project_id");
+        assert_eq!(fks[1].to_table, "projects");
+        assert_eq!(fks[1].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_no_foreign_keys() {
+        let sql = "CREATE TABLE simple (id INTEGER PRIMARY KEY, name TEXT)";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert!(fks.is_empty());
+    }
+
+    #[test]
+    fn parse_fk_quoted_identifiers() {
+        let sql = r#"CREATE TABLE "my table" (
+            id INTEGER PRIMARY KEY,
+            "ref_id" INTEGER,
+            FOREIGN KEY ("ref_id") REFERENCES "other table" ("pk_col")
+        )"#;
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "other table");
+        assert_eq!(fks[0].to_column, "pk_col");
+    }
+
+    #[test]
+    fn parse_fk_inline_column_constraint() {
+        // Inline FK syntax: column_name TYPE REFERENCES table(col)
+        // Our parser looks for "FOREIGN KEY" keyword, so inline FKs are NOT detected.
+        // This is a known limitation — document it.
+        let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, ref_id INTEGER REFERENCES other(id))";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        // Inline FK syntax is not parsed — only table-level FOREIGN KEY constraints
+        assert!(fks.is_empty());
+    }
+
+    #[test]
+    fn parse_fk_with_on_delete_cascade() {
+        let sql = r"CREATE TABLE orders (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "user_id");
+        assert_eq!(fks[0].to_table, "users");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_case_insensitive() {
+        let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, ref_id INTEGER, foreign key (ref_id) references other (id))";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "other");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_real_testdata_employees() {
+        // Exact SQL from testdb/testdata.db
+        let sql = "CREATE TABLE employees (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, department_id INTEGER NOT NULL, salary REAL NOT NULL, hire_date TEXT NOT NULL, title TEXT NOT NULL, FOREIGN KEY (department_id) REFERENCES departments (id))";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "department_id");
+        assert_eq!(fks[0].to_table, "departments");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_real_testdata_project_assignments() {
+        // Exact SQL from testdb/testdata.db
+        let sql = "CREATE TABLE project_assignments (id INTEGER PRIMARY KEY, employee_id INTEGER NOT NULL, project_id INTEGER NOT NULL, role TEXT NOT NULL, hours_allocated REAL NOT NULL DEFAULT 40.0, FOREIGN KEY (employee_id) REFERENCES employees (id), FOREIGN KEY (project_id) REFERENCES projects (id))";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        assert_eq!(fks[0].from_column, "employee_id");
+        assert_eq!(fks[0].to_table, "employees");
+        assert_eq!(fks[1].from_column, "project_id");
+        assert_eq!(fks[1].to_table, "projects");
     }
 }

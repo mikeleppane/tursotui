@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{Action, Direction, ExecutionSource, SchemaCache};
 use crate::autocomplete;
@@ -846,24 +846,7 @@ impl Component for QueryEditor {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let border_style = if focused {
-            Style::default().fg(theme.border_focused)
-        } else {
-            Style::default().fg(theme.border)
-        };
-
-        let title_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
-        let block = Block::bordered()
-            .border_style(border_style)
-            .title("Query Editor")
-            .title_style(title_style);
+        let block = super::panel_block("SQL Editor", focused, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -901,6 +884,7 @@ impl Component for QueryEditor {
             // Render gutter (line number), only for actual lines
             if line_idx < self.buffer.len() {
                 let line_num = line_idx + 1;
+                let is_cursor_line = focused && line_idx == self.cursor.0;
                 let num_str = format!("{line_num:>gutter_digits$} ");
                 let gutter_area = Rect {
                     x: inner.x,
@@ -908,7 +892,12 @@ impl Component for QueryEditor {
                     width: gutter_width,
                     height: 1,
                 };
-                let gutter_widget = Paragraph::new(num_str).style(gutter_style);
+                let cur_gutter_style = if is_cursor_line {
+                    Style::default().fg(theme.accent).bg(theme.active_line_bg)
+                } else {
+                    gutter_style
+                };
+                let gutter_widget = Paragraph::new(num_str).style(cur_gutter_style);
                 frame.render_widget(gutter_widget, gutter_area);
 
                 // Render syntax-highlighted line content, with selection overlay
@@ -935,7 +924,10 @@ impl Component for QueryEditor {
                     width: content_width,
                     height: 1,
                 };
-                let line_widget = Paragraph::new(highlighted);
+                let mut line_widget = Paragraph::new(highlighted);
+                if is_cursor_line {
+                    line_widget = line_widget.style(Style::default().bg(theme.active_line_bg));
+                }
                 frame.render_widget(line_widget, content_area);
             }
         }

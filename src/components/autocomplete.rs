@@ -148,6 +148,7 @@ impl AutocompletePopup {
         frame.render_widget(Clear, popup_area);
 
         let block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(Style::default().fg(theme.border))
             .style(Style::default().bg(theme.bg).fg(theme.fg));
 

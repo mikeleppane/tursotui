@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, BottomTab, Direction};
@@ -367,24 +367,8 @@ impl Component for ExplainView {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let border_style = if focused {
-            Style::default().fg(theme.border_focused)
-        } else {
-            Style::default().fg(theme.border)
-        };
-        let title_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
         let title = self.title_text();
-        let block = Block::bordered()
-            .border_style(border_style)
-            .title(title)
-            .title_style(title_style);
+        let block = super::panel_block(&title, focused, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

@@ -5,7 +5,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use crate::app::Action;
 use crate::theme::Theme;
@@ -229,15 +229,7 @@ impl ExportPopup {
         frame.render_widget(Clear, popup_area);
 
         let title = format!("Export Results ({} rows)", self.row_count);
-        let block = Block::bordered()
-            .title(title)
-            .title_style(
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .border_style(Style::default().fg(theme.border_focused))
-            .style(Style::default().bg(theme.bg));
+        let block = super::overlay_block(&title, theme);
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
 

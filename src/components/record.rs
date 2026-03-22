@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, Direction};
@@ -336,9 +336,7 @@ impl RecordDetail {
         frame.render_widget(ratatui::widgets::Clear, popup_area);
 
         let title = format!("JSON \u{2014} {} (Esc to close)", overlay.field_name);
-        let block = Block::bordered()
-            .title(title)
-            .border_style(Style::default().fg(theme.border_focused));
+        let block = super::overlay_block(&title, theme);
 
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
@@ -466,23 +464,7 @@ impl Component for RecordDetail {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let border_style = if focused {
-            Style::default().fg(theme.border_focused)
-        } else {
-            Style::default().fg(theme.border)
-        };
-        let title_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
-        let block = Block::bordered()
-            .border_style(border_style)
-            .title("Record Detail")
-            .title_style(title_style);
+        let block = super::panel_block("Record Detail", focused, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

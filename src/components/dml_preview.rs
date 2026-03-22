@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::highlight::highlight_line;
 use crate::theme::Theme;
@@ -25,15 +25,11 @@ pub(crate) fn render_dml_preview(
 
     let n = statements.len();
     let title = format!(
-        " DML Preview ({n} statement{}) ",
+        "DML Preview ({n} statement{})",
         if n == 1 { "" } else { "s" }
     );
 
-    let block = Block::bordered()
-        .border_style(Style::default().fg(theme.accent))
-        .title(title)
-        .title_alignment(Alignment::Center)
-        .style(Style::default().bg(theme.bg).fg(theme.fg));
+    let block = super::overlay_block(&title, theme);
 
     let inner = block.inner(popup_area);
     frame.render_widget(Clear, popup_area);

@@ -10,25 +10,29 @@
 
 ## Features
 
-**Schema Browser** — tree view of tables, views, indexes, triggers, and columns with inline search filtering.
+**Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering. Each entity type has a distinct color for quick visual scanning.
 
-**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, and statement-at-cursor execution.
+**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution.
 
 **Schema-Aware Autocomplete** — context-sensitive completions for table names, columns, SQL keywords, and qualified references with alias resolution.
 
-**Results Table** — sortable, resizable columns with cell/row clipboard copy, JSON pretty-printing, and configurable NULL display.
+**Results Table** — sortable, resizable columns with alternating row colors, cell/row clipboard copy, JSON pretty-printing, and configurable NULL display.
 
-**Record Detail** — vertical key-value view for inspecting a single row across all columns.
+**Inline Data Editor** — edit table data directly in the results view. Add, modify, and delete rows with full change tracking. Preview generated DML (INSERT/UPDATE/DELETE) before committing. Transactional submission with automatic rollback on failure.
+
+**Foreign Key Navigation** — follow FK references from any cell to the referenced row. Breadcrumb trail with back-navigation to retrace your path through related tables.
+
+**Record Detail** — vertical key-value view for inspecting a single row across all columns, with JSON syntax coloring for structured values.
 
 **EXPLAIN View** — bytecode table and query plan tree, toggled with a single key.
 
 **Export** — save results as CSV, JSON, or SQL INSERT statements to file or clipboard. Quick TSV copy with a shortcut.
 
-**Query History** — SQLite-backed per-database history with recall, re-execute, and auto-prune.
+**Query History** — SQLite-backed per-database history with search, recall, re-execute, and auto-prune.
 
 **Admin Tab** — database info (file stats, WAL status, journal mode), PRAGMA dashboard with inline editing, WAL checkpoint, and integrity checks.
 
-**Theming** — dark and light themes, toggled at runtime.
+**Theming** — Catppuccin Mocha (dark) and Catppuccin Latte (light) themes with rounded borders, toggled at runtime.
 
 ## Installation
 
@@ -108,6 +112,25 @@ tursotui db1.sqlite db2.sqlite
 | `y` | Copy cell |
 | `Y` | Copy row |
 
+### Data Editor (when results are editable)
+
+| Key | Action |
+|-----|--------|
+| `e` / `F2` | Edit current cell |
+| `Enter` | Confirm cell edit |
+| `Esc` | Cancel cell edit |
+| `Ctrl+N` | Set cell to NULL |
+| `Ctrl+Enter` / `F10` | Confirm modal edit |
+| `a` | Add new row |
+| `d` | Toggle delete mark |
+| `c` | Clone row |
+| `u` / `U` | Revert cell / row |
+| `Ctrl+U` | Revert all changes |
+| `Ctrl+D` | Preview DML |
+| `Ctrl+S` | Submit changes |
+| `f` | Follow FK reference |
+| `Alt+Left` | FK back-navigation |
+
 ### Bottom Panels
 
 | Key | Action |
@@ -138,21 +161,23 @@ autocomplete = true
 autocomplete_min_chars = 1
 
 [results]
-max_column_width = 50
+max_column_width = 40
 null_display = "NULL"
 
 [history]
-max_entries = 1000
+max_entries = 5000
 
 [theme]
-name = "dark"    # "dark" or "light"
+mode = "dark"    # "dark" or "light"
 ```
 
 ## Architecture
 
-- **Unidirectional data flow** — components emit `Action`s, `AppState` processes state changes, results route back to components.
+- **Unidirectional data flow** — components emit `Action`s, `AppState` processes state changes, results route back to components via two-phase dispatch.
 - **Async queries** — `tokio::spawn` with fresh connections per query, results delivered via `mpsc` channel.
-- **Component trait** — each panel implements `handle_key`, `update`, `render`.
+- **Component trait** — each panel implements `handle_key`, `update`, `render` with consistent `panel_block` / `overlay_block` helpers for styled borders.
+- **Catppuccin theme system** — full Mocha (dark) and Latte (light) palettes with semantic color roles for schema types, editor highlighting, and data editing states.
+- **Transactional data editing** — change log with one-entry-per-PK invariant, DML generation, and `PRAGMA defer_foreign_keys` for safe FK handling.
 - **No unsafe code** — `#[forbid(unsafe_code)]` enforced project-wide.
 
 ## Tech Stack
@@ -164,6 +189,9 @@ name = "dark"    # "dark" or "light"
 | [tokio](https://crates.io/crates/tokio) | Async runtime |
 | [clap](https://crates.io/crates/clap) | CLI argument parsing |
 | [arboard](https://crates.io/crates/arboard) | Clipboard access |
+| [unicode-width](https://crates.io/crates/unicode-width) | Display-column width measurement |
+| [serde](https://crates.io/crates/serde) / [toml](https://crates.io/crates/toml) | Configuration serialization |
+| [dirs](https://crates.io/crates/dirs) | Platform config/data directories |
 
 ## License
 

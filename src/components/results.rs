@@ -1,8 +1,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{
-    Block, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    Table, TableState,
+    Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    TableState,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -470,19 +470,6 @@ impl Component for ResultsTable {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let border_style = if focused {
-            Style::default().fg(theme.border_focused)
-        } else {
-            Style::default().fg(theme.border)
-        };
-        let title_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
         // When edit mode is active, pending inserts count as additional rows.
         let pending_count = self
             .edit_state
@@ -498,10 +485,7 @@ impl Component for ResultsTable {
             "Results".to_string()
         };
 
-        let block = Block::bordered()
-            .border_style(border_style)
-            .title(title)
-            .title_style(title_style);
+        let block = super::panel_block(&title, focused, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -718,7 +702,14 @@ fn build_visible_table<'a>(
         .map(|(vis_idx, &w)| {
             let abs_col_idx = visible_range.start + vis_idx;
             let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_col_idx);
-            let width = if is_sorted { w.saturating_add(2) } else { w };
+            let is_fk = edit_state.is_some_and(|s| s.fk_columns.contains(&abs_col_idx));
+            let mut width = w;
+            if is_sorted {
+                width = width.saturating_add(2);
+            }
+            if is_fk {
+                width = width.saturating_add(1); // room for ↗ suffix
+            }
             Constraint::Length(width)
         })
         .collect();
@@ -734,12 +725,18 @@ fn build_visible_table<'a>(
 
     let mut data_rows: Vec<Row<'a>> = rows
         .iter()
-        .map(|row_vals| {
-            if let Some(es) = edit_state {
+        .enumerate()
+        .map(|(i, row_vals)| {
+            let mut row = if let Some(es) = edit_state {
                 build_edited_row(row_vals, visible_range, null_display, es, theme)
             } else {
                 build_plain_row(row_vals, visible_range, null_display, theme)
+            };
+            // Alternating row background for visual separation
+            if i % 2 == 1 {
+                row = row.style(Style::default().bg(theme.row_alt_bg));
             }
+            row
         })
         .collect();
 

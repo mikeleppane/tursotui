@@ -53,35 +53,21 @@ fn format_count(n: usize) -> String {
     result.chars().rev().collect()
 }
 
-/// Keybinding hints for each focused panel, varying by sub-tab context.
-///
-/// Returns `(panel_hints, global_hints)` — panel-specific on the left,
-/// always-available shortcuts on the right.
-fn keybindings_for(
-    sub_tab: SubTab,
-    focus: PanelId,
-    bottom_tab: BottomTab,
-) -> (&'static str, &'static str) {
-    let global = "F1 Help  Alt+1/2 Tabs  Ctrl+Q Quit";
-    let panel = match (sub_tab, focus) {
-        // Query-tab panels
-        (SubTab::Query, PanelId::Editor) => "F5 Execute  Esc Release",
-        (SubTab::Query, PanelId::Schema) => "Enter Expand  o Open  Esc Release",
+/// Short label for the currently focused panel.
+fn panel_label(sub_tab: SubTab, focus: PanelId, bottom_tab: BottomTab) -> &'static str {
+    match (sub_tab, focus) {
+        (SubTab::Query, PanelId::Editor) => "Editor",
+        (SubTab::Query, PanelId::Schema) => "Schema",
         (SubTab::Query, PanelId::Bottom) => match bottom_tab {
-            BottomTab::Results => {
-                "j/k Navigate  h/l Columns  s Sort  </> Resize  y/Y Copy  3: Detail  Esc Release"
-            }
-            BottomTab::Explain => "Tab Mode  Enter Generate  j/k Scroll  Esc Release",
-            BottomTab::Detail => "j/k Navigate  Enter Expand  g/G First/Last  Esc Release",
-            BottomTab::ERDiagram => "1-3 Switch Tabs  Esc Release",
+            BottomTab::Results => "Results",
+            BottomTab::Explain => "Explain",
+            BottomTab::Detail => "Detail",
+            BottomTab::ERDiagram => "ER Diagram",
         },
-        // Admin-tab panels
-        (SubTab::Admin, PanelId::DbInfo) => "r Refresh  c Checkpoint  j/k Scroll  Esc Release",
-        (SubTab::Admin, PanelId::Pragmas) => "Enter Edit  r Refresh  j/k Navigate  Esc Release",
-        // Fallback
-        _ => "Tab Cycle",
-    };
-    (panel, global)
+        (SubTab::Admin, PanelId::DbInfo) => "Database Info",
+        (SubTab::Admin, PanelId::Pragmas) => "Pragmas",
+        _ => "",
+    }
 }
 
 /// Truncate a string to fit within `max_width` display columns,
@@ -139,9 +125,9 @@ pub(crate) fn render(
     let db = app.active_db();
     let width = area.width as usize;
 
-    // Left: panel-specific keybinding hints
-    let (panel_hints, global_hints) = keybindings_for(db.sub_tab, db.focus, db.bottom_tab);
-    let left = format!(" {panel_hints}");
+    // Left: focused panel name
+    let label = panel_label(db.sub_tab, db.focus, db.bottom_tab);
+    let left = format!(" {label}");
 
     let center = if db.executing {
         match db.last_execution_source {
@@ -215,19 +201,15 @@ pub(crate) fn render(
         String::new()
     };
 
-    // Right: row position when results focused, otherwise global hints
+    // Right: row position when results focused + F1 Help
     let base_right = if db.focus == PanelId::Bottom && total_rows > 0 {
         if let Some(sel) = selected_row {
-            format!(
-                "Row {} of {}  {global_hints} ",
-                sel + 1,
-                format_count(total_rows)
-            )
+            format!("Row {} of {}  F1 Help ", sel + 1, format_count(total_rows))
         } else {
-            format!("{} rows  {global_hints} ", format_count(total_rows))
+            format!("{} rows  F1 Help ", format_count(total_rows))
         }
     } else {
-        format!("{global_hints} ")
+        "F1 Help ".to_string()
     };
 
     // Build plain-text data editor status segment for layout width calculation.
@@ -238,16 +220,10 @@ pub(crate) fn render(
     // Compose plain bar for exact-width layout
     let bar = compose_status_line(&left, &center, &right, width);
 
-    if edit_plain.is_empty() {
-        // No edit info — render plain
-        let status = Paragraph::new(bar).style(theme.status_bar_style);
-        frame.render_widget(status, area);
-    } else {
-        // Re-build as a styled Line, applying accent/dim to edit-info segments
-        let styled_line = build_styled_line(bar, de_status, &edit_plain, theme);
-        let status = Paragraph::new(styled_line).style(theme.status_bar_style);
-        frame.render_widget(status, area);
-    }
+    // Always render as styled Line — accent the panel label on the left
+    let styled_line = build_styled_status(bar, label, de_status, &edit_plain, theme);
+    let status = Paragraph::new(styled_line).style(theme.status_bar_style);
+    frame.render_widget(status, area);
 }
 
 /// Build the plain-text edit-status segment (used for layout width calculation).
@@ -260,108 +236,117 @@ fn build_edit_status_plain(de: &DataEditorStatus) -> String {
 
     let mut s = String::new();
 
-    // FK breadcrumb trail: "users → departments → divisions | "
+    // FK breadcrumb trail (compact): "users>depts | "
     if !de.fk_breadcrumbs.is_empty() {
-        s.push_str(&de.fk_breadcrumbs.join(" \u{2192} "));
-        s.push_str(" | ");
+        s.push_str(&de.fk_breadcrumbs.join(">"));
+        s.push('|');
     }
 
-    // Editable table indicator
-    match &de.table {
-        Some(table) => write!(s, "[editable: {table}]").unwrap(),
-        None => s.push_str("[editable]"),
+    // Editable table indicator (compact)
+    if let Some(table) = &de.table {
+        write!(s, "[{table}]").unwrap();
     }
 
-    // Pending changes
+    // Pending changes (compact)
     let (upd, ins, del) = de.pending;
     let total = upd + ins + del;
     if total > 0 {
-        write!(s, "  {total} changes ({upd} upd, {ins} ins, {del} del)").unwrap();
-    }
-
-    // Cell editor hint
-    if de.editing_cell {
-        s.push_str("  Ctrl+N=NULL  Enter=confirm");
+        write!(s, " {total}\u{0394}").unwrap(); // Δ = delta symbol
     }
 
     // Trailing gap before base_right
-    s.push_str("  ");
+    s.push(' ');
     s
 }
 
 /// Build a styled `Line` from the composed plain bar.
 ///
-/// The `edit_plain` substring within `bar` is decomposed into styled spans:
-/// - FK breadcrumbs: dimmed
-/// - table name inside `[editable: …]`: accent + bold
-/// - cell-editor hint: dimmed
-///
-/// Everything else inherits the base `status_bar_style` from the caller.
-#[allow(clippy::doc_lazy_continuation)]
-fn build_styled_line(
+/// Styling applied:
+/// - Panel label on the left: accent + bold
+/// - Edit-info segment (if present): FK breadcrumbs dimmed, table accent, changes highlighted
+/// - Everything else inherits the base `status_bar_style` from the caller.
+fn build_styled_status(
     bar: String,
+    panel_label: &str,
     de: &DataEditorStatus,
     edit_plain: &str,
     theme: &Theme,
 ) -> Line<'static> {
-    // Locate edit_plain within bar (it is always present when edit_plain is non-empty)
-    let Some(edit_start) = bar.find(edit_plain) else {
-        return Line::from(bar);
-    };
-
-    let before = bar[..edit_start].to_owned();
-    let after = bar[edit_start + edit_plain.len()..].to_owned();
-
     let dim_style = Style::default().add_modifier(Modifier::DIM);
     let accent_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    // Step 1: Accent the panel label on the left (format is " Label")
+    let label_needle = format!(" {panel_label}");
+    let (label_prefix, rest_after_label) = if !panel_label.is_empty()
+        && let Some(label_start) = bar.find(&label_needle)
+    {
+        let before_label = bar[..label_start].to_owned();
+        let after_label = bar[label_start + label_needle.len()..].to_owned();
+        (
+            vec![
+                Span::raw(before_label),
+                Span::raw(" "),
+                Span::styled(panel_label.to_string(), accent_style),
+            ],
+            after_label,
+        )
+    } else {
+        (Vec::new(), bar)
+    };
 
-    if !before.is_empty() {
-        spans.push(Span::raw(before));
-    }
+    // Step 2: If edit_plain is non-empty, find and style it within rest_after_label
+    if !edit_plain.is_empty()
+        && let Some(edit_start) = rest_after_label.find(edit_plain)
+    {
+        let before_edit = rest_after_label[..edit_start].to_owned();
+        let after_edit = rest_after_label[edit_start + edit_plain.len()..].to_owned();
 
-    // FK breadcrumbs
-    if !de.fk_breadcrumbs.is_empty() {
-        let crumb = de.fk_breadcrumbs.join(" \u{2192} ");
-        spans.push(Span::styled(crumb, dim_style));
-        spans.push(Span::raw(" | "));
-    }
+        let mut spans: Vec<Span<'static>> = label_prefix;
+        if !before_edit.is_empty() {
+            spans.push(Span::raw(before_edit));
+        }
 
-    // [editable: <table>]
-    match &de.table {
-        Some(table) => {
-            spans.push(Span::raw("[editable: "));
+        // FK breadcrumbs
+        if !de.fk_breadcrumbs.is_empty() {
+            let crumb = de.fk_breadcrumbs.join(">");
+            spans.push(Span::styled(crumb, dim_style));
+            spans.push(Span::raw("|"));
+        }
+
+        // [table] with accent
+        if let Some(table) = &de.table {
+            spans.push(Span::raw("["));
             spans.push(Span::styled(table.clone(), accent_style));
             spans.push(Span::raw("]"));
         }
-        None => spans.push(Span::raw("[editable]")),
+
+        // Pending changes with warning color
+        let (upd, ins, del) = de.pending;
+        let total = upd + ins + del;
+        if total > 0 {
+            spans.push(Span::styled(
+                format!(" {total}\u{0394}"),
+                Style::default().fg(theme.warning),
+            ));
+        }
+
+        spans.push(Span::raw(" "));
+
+        if !after_edit.is_empty() {
+            spans.push(Span::raw(after_edit));
+        }
+
+        Line::from(spans)
+    } else {
+        // No edit info — just accent the panel label
+        let mut spans = label_prefix;
+        if !rest_after_label.is_empty() {
+            spans.push(Span::raw(rest_after_label));
+        }
+        Line::from(spans)
     }
-
-    // Pending changes (plain)
-    let (upd, ins, del) = de.pending;
-    let total = upd + ins + del;
-    if total > 0 {
-        spans.push(Span::raw(format!(
-            "  {total} changes ({upd} upd, {ins} ins, {del} del)"
-        )));
-    }
-
-    // Cell editor hint (dimmed)
-    if de.editing_cell {
-        spans.push(Span::styled("  Ctrl+N=NULL  Enter=confirm", dim_style));
-    }
-
-    // Trailing gap
-    spans.push(Span::raw("  "));
-
-    if !after.is_empty() {
-        spans.push(Span::raw(after));
-    }
-
-    Line::from(spans)
 }
 
 /// Compose left, center, and right sections into a fixed-width line.

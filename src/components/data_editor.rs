@@ -35,6 +35,7 @@ pub(crate) struct DataEditorStatus {
     /// Pending change counts `(updates, inserts, deletes)`.
     pub pending: (usize, usize, usize),
     /// Whether a cell editor modal is open.
+    #[allow(dead_code)] // available for future status bar hints
     pub editing_cell: bool,
     /// Ordered table names from the FK navigation stack.
     pub fk_breadcrumbs: Vec<String>,
@@ -956,7 +957,10 @@ impl DataEditor {
         notnull: bool,
         original_row: Vec<Option<String>>,
     ) {
-        let modal = value.is_some_and(|v| v.contains('\n') || v.len() > 80);
+        // Always use modal mode — inline rendering is not yet wired into
+        // ResultsTable's cell layout. Modal provides a visible popup for all edits.
+        // TODO: wire inline render_inline() into ResultsTable for short values.
+        let modal = true;
         self.cell_editor = Some(CellEditor::new(pk, row, col, value, notnull, modal));
         self.editing_original_row = original_row;
     }

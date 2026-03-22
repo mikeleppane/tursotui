@@ -524,9 +524,26 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                                 result.clone(),
                             );
                         }
-                        // Trigger FK loading if not yet cached
-                        if !app.active_db().schema_cache.fk_info.contains_key(table) {
-                            app.active_db_mut().handle.load_foreign_keys(table.clone());
+                        // Parse FK info from CREATE TABLE SQL if not yet cached
+                        if !app.active_db().schema_cache.fk_info.contains_key(table)
+                            && let Some(entry) = app
+                                .active_db()
+                                .schema_cache
+                                .entries
+                                .iter()
+                                .find(|e| e.name == *table)
+                            && let Some(ref sql) = entry.sql
+                        {
+                            let fks = db::DatabaseHandle::parse_foreign_keys(sql);
+                            app.active_db_mut()
+                                .schema_cache
+                                .fk_info
+                                .insert(table.clone(), fks.clone());
+                            panels.data_editor.update_fk_columns(&fks);
+                        } else if let Some(fks) =
+                            app.active_db().schema_cache.fk_info.get(table).cloned()
+                        {
+                            panels.data_editor.update_fk_columns(&fks);
                         }
                     }
                 } else {
@@ -623,16 +640,26 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                         activating_sql.clone(),
                         cached,
                     );
-                    // Trigger FK loading if not yet cached
+                    // Parse FK info from CREATE TABLE SQL if not yet cached
                     if !app
                         .active_db()
                         .schema_cache
                         .fk_info
                         .contains_key(table_name)
+                        && let Some(entry) = app
+                            .active_db()
+                            .schema_cache
+                            .entries
+                            .iter()
+                            .find(|e| &e.name == table_name)
+                        && let Some(ref sql) = entry.sql
                     {
+                        let fks = db::DatabaseHandle::parse_foreign_keys(sql);
                         app.active_db_mut()
-                            .handle
-                            .load_foreign_keys(table_name.clone());
+                            .schema_cache
+                            .fk_info
+                            .insert(table_name.clone(), fks.clone());
+                        panels.data_editor.update_fk_columns(&fks);
                     }
                 }
                 app.pending_edit_table = None;
@@ -1278,30 +1305,37 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     ])
     .areas(area);
 
-    // Database tab bar
-    let db_tabs = Tabs::new(vec![format!(" {} ", db.label)])
+    // Database tab bar — mantle background, accent active tab
+    let db_tabs = Tabs::new(vec![format!(" \u{25c6} {} ", db.label)])
         .select(0)
-        .style(Style::default().fg(theme.fg).bg(theme.bg))
+        .style(Style::default().fg(theme.dim).bg(theme.mantle))
         .highlight_style(
             Style::default()
-                .fg(theme.accent)
+                .fg(theme.accent2)
+                .bg(theme.mantle)
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .divider("");
     frame.render_widget(db_tabs, db_tabs_area);
 
-    // Sub-tab bar
+    // Sub-tab bar — surface0 background, accent underlined active tab
     let sub_tab_index = match db.sub_tab {
         SubTab::Query => 0,
         SubTab::Admin => 1,
     };
     let sub_tabs = Tabs::new(vec![" Query ", " Admin "])
         .select(sub_tab_index)
-        .style(Style::default().fg(theme.fg))
+        .style(Style::default().fg(theme.dim).bg(theme.surface0))
         .highlight_style(
             Style::default()
                 .fg(theme.accent)
+                .bg(theme.surface0)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        );
+        )
+        .divider(Span::styled(
+            " \u{2502} ",
+            Style::default().fg(theme.border),
+        ));
     frame.render_widget(sub_tabs, sub_tabs_area);
 
     // Content area
@@ -1464,14 +1498,16 @@ fn render_bottom_panel(
         BottomTab::Detail => 2,
         BottomTab::ERDiagram => 3,
     };
-    let bottom_tabs = Tabs::new(vec!["1:Results", "2:Explain", "3:Detail", "4:ER"])
+    let bottom_tabs = Tabs::new(vec![" 1:Results ", " 2:Explain ", " 3:Detail ", " 4:ER "])
         .select(tab_index)
-        .style(Style::default().fg(theme.fg))
+        .style(Style::default().fg(theme.dim).bg(theme.surface0))
         .highlight_style(
             Style::default()
                 .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        );
+                .bg(theme.surface0)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
+        .divider(Span::styled("\u{2502}", Style::default().fg(theme.border)));
     frame.render_widget(bottom_tabs, bottom_tabs_area);
 
     // Inject edit state into ResultsTable before rendering
@@ -1503,20 +1539,7 @@ fn render_bottom_panel(
         }
         BottomTab::ERDiagram => {
             // Placeholder for ER Diagram — coming in a future milestone
-            let block = ratatui::widgets::Block::bordered()
-                .border_style(if is_focused {
-                    Style::default().fg(theme.border_focused)
-                } else {
-                    Style::default().fg(theme.border)
-                })
-                .title("ER Diagram")
-                .title_style(if is_focused {
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.fg)
-                });
+            let block = components::panel_block("ER Diagram", is_focused, theme);
             let inner = block.inner(bottom_content_area);
             frame.render_widget(block, bottom_content_area);
             if inner.height > 0 && inner.width > 0 {

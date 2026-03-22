@@ -1,7 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::Action;
@@ -334,12 +334,8 @@ impl CellEditor {
         // Clear background
         frame.render_widget(Clear, popup_area);
 
-        let title = format!(" Edit {table}.{col_name} (Ctrl+Enter/F10 confirm, Esc cancel) ");
-        let block = Block::new()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border_focused))
-            .title(title)
-            .title_style(Style::default().fg(theme.accent));
+        let title = format!("Edit {table}.{col_name} (Ctrl+Enter/F10 confirm, Esc cancel)");
+        let block = super::overlay_block(&title, theme);
 
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);

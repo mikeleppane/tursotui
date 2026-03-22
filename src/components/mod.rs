@@ -16,9 +16,52 @@ pub(crate) mod status_bar;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::prelude::*;
+use ratatui::widgets::{Block, BorderType};
 
 use crate::app::Action;
 use crate::theme::Theme;
+
+/// Create a consistently-styled panel block with rounded borders and padded title.
+///
+/// All main panels use this to ensure a cohesive look. Focused panels get an accent-
+/// colored border and bold title; unfocused panels get a subtle border.
+pub(crate) fn panel_block(title: &str, focused: bool, theme: &Theme) -> Block<'static> {
+    let (border_style, title_style) = if focused {
+        (
+            Style::default().fg(theme.border_focused),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            Style::default().fg(theme.border),
+            Style::default().fg(theme.dim),
+        )
+    };
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(border_style)
+        .title(format!(" {title} "))
+        .title_style(title_style)
+}
+
+/// Create a styled block for overlay popups (help, export, history, DML preview).
+///
+/// Overlays always use accent borders and centered titles.
+pub(crate) fn overlay_block(title: &str, theme: &Theme) -> Block<'static> {
+    Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.accent))
+        .title(format!(" {title} "))
+        .title_alignment(Alignment::Center)
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg).fg(theme.fg))
+}
 
 /// Every panel in the UI implements this trait.
 pub(crate) trait Component {

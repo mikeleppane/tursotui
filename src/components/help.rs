@@ -1,7 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{
-    Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
-};
+use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 
 use crate::theme::Theme;
 
@@ -157,11 +155,7 @@ pub(crate) fn render(frame: &mut Frame, scroll: usize, theme: &Theme) {
     let y = (area.height.saturating_sub(popup_height)) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
 
-    let block = Block::bordered()
-        .border_style(Style::default().fg(theme.accent))
-        .title(" Help (F1 to close) ")
-        .title_alignment(Alignment::Center)
-        .style(Style::default().bg(theme.bg).fg(theme.fg));
+    let block = super::overlay_block("Help (F1 to close)", theme);
 
     let inner = block.inner(popup_area);
     frame.render_widget(Clear, popup_area);

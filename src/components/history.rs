@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::Action;
@@ -318,12 +318,7 @@ impl QueryHistoryPanel {
         // Clear background
         frame.render_widget(Clear, popup_area);
 
-        let title = " Query History ";
-        let block = Block::bordered()
-            .border_style(Style::default().fg(theme.accent))
-            .title(title)
-            .title_alignment(Alignment::Center)
-            .style(Style::default().bg(theme.bg).fg(theme.fg));
+        let block = super::overlay_block("Query History", theme);
 
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
@@ -365,10 +360,8 @@ impl QueryHistoryPanel {
     }
 
     fn render_list(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::bordered()
-            .border_style(Style::default().fg(theme.border))
-            .title(self.list_title())
-            .title_style(Style::default().fg(theme.accent));
+        let title = self.list_title();
+        let block = super::panel_block(&title, true, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -474,10 +467,7 @@ impl QueryHistoryPanel {
     }
 
     fn render_preview(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::bordered()
-            .border_style(Style::default().fg(theme.border))
-            .title("Preview")
-            .title_style(Style::default().fg(theme.accent));
+        let block = super::panel_block("Preview", false, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

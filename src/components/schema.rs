@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::app::{Action, Direction};
 use crate::db::{ColumnInfo, SchemaEntry};
@@ -603,23 +603,7 @@ impl Component for SchemaExplorer {
 
     #[allow(clippy::too_many_lines)]
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let border_style = if focused {
-            Style::default().fg(theme.border_focused)
-        } else {
-            Style::default().fg(theme.border)
-        };
-        let title_style = if focused {
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.fg)
-        };
-
-        let block = Block::bordered()
-            .border_style(border_style)
-            .title("Schema")
-            .title_style(title_style);
+        let block = super::panel_block("Schema", focused, theme);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -669,20 +653,31 @@ impl Component for SchemaExplorer {
 
             match node {
                 TreeNode::Category {
-                    label, expanded, ..
+                    label,
+                    expanded,
+                    kind,
                 } => {
                     let arrow = if *expanded { "\u{25bc} " } else { "\u{25b6} " };
-                    let text = format!("{arrow}{label}");
-
-                    let style = if is_selected {
-                        theme.selected_style
-                    } else {
-                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
+                    let icon_color = match kind {
+                        CategoryKind::Tables => theme.schema_table,
+                        CategoryKind::Views => theme.schema_view,
+                        CategoryKind::Indexes => theme.schema_index,
+                        CategoryKind::Triggers => theme.schema_trigger,
                     };
 
-                    let display = truncate_str(&text, content_width as usize);
-                    let line = Paragraph::new(display).style(style);
-                    frame.render_widget(line, row_area);
+                    let cw = content_width as usize;
+                    let text = format!("{arrow}{label}");
+                    let display = truncate_str(&text, cw);
+                    let widget = if is_selected {
+                        Paragraph::new(display).style(theme.selected_style)
+                    } else {
+                        let spans = vec![Span::styled(
+                            display,
+                            Style::default().fg(icon_color).add_modifier(Modifier::BOLD),
+                        )];
+                        Paragraph::new(Line::from(spans))
+                    };
+                    frame.render_widget(widget, row_area);
                 }
                 TreeNode::Table {
                     name,
@@ -691,21 +686,46 @@ impl Component for SchemaExplorer {
                     ..
                 } => {
                     let arrow = if *expanded { "\u{25bc} " } else { "\u{25b6} " };
-                    let type_hint = if obj_type == "view" { " [view]" } else { "" };
-                    let text = format!("  {arrow}{name}{type_hint}");
-
-                    let style = if is_selected {
-                        theme.selected_style
+                    let is_view = obj_type == "view";
+                    let icon_color = if is_view {
+                        theme.schema_view
                     } else {
-                        Style::default().fg(theme.fg)
+                        theme.schema_table
                     };
+                    let type_hint = if is_view { " [view]" } else { "" };
 
-                    let display = truncate_str(&text, content_width as usize);
-                    let line = Paragraph::new(display).style(style);
-                    frame.render_widget(line, row_area);
+                    let cw = content_width as usize;
+                    let name_text = format!("  {arrow}{name}");
+                    if is_selected {
+                        let text = format!("{name_text}{type_hint}");
+                        let display = truncate_str(&text, cw);
+                        frame.render_widget(
+                            Paragraph::new(display).style(theme.selected_style),
+                            row_area,
+                        );
+                    } else {
+                        let name_display = truncate_str(&name_text, cw);
+                        let name_w = unicode_width::UnicodeWidthStr::width(name_display.as_str());
+                        let hint_display = if name_w < cw && !type_hint.is_empty() {
+                            truncate_str(type_hint, cw - name_w)
+                        } else {
+                            String::new()
+                        };
+                        let spans = vec![
+                            Span::styled(name_display, Style::default().fg(icon_color)),
+                            Span::styled(hint_display, dim_style),
+                        ];
+                        frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
+                    }
                 }
                 TreeNode::Index { name, table_name } | TreeNode::Trigger { name, table_name } => {
                     let cw = content_width as usize;
+                    let is_trigger = matches!(node, TreeNode::Trigger { .. });
+                    let icon_color = if is_trigger {
+                        theme.schema_trigger
+                    } else {
+                        theme.schema_index
+                    };
                     let name_part = format!("  {name}");
                     let table_part = format!(" ({table_name})");
 
@@ -723,8 +743,8 @@ impl Component for SchemaExplorer {
                             String::new()
                         };
                         let spans = vec![
-                            Span::styled(name_display, Style::default().fg(theme.fg)),
-                            Span::styled(table_display, dim_style.fg(theme.border)),
+                            Span::styled(name_display, Style::default().fg(icon_color)),
+                            Span::styled(table_display, dim_style),
                         ];
                         Paragraph::new(Line::from(spans))
                     };
@@ -733,11 +753,10 @@ impl Component for SchemaExplorer {
                 }
                 TreeNode::Column { col, .. } => {
                     let pk_mark = if col.pk { pk_indicator } else { no_pk };
-
-                    let base_style = if is_selected {
-                        theme.selected_style
+                    let col_color = if col.pk {
+                        theme.schema_pk
                     } else {
-                        Style::default().fg(theme.fg)
+                        theme.schema_column
                     };
 
                     let name_part = format!("    {pk_mark}{}", col.name);
@@ -747,7 +766,7 @@ impl Component for SchemaExplorer {
                     let widget = if is_selected {
                         let total = format!("{name_part}{type_part}");
                         let display = truncate_str(&total, cw);
-                        Paragraph::new(display).style(base_style)
+                        Paragraph::new(display).style(theme.selected_style)
                     } else {
                         let name_display = truncate_str(&name_part, cw);
                         let name_width =
@@ -758,8 +777,8 @@ impl Component for SchemaExplorer {
                             String::new()
                         };
                         let spans = vec![
-                            Span::styled(name_display, Style::default().fg(theme.fg)),
-                            Span::styled(type_display, dim_style.fg(theme.border)),
+                            Span::styled(name_display, Style::default().fg(col_color)),
+                            Span::styled(type_display, Style::default().fg(theme.schema_type)),
                         ];
                         Paragraph::new(Line::from(spans))
                     };
