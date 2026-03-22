@@ -1014,6 +1014,76 @@ impl DatabaseHandle {
         }
     }
 
+    // ── Transaction execution ──────────────────────────────────────────
+
+    /// Execute a list of DML statements atomically in the background.
+    /// Sends `TransactionCommitted` on success or `TransactionFailed` on any error.
+    pub(crate) fn execute_transaction(&self, statements: Vec<String>) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let tx_panic = tx.clone();
+            let handle = tokio::spawn(async move {
+                let conn = db.connect()?;
+                conn.execute("PRAGMA defer_foreign_keys = ON", ()).await?;
+                conn.execute("BEGIN", ()).await?;
+                for stmt in &statements {
+                    if let Err(e) = conn.execute(stmt, ()).await {
+                        let _ = conn.execute("ROLLBACK", ()).await;
+                        return Err::<(), Box<dyn std::error::Error + Send + Sync>>(e.into());
+                    }
+                }
+                conn.execute("COMMIT", ()).await?;
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            });
+            let msg = match handle.await {
+                Ok(Ok(())) => QueryMessage::TransactionCommitted,
+                Ok(Err(e)) => QueryMessage::TransactionFailed(e.to_string()),
+                Err(_) => QueryMessage::TransactionFailed("Transaction task panicked".into()),
+            };
+            let _ = tx_panic.send(msg);
+        });
+    }
+
+    /// Load foreign key info for a table in the background.
+    /// Sends `ForeignKeysLoaded` on success; silently ignores errors.
+    #[allow(dead_code)] // will be called when FK navigation lands (Task 13)
+    pub(crate) fn load_foreign_keys(&self, table: String) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let tx_panic = tx.clone();
+            let handle = tokio::spawn(async move {
+                let conn = db.connect()?;
+                let quoted = table.replace('"', "\"\"");
+                let sql = format!("PRAGMA foreign_key_list(\"{quoted}\")");
+                let mut rows = conn.query(&sql, ()).await?;
+                let mut fks = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    // PRAGMA foreign_key_list returns: id, seq, table, from, to, on_update, on_delete, match
+                    let to_table: String = row.get_value(2)?.as_text().cloned().unwrap_or_default();
+                    let from_column: String =
+                        row.get_value(3)?.as_text().cloned().unwrap_or_default();
+                    let to_column: String =
+                        row.get_value(4)?.as_text().cloned().unwrap_or_default();
+                    fks.push(ForeignKeyInfo {
+                        from_column,
+                        to_table,
+                        to_column,
+                    });
+                }
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((table, fks))
+            });
+            let msg = match handle.await {
+                Ok(Ok((table, fks))) => QueryMessage::ForeignKeysLoaded(table, fks),
+                Ok(Err(_)) | Err(_) => return, // silently ignore FK load failures
+            };
+            let _ = tx_panic.send(msg);
+        });
+    }
+
     // ── Shared PRAGMA helpers ──────────────────────────────────────────
 
     /// Read a single PRAGMA value as an i64.

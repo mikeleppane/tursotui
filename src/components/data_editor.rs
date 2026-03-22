@@ -776,6 +776,36 @@ impl DataEditor {
         HashSet::new()
     }
 
+    // ------------------------------------------------------------------
+    // DML preview accessors (Task 10)
+    // ------------------------------------------------------------------
+
+    /// The generated DML statements for the current preview.
+    pub(crate) fn preview_dml(&self) -> &[String] {
+        &self.preview_dml
+    }
+
+    /// Current scroll offset for the DML preview popup.
+    pub(crate) fn preview_scroll(&self) -> usize {
+        self.preview_scroll
+    }
+
+    /// Store generated DML statements.
+    pub(crate) fn set_preview_dml(&mut self, stmts: Vec<String>) {
+        self.preview_dml = stmts;
+        self.preview_scroll = 0;
+    }
+
+    /// Scroll the preview down by one line.
+    pub(crate) fn scroll_preview_down(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_add(1);
+    }
+
+    /// Scroll the preview up by one line.
+    pub(crate) fn scroll_preview_up(&mut self) {
+        self.preview_scroll = self.preview_scroll.saturating_sub(1);
+    }
+
     /// Build the `EditRenderState` snapshot passed to `ResultsTable` before render.
     pub(crate) fn build_render_state(&self) -> EditRenderState {
         let mut row_markers = HashMap::new();

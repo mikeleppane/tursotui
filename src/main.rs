@@ -299,9 +299,23 @@ fn handle_key_event(
             }
             return;
         }
-        Some(app::Overlay::DmlPreview { .. }) => {
-            if key.code == KeyCode::Esc {
-                app.active_overlay = None;
+        Some(app::Overlay::DmlPreview { submit_enabled }) => {
+            match key.code {
+                KeyCode::Esc => {
+                    app.active_overlay = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    panels.data_editor.scroll_preview_down();
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    panels.data_editor.scroll_preview_up();
+                }
+                KeyCode::Enter if submit_enabled => {
+                    let action = app::Action::SubmitDataEdits;
+                    app.update(&action);
+                    dispatch_action_to_components(&action, app, panels);
+                }
+                _ => {}
             }
             return;
         }
@@ -509,6 +523,8 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             }
         }
         app::Action::QueryFailed(err) => {
+            // Clear any pending deferred editability check — the query failed
+            app.pending_edit_table = None;
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
                 created_at: std::time::Instant::now(),
@@ -1010,10 +1026,66 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
         app::Action::RevertAll => {
             panels.data_editor.revert_all_edits();
         }
+        app::Action::ShowDmlPreview(_submit_enabled) => {
+            // AppState::update() already set the overlay. Here we generate DML and store it.
+            if panels.data_editor.changes().is_empty() {
+                app.active_overlay = None; // cancel overlay set by update()
+                app.transient_message = Some(app::TransientMessage {
+                    text: "No pending changes".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+            } else {
+                let table = panels.data_editor.source_table().unwrap_or("").to_string();
+                let columns = panels.data_editor.columns().to_vec();
+                let pk_columns = panels.data_editor.pk_columns().to_vec();
+                let stmts = components::data_editor::generate_dml(
+                    &table,
+                    &columns,
+                    &pk_columns,
+                    panels.data_editor.changes(),
+                );
+                panels.data_editor.set_preview_dml(stmts);
+            }
+        }
+        app::Action::SubmitDataEdits => {
+            let stmts = panels.data_editor.preview_dml().to_vec();
+            app.active_overlay = None;
+            if !stmts.is_empty() {
+                app.active_db_mut().handle.execute_transaction(stmts);
+            }
+        }
+        app::Action::DataEditsCommitted => {
+            // AppState::update() already cleared the overlay.
+            panels.data_editor.revert_all_edits();
+            // Re-execute activating query to refresh results
+            let activating_sql = panels.data_editor.activating_query().to_string();
+            let source_table = panels.data_editor.source_table().map(str::to_string);
+            if !activating_sql.is_empty() {
+                app.active_db_mut()
+                    .handle
+                    .execute(activating_sql, source_table);
+            }
+            app.transient_message = Some(app::TransientMessage {
+                text: "Changes committed successfully".to_string(),
+                created_at: std::time::Instant::now(),
+                is_error: false,
+            });
+        }
+        app::Action::DataEditsFailed(err) => {
+            // AppState::update() already cleared the overlay.
+            app.transient_message = Some(app::TransientMessage {
+                text: format!("Transaction failed: {err}"),
+                created_at: std::time::Instant::now(),
+                is_error: true,
+            });
+            // Changes remain staged — user can inspect and retry
+        }
         _ => {}
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     let theme = &app.theme;
     let db = app.active_db();
@@ -1112,6 +1184,18 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         && let Some(ref popup) = panels.export_popup
     {
         popup.render(frame, area, theme);
+    }
+
+    // DML preview overlay
+    if let Some(app::Overlay::DmlPreview { submit_enabled }) = app.active_overlay {
+        components::dml_preview::render_dml_preview(
+            frame,
+            area,
+            panels.data_editor.preview_dml(),
+            panels.data_editor.preview_scroll(),
+            submit_enabled,
+            theme,
+        );
     }
 
     // Modal cell editor overlay (renders above content, below help)
