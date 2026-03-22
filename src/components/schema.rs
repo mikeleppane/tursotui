@@ -2,7 +2,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, Direction, ObjectKind};
 use crate::db::{ColumnInfo, SchemaEntry};
 use crate::theme::Theme;
 
@@ -459,6 +459,225 @@ impl SchemaExplorer {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Navigate the schema tree to reveal and select a specific object.
+    ///
+    /// Used by Go to Object (`Ctrl+P`) to navigate to search results.
+    /// Expands ancestor nodes, rebuilds the visible vec, and selects the target.
+    ///
+    /// For columns with unloaded parent: falls back to selecting the parent table.
+    /// Returns `true` if the target (or parent fallback) was found and selected.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn reveal_and_select(&mut self, name: &str, kind: ObjectKind) -> bool {
+        // Clear any active filter
+        self.filter = None;
+        self.filter_active = false;
+
+        // Map ObjectKind to our internal CategoryKind and node type
+        let target_cat = match kind {
+            ObjectKind::Table => Some(CategoryKind::Tables),
+            ObjectKind::View => Some(CategoryKind::Views),
+            ObjectKind::Index => Some(CategoryKind::Indexes),
+            ObjectKind::Trigger => Some(CategoryKind::Triggers),
+            ObjectKind::Column => None, // columns are under Tables or Views
+        };
+
+        match kind {
+            ObjectKind::Table | ObjectKind::View => {
+                let cat_kind = target_cat.unwrap();
+                // Expand the category
+                for (header, children) in &mut self.categories {
+                    if let TreeNode::Category {
+                        kind: k, expanded, ..
+                    } = header
+                        && *k == cat_kind
+                    {
+                        *expanded = true;
+                        // Find the table/view node
+                        let found = children
+                            .iter()
+                            .any(|c| matches!(c, TreeNode::Table { name: n, .. } if n == name));
+                        if !found {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+                self.rebuild_visible();
+                // Find and select the target in visible
+                if let Some(pos) = self
+                    .visible
+                    .iter()
+                    .position(|node| matches!(node, TreeNode::Table { name: n, .. } if n == name))
+                {
+                    self.selected = pos;
+                    // Ensure it's visible by adjusting scroll
+                    if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                    // Also scroll down if selection is below viewport (rough estimate)
+                    let estimated_visible = 20_usize;
+                    if self.selected >= self.scroll_offset + estimated_visible {
+                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
+                    }
+                    return true;
+                }
+                false
+            }
+            ObjectKind::Index => {
+                // Expand Indexes category
+                for (header, children) in &mut self.categories {
+                    if let TreeNode::Category {
+                        kind: CategoryKind::Indexes,
+                        expanded,
+                        ..
+                    } = header
+                    {
+                        *expanded = true;
+                        let found = children
+                            .iter()
+                            .any(|c| matches!(c, TreeNode::Index { name: n, .. } if n == name));
+                        if !found {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+                self.rebuild_visible();
+                if let Some(pos) = self
+                    .visible
+                    .iter()
+                    .position(|node| matches!(node, TreeNode::Index { name: n, .. } if n == name))
+                {
+                    self.selected = pos;
+                    if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                    let estimated_visible = 20_usize;
+                    if self.selected >= self.scroll_offset + estimated_visible {
+                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
+                    }
+                    return true;
+                }
+                false
+            }
+            ObjectKind::Trigger => {
+                // Expand Triggers category
+                for (header, children) in &mut self.categories {
+                    if let TreeNode::Category {
+                        kind: CategoryKind::Triggers,
+                        expanded,
+                        ..
+                    } = header
+                    {
+                        *expanded = true;
+                        let found = children
+                            .iter()
+                            .any(|c| matches!(c, TreeNode::Trigger { name: n, .. } if n == name));
+                        if !found {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+                self.rebuild_visible();
+                if let Some(pos) = self
+                    .visible
+                    .iter()
+                    .position(|node| matches!(node, TreeNode::Trigger { name: n, .. } if n == name))
+                {
+                    self.selected = pos;
+                    if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                    let estimated_visible = 20_usize;
+                    if self.selected >= self.scroll_offset + estimated_visible {
+                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
+                    }
+                    return true;
+                }
+                false
+            }
+            ObjectKind::Column => {
+                // Need to find which table contains this column, expand both
+                // the category and the table, then select the column.
+                //
+                // Strategy: iterate all categories looking for a table that
+                // has a column with this name.
+                let mut found_table: Option<String> = None;
+                let mut columns_loaded = false;
+
+                for (_header, children) in &self.categories {
+                    for child in children {
+                        if let TreeNode::Table {
+                            name: tbl_name,
+                            columns,
+                            columns_loaded: loaded,
+                            ..
+                        } = child
+                            && columns.iter().any(|c| c.name == name)
+                        {
+                            found_table = Some(tbl_name.clone());
+                            columns_loaded = *loaded;
+                            break;
+                        }
+                    }
+                    if found_table.is_some() {
+                        break;
+                    }
+                }
+
+                let Some(table_name) = found_table else {
+                    return false;
+                };
+
+                if !columns_loaded {
+                    // Fall back to selecting the parent table
+                    return self.reveal_and_select(&table_name, ObjectKind::Table);
+                }
+
+                // Expand the parent category and table
+                for (header, children) in &mut self.categories {
+                    if let TreeNode::Category { expanded, .. } = header {
+                        for child in children.iter_mut() {
+                            if let TreeNode::Table {
+                                name: n,
+                                expanded: tbl_exp,
+                                ..
+                            } = child
+                                && *n == table_name
+                            {
+                                *expanded = true; // category
+                                *tbl_exp = true; // table
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                self.rebuild_visible();
+
+                // Find the specific column in visible
+                if let Some(pos) = self.visible.iter().position(|node| {
+                    matches!(node, TreeNode::Column { table_name: tn, col, .. }
+                        if tn == &table_name && col.name == name)
+                }) {
+                    self.selected = pos;
+                    if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                    let estimated_visible = 20_usize;
+                    if self.selected >= self.scroll_offset + estimated_visible {
+                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
+                    }
+                    return true;
+                }
+
+                // Column not visible (shouldn't happen if columns_loaded was true)
+                false
+            }
         }
     }
 }
@@ -1984,5 +2203,144 @@ mod tests {
         // Filter should still be Some("") and filter_active should still be true
         assert_eq!(explorer.filter, Some(String::new()));
         assert!(explorer.filter_active);
+    }
+
+    // --- reveal_and_select tests ---
+
+    #[test]
+    fn test_reveal_and_select_table() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+            make_schema_entry("table", "products"),
+        ]);
+
+        let found = explorer.reveal_and_select("orders", ObjectKind::Table);
+        assert!(found);
+        // Selected node should be the "orders" table
+        assert!(matches!(
+            &explorer.visible[explorer.selected],
+            TreeNode::Table { name, .. } if name == "orders"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_view() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry("view", "active_users"),
+        ]);
+
+        let found = explorer.reveal_and_select("active_users", ObjectKind::View);
+        assert!(found);
+        assert!(matches!(
+            &explorer.visible[explorer.selected],
+            TreeNode::Table { name, obj_type, .. } if name == "active_users" && obj_type == "view"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_index() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry_with_tbl("index", "idx_users_email", "users"),
+        ]);
+
+        let found = explorer.reveal_and_select("idx_users_email", ObjectKind::Index);
+        assert!(found);
+        // Indexes category should now be expanded
+        assert!(matches!(
+            &explorer.visible[explorer.selected],
+            TreeNode::Index { name, .. } if name == "idx_users_email"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_trigger() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry_with_tbl("trigger", "trg_insert", "users"),
+        ]);
+
+        let found = explorer.reveal_and_select("trg_insert", ObjectKind::Trigger);
+        assert!(found);
+        assert!(matches!(
+            &explorer.visible[explorer.selected],
+            TreeNode::Trigger { name, .. } if name == "trg_insert"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_column() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        // Load columns
+        explorer.set_columns(
+            "users",
+            vec![
+                make_column("id", "INTEGER", true),
+                make_column("email", "TEXT", false),
+            ],
+        );
+
+        let found = explorer.reveal_and_select("email", ObjectKind::Column);
+        assert!(found);
+        assert!(matches!(
+            &explorer.visible[explorer.selected],
+            TreeNode::Column { col, table_name, .. }
+            if col.name == "email" && table_name == "users"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_nonexistent() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+
+        let found = explorer.reveal_and_select("nonexistent", ObjectKind::Table);
+        assert!(!found);
+    }
+
+    #[test]
+    fn test_reveal_and_select_clears_filter() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry("table", "orders"),
+        ]);
+
+        // Apply a filter
+        explorer.filter = Some("user".to_string());
+        explorer.filter_active = true;
+        explorer.rebuild_visible();
+        assert_eq!(explorer.visible.len(), 2); // header + users
+
+        // reveal_and_select should clear the filter
+        let found = explorer.reveal_and_select("orders", ObjectKind::Table);
+        assert!(found);
+        assert!(explorer.filter.is_none());
+        assert!(!explorer.filter_active);
+    }
+
+    #[test]
+    fn test_reveal_and_select_expands_collapsed_category() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[
+            make_schema_entry("table", "users"),
+            make_schema_entry_with_tbl("index", "idx_email", "users"),
+        ]);
+
+        // Indexes category starts collapsed
+        assert!(!is_category_expanded(&explorer, 1));
+
+        // reveal_and_select should expand it
+        let found = explorer.reveal_and_select("idx_email", ObjectKind::Index);
+        assert!(found);
+        assert!(is_category_expanded(&explorer, 1));
     }
 }

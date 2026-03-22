@@ -59,6 +59,8 @@ pub(crate) enum Overlay {
     History,
     Export,
     DmlPreview { submit_enabled: bool },
+    FilePicker,
+    GoToObject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +109,25 @@ pub(crate) enum ExecutionSource {
     FullBuffer,
     Selection,
     StatementAtCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Phase 4: Go to Object
+pub(crate) enum ObjectKind {
+    Table,
+    Index,
+    View,
+    Trigger,
+    Column,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // Phase 4: Go to Object
+pub(crate) struct ObjectRef {
+    pub(crate) name: String,
+    pub(crate) kind: ObjectKind,
+    pub(crate) parent: Option<String>,
+    pub(crate) database_path: String,
 }
 
 /// All state mutations flow through actions.
@@ -208,6 +229,10 @@ pub(crate) enum Action {
     CloseActiveDatabase,
     #[allow(dead_code)] // constructed by file picker (Phase 3)
     OpenDatabase(std::path::PathBuf),
+    OpenFilePicker,
+    OpenGoToObject,
+    #[allow(dead_code)] // Phase 4: Go to Object
+    GoToObject(ObjectRef),
 }
 
 /// Per-database workspace.
@@ -490,6 +515,13 @@ impl AppState {
                     Some(Overlay::Export)
                 };
             }
+            Action::OpenFilePicker => {
+                self.active_overlay = if let Some(Overlay::FilePicker) = self.active_overlay {
+                    None
+                } else {
+                    Some(Overlay::FilePicker)
+                };
+            }
             Action::ShowDmlPreview(b) => {
                 self.active_overlay = Some(Overlay::DmlPreview { submit_enabled: *b });
             }
@@ -546,6 +578,43 @@ impl AppState {
             }
             Action::OpenDatabase(_path) => {
                 // Handled in dispatch — requires async DatabaseHandle::open
+            }
+            Action::OpenGoToObject => {
+                self.active_overlay = if self.active_overlay == Some(Overlay::GoToObject) {
+                    None
+                } else {
+                    Some(Overlay::GoToObject)
+                };
+            }
+            Action::GoToObject(obj_ref) => {
+                // Switch to target database, switch to Query sub-tab
+                if let Some(idx) = self
+                    .databases
+                    .iter()
+                    .position(|db| db.path == obj_ref.database_path)
+                {
+                    if idx != self.active_db {
+                        // Auto-save outgoing tab's editor buffer
+                        let outgoing = &self.databases[self.active_db];
+                        if !outgoing.editor.contents().is_empty() {
+                            let _ = crate::persistence::save_buffer(
+                                &outgoing.path,
+                                &outgoing.editor.contents(),
+                            );
+                        }
+                        self.active_db = idx;
+                    }
+                    // Switch to Query sub-tab
+                    let target_db = &mut self.databases[idx];
+                    if target_db.sub_tab != SubTab::Query {
+                        target_db.sub_tab = SubTab::Query;
+                        let panels = target_db.focusable_panels();
+                        if let Some(&first) = panels.first() {
+                            target_db.focus = first;
+                        }
+                    }
+                }
+                self.active_overlay = None;
             }
             _ => {}
         }

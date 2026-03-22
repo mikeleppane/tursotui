@@ -78,6 +78,12 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
             Some(Action::CopyAllResults)
         }
 
+        // File picker
+        (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::OpenFilePicker),
+
+        // Go to Object
+        (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(Action::OpenGoToObject),
+
         // Multi-database tab switching
         (KeyModifiers::CONTROL, KeyCode::PageDown) => Some(Action::NextDatabase),
         (KeyModifiers::CONTROL, KeyCode::PageUp) => Some(Action::PrevDatabase),

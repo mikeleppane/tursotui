@@ -39,6 +39,10 @@ struct GlobalUi {
     /// Persistent clipboard handle — kept alive for the app's lifetime so that
     /// clipboard contents survive on Linux/Wayland (arboard drops contents on Drop).
     clipboard: Option<arboard::Clipboard>,
+    /// File picker popup (global since it opens databases, not per-db).
+    file_picker: Option<components::file_picker::FilePicker>,
+    /// Go to Object popup (global since it searches across all databases).
+    goto_object: Option<components::goto_object::GoToObject>,
 }
 
 impl GlobalUi {
@@ -46,6 +50,8 @@ impl GlobalUi {
         Self {
             history: QueryHistoryPanel::new(),
             clipboard: arboard::Clipboard::new().ok(),
+            file_picker: None,
+            goto_object: None,
         }
     }
 }
@@ -275,6 +281,7 @@ fn map_history_message(msg: history::HistoryMessage) -> app::Action {
 }
 
 /// Handle a single key press: route to help overlay, focused component, or global handler.
+#[allow(clippy::too_many_lines)]
 fn handle_key_event(
     key: ratatui::crossterm::event::KeyEvent,
     app: &mut AppState,
@@ -328,6 +335,65 @@ fn handle_key_event(
                     dispatch_action_to_db(active_idx, &action, app, global_ui);
                 }
                 _ => {}
+            }
+            return;
+        }
+        Some(app::Overlay::FilePicker) => {
+            if let Some(ref mut picker) = global_ui.file_picker
+                && let Some(action) = picker.handle_key(key)
+            {
+                match &action {
+                    app::Action::OpenDatabase(_) => {
+                        // Dispatch OpenDatabase; picker dismissal happens on
+                        // success inside dispatch_action_to_db.
+                        app.update(&action);
+                        dispatch_action_to_db(active_idx, &action, app, global_ui);
+                    }
+                    app::Action::OpenFilePicker => {
+                        // Esc — toggle off via update()
+                        app.update(&action);
+                        global_ui.file_picker = None;
+                    }
+                    app::Action::Quit => {
+                        app.should_quit = true;
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+        Some(app::Overlay::GoToObject) => {
+            if let Some(ref mut goto) = global_ui.goto_object {
+                let active_db_path = app.databases[active_idx].path.clone();
+                if let Some(action) = goto.handle_key(key, &app.databases, &active_db_path) {
+                    match &action {
+                        app::Action::GoToObject(obj_ref) => {
+                            let obj_ref_clone = obj_ref.clone();
+                            app.active_overlay = None;
+                            global_ui.goto_object = None;
+                            app.update(&action);
+                            // After switching database, reveal_and_select on the target db
+                            let target_idx = app.active_db;
+                            let db = &mut app.databases[target_idx];
+                            db.schema
+                                .reveal_and_select(&obj_ref_clone.name, obj_ref_clone.kind);
+                            // Ensure sidebar is visible so user can see the selection
+                            if !db.sidebar_visible {
+                                db.sidebar_visible = true;
+                            }
+                            db.focus = PanelId::Schema;
+                        }
+                        app::Action::OpenGoToObject => {
+                            // Toggle off (Esc or Ctrl+P)
+                            app.active_overlay = None;
+                            global_ui.goto_object = None;
+                        }
+                        _ => {
+                            app.update(&action);
+                            dispatch_action_to_db(active_idx, &action, app, global_ui);
+                        }
+                    }
+                }
             }
             return;
         }
@@ -1319,6 +1385,113 @@ fn dispatch_action_to_db(
                 db.data_editor.update_fk_columns(&fks);
             }
         }
+        app::Action::OpenFilePicker => {
+            if app.active_overlay == Some(app::Overlay::FilePicker) {
+                // Create the file picker with the active database path
+                let active_path = app.databases[app.active_db].path.clone();
+                global_ui.file_picker =
+                    Some(components::file_picker::FilePicker::new(&active_path));
+            } else {
+                // Toggled off
+                global_ui.file_picker = None;
+            }
+        }
+        app::Action::OpenDatabase(path) => {
+            let path_str = path.to_string_lossy().to_string();
+
+            // Check if this database is already open (compare canonical paths)
+            let canonical_new = std::fs::canonicalize(path).ok();
+            let mut existing_idx = None;
+            for (i, db) in app.databases.iter().enumerate() {
+                if db.path == path_str {
+                    existing_idx = Some(i);
+                    break;
+                }
+                if let Some(ref cn) = canonical_new
+                    && db.path != ":memory:"
+                    && let Ok(ce) = std::fs::canonicalize(&db.path)
+                    && ce == *cn
+                {
+                    existing_idx = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(idx) = existing_idx {
+                // Already open — switch to that tab
+                let switch_action = app::Action::SwitchDatabase(idx);
+                app.update(&switch_action);
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Switched to already-open database: {path_str}"),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                // Dismiss picker on success
+                app.active_overlay = None;
+                global_ui.file_picker = None;
+            } else {
+                // Check if path doesn't exist yet (SQLite will create it)
+                let is_new = !path.exists();
+                // Open the database (blocking async in current tokio context)
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(DatabaseHandle::open(&path_str))
+                }) {
+                    Ok(handle) => {
+                        let new_db = DatabaseContext::new(handle, path_str.clone(), &app.config);
+                        app.databases.push(new_db);
+                        let new_idx = app.databases.len() - 1;
+                        // Switch to the new tab
+                        let switch = app::Action::SwitchDatabase(new_idx);
+                        app.update(&switch);
+                        // Trigger schema load
+                        app.databases[new_idx].handle.load_schema();
+                        // Restore saved editor buffer if available
+                        if let Some(saved) = persistence::load_buffer(&path_str)
+                            && !saved.is_empty()
+                        {
+                            app.databases[new_idx].editor.set_contents(&saved);
+                            app.databases[new_idx].editor.mark_saved();
+                        }
+                        let msg = if is_new {
+                            format!("Created new database: {path_str}")
+                        } else {
+                            format!("Opened: {path_str}")
+                        };
+                        app.transient_message = Some(app::TransientMessage {
+                            text: msg,
+                            created_at: std::time::Instant::now(),
+                            is_error: false,
+                        });
+                        // Dismiss picker on success
+                        app.active_overlay = None;
+                        global_ui.file_picker = None;
+                    }
+                    Err(e) => {
+                        // Keep picker open on failure so user can correct the path
+                        app.transient_message = Some(app::TransientMessage {
+                            text: format!("Failed to open '{path_str}': {e}"),
+                            created_at: std::time::Instant::now(),
+                            is_error: true,
+                        });
+                    }
+                }
+            }
+        }
+        app::Action::OpenGoToObject => {
+            if app.active_overlay == Some(app::Overlay::GoToObject) {
+                // Create the Go to Object popup with all databases' schemas
+                let active_path = app.databases[app.active_db].path.clone();
+                global_ui.goto_object = Some(components::goto_object::GoToObject::new(
+                    &app.databases,
+                    &active_path,
+                ));
+            } else {
+                // Toggled off
+                global_ui.goto_object = None;
+            }
+        }
+        // GoToObject dispatch is handled in handle_key_event overlay routing
+        // (reveal_and_select is called there after the database switch).
         // CloseActiveDatabase: auto-save + removal handled entirely in
         // AppState::update_for_db (before the Vec entry is removed).
         _ => {}
@@ -1506,6 +1679,20 @@ fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &GlobalUi) {
         && let Some(ref popup) = app.databases[active_idx].export_popup
     {
         popup.render(frame, area, &theme);
+    }
+
+    // File picker overlay
+    if active_overlay == Some(app::Overlay::FilePicker)
+        && let Some(ref picker) = global_ui.file_picker
+    {
+        picker.render(frame, area, &theme);
+    }
+
+    // Go to Object overlay
+    if active_overlay == Some(app::Overlay::GoToObject)
+        && let Some(ref goto) = global_ui.goto_object
+    {
+        goto.render(frame, area, &theme);
     }
 
     // DML preview overlay

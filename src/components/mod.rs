@@ -7,6 +7,8 @@ pub(crate) mod editor;
 pub(crate) mod er_diagram;
 pub(crate) mod explain;
 pub(crate) mod export;
+pub(crate) mod file_picker;
+pub(crate) mod goto_object;
 pub(crate) mod help;
 pub(crate) mod history;
 pub(crate) mod pragmas;

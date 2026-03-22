@@ -147,7 +147,8 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "  Ctrl+PgUp       Switch to previous database tab",
     ));
     lines.push(Line::from("  Ctrl+W          Close current database tab"));
-    lines.push(Line::from("  Ctrl+O          Open database (coming soon)"));
+    lines.push(Line::from("  Ctrl+O          Open database file"));
+    lines.push(Line::from("  Ctrl+P          Go to Object (fuzzy search)"));
 
     lines
 }
