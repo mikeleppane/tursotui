@@ -2,6 +2,9 @@
 name = "tursotui"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A keyboard-driven terminal UI for browsing, querying, and administering Turso and SQLite databases"
+repository = "https://github.com/mikeleppane/tursotui"
 
 [dependencies]
 # Database engine

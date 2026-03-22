@@ -1,0 +1,102 @@
+name: "🐛 Bug Report"
+description: Report a bug or unexpected behavior in tursotui
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below to help us investigate.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: |
+        When I press 'o' on a view in the schema explorer, the application panics with...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Open a database with `tursotui mydb.sqlite`
+        2. Navigate to the schema explorer
+        3. Select a view and press 'o'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened. Include any error messages or panic output.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux (x86_64)
+        - Linux (ARM64)
+        - macOS (Intel)
+        - macOS (Apple Silicon)
+        - Windows (x86_64)
+        - WSL2
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal Emulator
+      description: Which terminal emulator are you using?
+      placeholder: "e.g., Alacritty, kitty, Windows Terminal, iTerm2"
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: tursotui Version
+      description: Output of `tursotui --version` or commit hash.
+      placeholder: "e.g., 0.1.0 or commit abc1234"
+    validations:
+      required: true
+
+  - type: textarea
+    id: database
+    attributes:
+      label: Database Details
+      description: Any relevant details about the database (size, schema complexity, journal mode, etc.)
+      placeholder: |
+        - ~50 tables, WAL mode
+        - Contains tables with CJK column names
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: validations
+    attributes:
+      label: Validations
+      options:
+        - label: I have searched for similar issues and didn't find any duplicates
+          required: true
+        - label: I can reproduce this issue consistently
+          required: false

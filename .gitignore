@@ -1,1 +1,6 @@
 /target
+*.db
+*.db-wal
+*.db-shm
+*.csv
+testdb/
