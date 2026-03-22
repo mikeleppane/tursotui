@@ -168,3 +168,23 @@ name = "dark"    # "dark" or "light"
 ## License
 
 MIT
+
+---
+
+## Acknowledgments
+
+- Built with [Rust](https://www.rust-lang.org/)
+- TUI powered by [ratatui](https://ratatui.rs)
+- Cross-platform terminal handling by [crossterm](https://github.com/crossterm-rs/crossterm)
+
+---
+
+## Contact
+
+**Author:** Mikko Leppänen
+**Email:** mleppan23@gmail.com
+**GitHub:** [@mikeleppane](https://github.com/mikeleppane)
+
+---
+
+<p align="center">Written with ❤️ in Rust & built with Ratatui</p>
