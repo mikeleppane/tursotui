@@ -4,6 +4,7 @@ pub(crate) mod data_editor;
 pub(crate) mod db_info;
 pub(crate) mod dml_preview;
 pub(crate) mod editor;
+pub(crate) mod er_diagram;
 pub(crate) mod explain;
 pub(crate) mod export;
 pub(crate) mod help;

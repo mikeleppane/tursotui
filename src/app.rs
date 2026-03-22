@@ -62,7 +62,6 @@ pub(crate) enum BottomTab {
     Results,
     Explain,
     Detail,
-    #[allow(dead_code)] // stays placeholder until ER Diagram milestone
     ERDiagram,
 }
 

@@ -23,6 +23,7 @@ use components::Component;
 use components::data_editor::DataEditor;
 use components::db_info::DbInfoPanel;
 use components::editor::QueryEditor;
+use components::er_diagram::ERDiagram;
 use components::explain::ExplainView;
 use components::history::QueryHistoryPanel;
 use components::pragmas::PragmaDashboard;
@@ -43,7 +44,7 @@ struct Cli {
 
 /// UI panels for the application.
 /// Grouped to reduce parameter counts in render functions.
-/// Will move into `DatabaseContext` when multi-database support lands (Milestone 7).
+/// Will move into `DatabaseContext` when multi-database support lands (Milestone 8).
 struct UiPanels {
     schema: SchemaExplorer,
     editor: QueryEditor,
@@ -55,6 +56,7 @@ struct UiPanels {
     history: QueryHistoryPanel,
     export_popup: Option<components::export::ExportPopup>,
     data_editor: DataEditor,
+    er_diagram: ERDiagram,
     /// Persistent clipboard handle — kept alive for the app's lifetime so that
     /// clipboard contents survive on Linux/Wayland (arboard drops contents on Drop).
     clipboard: Option<arboard::Clipboard>,
@@ -81,6 +83,7 @@ impl UiPanels {
             history: QueryHistoryPanel::new(),
             export_popup: None,
             data_editor: DataEditor::new(),
+            er_diagram: ERDiagram::new(),
             clipboard: arboard::Clipboard::new().ok(),
         }
     }
@@ -411,7 +414,7 @@ fn route_key_to_component(
                 }
                 BottomTab::Explain => panels.explain.handle_key(key),
                 BottomTab::Detail => panels.record_detail.handle_key(key),
-                BottomTab::ERDiagram => None,
+                BottomTab::ERDiagram => panels.er_diagram.handle_key(key),
             },
         }
     } else {
@@ -610,6 +613,10 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 .count();
             if db.schema_cache.columns.len() >= expected {
                 db.schema_cache.fully_loaded = true;
+                // Build ER diagram now that all columns are loaded.
+                panels
+                    .er_diagram
+                    .build_from_schema(&db.schema_cache.entries, &db.schema_cache.columns);
             }
             // Check if this completes a deferred editability check
             let pending = app.pending_edit_table.clone();
@@ -675,6 +682,18 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 }
             } else {
                 panels.record_detail.clear();
+            }
+        }
+        app::Action::SwitchBottomTab(BottomTab::ERDiagram) => {
+            // Note: Tab key inside the ER Diagram emits this action to consume the
+            // key event (preventing global CycleFocus) while cycling focused_table
+            // internally. The dispatch here is a no-op when already loaded.
+            // Lazy build: if schema is loaded but ER diagram hasn't been built yet.
+            if !panels.er_diagram.loaded && app.active_db().schema_cache.fully_loaded {
+                let db = app.active_db();
+                panels
+                    .er_diagram
+                    .build_from_schema(&db.schema_cache.entries, &db.schema_cache.columns);
             }
         }
         app::Action::SwitchSubTab(SubTab::Admin) => {
@@ -1538,21 +1557,9 @@ fn render_bottom_panel(
                 .render(frame, bottom_content_area, is_focused, theme);
         }
         BottomTab::ERDiagram => {
-            // Placeholder for ER Diagram — coming in a future milestone
-            let block = components::panel_block("ER Diagram", is_focused, theme);
-            let inner = block.inner(bottom_content_area);
-            frame.render_widget(block, bottom_content_area);
-            if inner.height > 0 && inner.width > 0 {
-                let msg = "ER Diagram \u{2014} coming soon";
-                let msg_width = unicode_width::UnicodeWidthStr::width(msg) as u16;
-                let x = inner.x + inner.width.saturating_sub(msg_width) / 2;
-                let y = inner.y + inner.height / 2;
-                let msg_area = Rect::new(x, y, msg_width.min(inner.width), 1);
-                frame.render_widget(
-                    Paragraph::new(msg).style(Style::default().fg(theme.border)),
-                    msg_area,
-                );
-            }
+            panels
+                .er_diagram
+                .render(frame, bottom_content_area, is_focused, theme);
         }
     }
 }
