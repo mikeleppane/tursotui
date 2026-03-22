@@ -1,11 +1,12 @@
-# tursotui
+<p align="center">
+  <img src="images/logo.png" alt="tursotui logo" width="600">
+</p>
 
-A keyboard-driven terminal UI for browsing, querying, and administering Turso and SQLite databases.
-
-Built with Rust, [ratatui](https://ratatui.rs), and vim-inspired navigation.
-
-<!-- TODO: Add screenshot here -->
-<!-- ![tursotui screenshot](docs/assets/screenshot.png) -->
+<p align="center">
+  A keyboard-driven terminal UI for browsing, querying, and administering Turso and SQLite databases.
+  <br>
+  Built with Rust, <a href="https://ratatui.rs">ratatui</a>, and vim-inspired navigation.
+</p>
 
 ## Features
 
