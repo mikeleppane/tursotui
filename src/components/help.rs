@@ -1,15 +1,18 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
+use ratatui::widgets::{
+    Block, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+};
 
 use crate::theme::Theme;
 
 /// Build the help content lines with section headers and keybinding entries.
+#[allow(clippy::too_many_lines)]
 fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     let header_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(112);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(129);
 
     // --- Global ---
     lines.push(Line::from(Span::styled("Global", header_style)));
@@ -66,6 +69,30 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  y               Copy cell to clipboard"));
     lines.push(Line::from("  Y               Copy row to clipboard"));
     lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(""));
+
+    // --- Data Editor ---
+    lines.push(Line::from(Span::styled(
+        "Data Editor (when results are editable)",
+        header_style,
+    )));
+    lines.push(Line::from("  e / F2          Edit current cell"));
+    lines.push(Line::from(
+        "  Enter           Confirm cell edit / Record Detail",
+    ));
+    lines.push(Line::from("  Esc             Cancel cell edit"));
+    lines.push(Line::from("  Ctrl+N          Set cell to NULL"));
+    lines.push(Line::from("  Ctrl+Enter / F10  Confirm modal edit"));
+    lines.push(Line::from("  a               Add new row"));
+    lines.push(Line::from("  d               Toggle delete mark"));
+    lines.push(Line::from("  c               Clone row"));
+    lines.push(Line::from("  u               Revert current cell"));
+    lines.push(Line::from("  U               Revert current row"));
+    lines.push(Line::from("  Ctrl+U          Revert all changes"));
+    lines.push(Line::from("  Ctrl+D          Preview DML"));
+    lines.push(Line::from("  Ctrl+S          Submit changes"));
+    lines.push(Line::from("  f               Follow FK reference"));
+    lines.push(Line::from("  Alt+\u{2190}           FK back-navigation"));
     lines.push(Line::from(""));
 
     // --- Bottom Panel ---
@@ -137,6 +164,7 @@ pub(crate) fn render(frame: &mut Frame, scroll: usize, theme: &Theme) {
         .style(Style::default().bg(theme.bg).fg(theme.fg));
 
     let inner = block.inner(popup_area);
+    frame.render_widget(Clear, popup_area);
     frame.render_widget(block, popup_area);
 
     let lines = help_lines(theme);

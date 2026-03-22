@@ -6,7 +6,7 @@ use ratatui::prelude::*;
 use super::Component;
 use super::cell_editor::CellEditor;
 use crate::app::Action;
-use crate::db::{ColumnInfo, SchemaEntry};
+use crate::db::{ColumnInfo, ForeignKeyInfo, QueryResult, SchemaEntry};
 use crate::theme::Theme;
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,20 @@ pub(crate) enum RowMarker {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CellMarker {
     Modified,
+}
+
+/// Status snapshot consumed by the status bar render function.
+pub(crate) struct DataEditorStatus {
+    /// Whether the data editor is currently active.
+    pub active: bool,
+    /// The table being edited, if any.
+    pub table: Option<String>,
+    /// Pending change counts `(updates, inserts, deletes)`.
+    pub pending: (usize, usize, usize),
+    /// Whether a cell editor modal is open.
+    pub editing_cell: bool,
+    /// Ordered table names from the FK navigation stack.
+    pub fk_breadcrumbs: Vec<String>,
 }
 
 /// Pre-computed render state passed to `ResultsTable` before each draw call.
@@ -430,7 +444,7 @@ impl ChangeLog {
 // ---------------------------------------------------------------------------
 
 /// Wrap `name` in double-quotes, doubling any internal `"`.
-fn quote_identifier(name: &str) -> String {
+pub(crate) fn quote_identifier(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 2);
     out.push('"');
     for c in name.chars() {
@@ -444,7 +458,7 @@ fn quote_identifier(name: &str) -> String {
 }
 
 /// Wrap `value` in single-quotes, doubling any internal `'`.
-fn quote_literal(value: &str) -> String {
+pub(crate) fn quote_literal(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for c in value.chars() {
@@ -572,8 +586,20 @@ fn build_where_clause(
 // DataEditor struct
 // ---------------------------------------------------------------------------
 
-/// FK nav stack entry — full implementation in Task 13.
-pub(crate) struct FKNavEntry; // placeholder
+/// Full FK nav stack entry — holds all state needed to restore the previous
+/// table when navigating back.
+pub(crate) struct FKNavEntry {
+    pub table: String,
+    pub result: QueryResult,
+    pub selected_row: usize,
+    pub selected_col: usize,
+    pub col_offset: usize,
+    pub changes: ChangeLog,
+    pub pending_inserts: Vec<Vec<Option<String>>>,
+    pub activating_query: String,
+    pub columns: Vec<ColumnInfo>,
+    pub pk_columns: Vec<usize>,
+}
 
 /// The data editor state machine. Activated when a query targets a single
 /// editable table with a known primary key. Deactivated on any non-editable
@@ -592,6 +618,8 @@ pub(crate) struct DataEditor {
     /// Original row snapshot stored when cell editor opens — passed to `ChangeLog` on confirm.
     editing_original_row: Vec<Option<String>>,
     active: bool,
+    /// FK columns computed from loaded FK info — indices into `self.columns`.
+    fk_column_set: HashSet<usize>,
 }
 
 impl DataEditor {
@@ -609,6 +637,7 @@ impl DataEditor {
             preview_scroll: 0,
             editing_original_row: Vec::new(),
             active: false,
+            fk_column_set: HashSet::new(),
         }
     }
 
@@ -622,6 +651,7 @@ impl DataEditor {
         pk_columns: Vec<usize>,
         columns: Vec<ColumnInfo>,
         query: String,
+        _result: QueryResult, // cached on ResultsTable::last_result, not here
     ) {
         self.source_table = Some(table);
         self.pk_columns = pk_columns;
@@ -634,17 +664,18 @@ impl DataEditor {
         self.preview_dml.clear();
         self.preview_scroll = 0;
         self.active = true;
+        self.fk_column_set.clear();
     }
 
     /// Activate after FK navigation — preserves the FK nav stack so
     /// back-navigation can restore the prior table's state.
-    #[allow(dead_code)] // Used when Task 13 (FK navigation) lands
     pub(crate) fn activate_for_fk_nav(
         &mut self,
         table: String,
         pk_columns: Vec<usize>,
         columns: Vec<ColumnInfo>,
         query: String,
+        _result: QueryResult, // cached on ResultsTable::last_result, not here
     ) {
         self.source_table = Some(table);
         self.pk_columns = pk_columns;
@@ -657,6 +688,7 @@ impl DataEditor {
         self.preview_dml.clear();
         self.preview_scroll = 0;
         self.active = true;
+        self.fk_column_set.clear();
     }
 
     pub(crate) fn deactivate(&mut self) {
@@ -671,6 +703,7 @@ impl DataEditor {
         self.preview_dml.clear();
         self.preview_scroll = 0;
         self.active = false;
+        self.fk_column_set.clear();
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -685,7 +718,7 @@ impl DataEditor {
         &self.pk_columns
     }
 
-    #[allow(dead_code)] // used by status bar in later tasks
+    #[allow(dead_code)] // called internally via status(); kept for direct use in tests
     pub(crate) fn pending_count(&self) -> (usize, usize, usize) {
         self.changes.pending_count()
     }
@@ -695,11 +728,10 @@ impl DataEditor {
         self.fk_nav_stack.len()
     }
 
-    /// Returns table names from FK nav stack — placeholder for Task 13.
-    #[allow(dead_code)] // full implementation in Task 13
-    #[allow(clippy::unused_self)]
+    /// Returns table names from FK nav stack entries.
+    #[allow(dead_code)] // called internally via status(); kept for direct use in tests
     pub(crate) fn fk_breadcrumbs(&self) -> Vec<&str> {
-        Vec::new()
+        self.fk_nav_stack.iter().map(|e| e.table.as_str()).collect()
     }
 
     pub(crate) fn columns(&self) -> &[ColumnInfo] {
@@ -725,6 +757,17 @@ impl DataEditor {
     /// Access the active cell editor (for rendering in main.rs).
     pub(crate) fn cell_editor(&self) -> Option<&CellEditor> {
         self.cell_editor.as_ref()
+    }
+
+    /// Snapshot of data editor state for the status bar.
+    pub(crate) fn status(&self) -> DataEditorStatus {
+        DataEditorStatus {
+            active: self.active,
+            table: self.source_table.clone(),
+            pending: self.changes.pending_count(),
+            editing_cell: self.cell_editor.is_some(),
+            fk_breadcrumbs: self.fk_nav_stack.iter().map(|e| e.table.clone()).collect(),
+        }
     }
 
     // ------------------------------------------------------------------
@@ -770,10 +813,68 @@ impl DataEditor {
         &self.pending_inserts
     }
 
-    /// FK columns — empty until Task 13.
-    #[allow(clippy::unused_self)]
+    /// FK columns — column indices that have a foreign key relationship.
     pub(crate) fn fk_columns(&self) -> HashSet<usize> {
-        HashSet::new()
+        self.fk_column_set.clone()
+    }
+
+    /// Update `fk_column_set` from a slice of `ForeignKeyInfo` for the active table.
+    /// Maps `from_column` names to column indices using `self.columns`.
+    pub(crate) fn update_fk_columns(&mut self, fk_info: &[ForeignKeyInfo]) {
+        self.fk_column_set.clear();
+        for fk in fk_info {
+            if let Some(idx) = self.columns.iter().position(|c| c.name == fk.from_column) {
+                self.fk_column_set.insert(idx);
+            }
+        }
+    }
+
+    /// Push the current editor state onto the FK nav stack before navigating to a linked table.
+    /// Drops the oldest entry if the stack already has 10 entries.
+    pub(crate) fn push_fk_state(
+        &mut self,
+        result: QueryResult,
+        selected_row: usize,
+        selected_col: usize,
+        col_offset: usize,
+    ) {
+        if self.fk_nav_stack.len() >= 10 {
+            self.fk_nav_stack.remove(0); // drop oldest
+        }
+        self.fk_nav_stack.push(FKNavEntry {
+            table: self.source_table.clone().unwrap_or_default(),
+            result,
+            selected_row,
+            selected_col,
+            col_offset,
+            changes: self.changes.clone(),
+            pending_inserts: self.pending_inserts.clone(),
+            activating_query: self.activating_query.clone(),
+            columns: self.columns.clone(),
+            pk_columns: self.pk_columns.clone(),
+        });
+    }
+
+    /// Pop the top FK nav entry to restore the previous table's state.
+    pub(crate) fn pop_fk_state(&mut self) -> Option<FKNavEntry> {
+        self.fk_nav_stack.pop()
+    }
+
+    /// Restore editor state from a popped FK nav entry.
+    pub(crate) fn restore_from_fk_entry(&mut self, entry: FKNavEntry) {
+        self.source_table = Some(entry.table);
+        self.activating_query = entry.activating_query;
+        self.changes = entry.changes;
+        self.pending_inserts = entry.pending_inserts;
+        self.columns = entry.columns;
+        self.pk_columns = entry.pk_columns;
+        self.cell_editor = None;
+        self.preview_dml.clear();
+        self.preview_scroll = 0;
+        self.editing_original_row.clear();
+        self.active = true;
+        self.fk_column_set.clear();
+        // fk_nav_stack is NOT touched — it was already popped
     }
 
     // ------------------------------------------------------------------
@@ -947,6 +1048,14 @@ impl Component for DataEditor {
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::RevertAll),
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ShowDmlPreview(false)),
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(Action::ShowDmlPreview(true)),
+            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::FollowFK),
+            (KeyModifiers::ALT, KeyCode::Left) => {
+                if self.fk_nav_stack.is_empty() {
+                    None // fall through to ResultsTable
+                } else {
+                    Some(Action::FKNavigateBack)
+                }
+            }
             _ => None, // fall through to ResultsTable
         }
     }
@@ -1667,6 +1776,21 @@ mod tests {
     // DataEditor visual markers (Task 6)
     // -------------------------------------------------------------------------
 
+    fn make_empty_result() -> QueryResult {
+        use crate::db::QueryKind;
+        use std::time::Duration;
+        QueryResult {
+            columns: vec![],
+            rows: vec![],
+            execution_time: Duration::ZERO,
+            truncated: false,
+            sql: String::new(),
+            rows_affected: 0,
+            query_kind: QueryKind::Select,
+            source_table: None,
+        }
+    }
+
     fn make_data_editor_activated() -> DataEditor {
         let columns = vec![
             ColumnInfo {
@@ -1690,6 +1814,7 @@ mod tests {
             vec![0],
             columns,
             "SELECT * FROM users".to_string(),
+            make_empty_result(),
         );
         de
     }
@@ -1740,5 +1865,433 @@ mod tests {
         let pk = some_pk("99");
         assert_eq!(de.row_marker(&pk), None);
         assert_eq!(de.cell_marker(&pk, 0), None);
+    }
+
+    // -------------------------------------------------------------------------
+    // FK navigation stack tests (Task 13)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_push_pop_fk_stack() {
+        let mut de = make_data_editor_activated();
+        let result = make_empty_result();
+        de.push_fk_state(result, 2, 1, 0);
+
+        assert_eq!(de.fk_depth(), 1);
+        let entry = de.pop_fk_state().unwrap();
+        assert_eq!(entry.table, "users");
+        assert_eq!(entry.activating_query, "SELECT * FROM users");
+        assert_eq!(entry.selected_row, 2);
+        assert_eq!(entry.selected_col, 1);
+        assert_eq!(entry.col_offset, 0);
+        assert_eq!(de.fk_depth(), 0);
+    }
+
+    #[test]
+    fn test_fk_stack_max_10() {
+        let mut de = make_data_editor_activated();
+        // Push 11 entries
+        for i in 0..11u32 {
+            let result = make_empty_result();
+            de.push_fk_state(result, i as usize, 0, 0);
+        }
+        // Only 10 remain — the oldest was dropped
+        assert_eq!(de.fk_depth(), 10);
+    }
+
+    #[test]
+    fn test_fk_stack_preserves_changes() {
+        let mut de = make_data_editor_activated();
+        // Edit a cell
+        let pk_val = some_pk("1");
+        let orig = some_row("1", "Alice");
+        de.changes
+            .log_cell_edit(&pk_val, 1, Some("Alicia".to_string()), &orig);
+        assert_eq!(de.changes.pending_count(), (1, 0, 0));
+
+        // Push state onto the stack
+        let result = make_empty_result();
+        de.push_fk_state(result, 0, 0, 0);
+
+        // Pop back — changes should be restored
+        let entry = de.pop_fk_state().unwrap();
+        de.restore_from_fk_entry(entry);
+        assert_eq!(de.changes.pending_count(), (1, 0, 0));
+    }
+
+    #[test]
+    fn test_fk_breadcrumbs() {
+        let mut de = make_data_editor_activated();
+
+        // Push "users" state
+        let result1 = make_empty_result();
+        de.push_fk_state(result1, 0, 0, 0);
+
+        // Simulate navigating to "departments"
+        let dept_cols = vec![ColumnInfo {
+            name: "dept_id".to_string(),
+            col_type: "INTEGER".to_string(),
+            notnull: true,
+            default_value: None,
+            pk: true,
+        }];
+        de.activate_for_fk_nav(
+            "departments".to_string(),
+            vec![0],
+            dept_cols,
+            "SELECT * FROM departments WHERE id = '1'".to_string(),
+            make_empty_result(),
+        );
+
+        // Push "departments" state
+        let result2 = make_empty_result();
+        de.push_fk_state(result2, 0, 0, 0);
+
+        let crumbs = de.fk_breadcrumbs();
+        assert_eq!(crumbs, vec!["users", "departments"]);
+    }
+
+    #[test]
+    fn test_update_fk_columns() {
+        let mut de = make_data_editor_activated();
+        // "users" table has columns: id (0), name (1)
+        // Simulate FK on the "name" column (unusual but for test)
+        let fk_info = vec![ForeignKeyInfo {
+            from_column: "name".to_string(),
+            to_table: "other".to_string(),
+            to_column: "col".to_string(),
+        }];
+        de.update_fk_columns(&fk_info);
+        let fk_cols = de.fk_columns();
+        assert!(fk_cols.contains(&1)); // "name" is at index 1
+        assert!(!fk_cols.contains(&0)); // "id" is not an FK
+    }
+
+    #[test]
+    fn test_update_fk_columns_unknown_name() {
+        let mut de = make_data_editor_activated();
+        // FK references a column not in the schema — should be ignored
+        let fk_info = vec![ForeignKeyInfo {
+            from_column: "nonexistent".to_string(),
+            to_table: "other".to_string(),
+            to_column: "col".to_string(),
+        }];
+        de.update_fk_columns(&fk_info);
+        assert!(de.fk_columns().is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Integration tests — multi-step workflows
+    // -------------------------------------------------------------------------
+
+    /// Build a 3-column `DataEditor`: id (PK), name, email.
+    fn make_editor_3col() -> DataEditor {
+        use crate::db::QueryKind;
+        use std::time::Duration;
+        let columns = vec![
+            ColumnInfo {
+                name: "id".to_string(),
+                col_type: "INTEGER".to_string(),
+                notnull: true,
+                default_value: None,
+                pk: true,
+            },
+            ColumnInfo {
+                name: "name".to_string(),
+                col_type: "TEXT".to_string(),
+                notnull: false,
+                default_value: None,
+                pk: false,
+            },
+            ColumnInfo {
+                name: "email".to_string(),
+                col_type: "TEXT".to_string(),
+                notnull: false,
+                default_value: None,
+                pk: false,
+            },
+        ];
+        let result = QueryResult {
+            columns: vec![],
+            rows: vec![],
+            execution_time: Duration::ZERO,
+            truncated: false,
+            sql: String::new(),
+            rows_affected: 0,
+            query_kind: QueryKind::Select,
+            source_table: None,
+        };
+        let mut de = DataEditor::new();
+        de.activate(
+            "users".to_string(),
+            vec![0],
+            columns,
+            "SELECT * FROM users".to_string(),
+            result,
+        );
+        de
+    }
+
+    #[test]
+    fn test_full_edit_workflow() {
+        let mut de = make_editor_3col();
+
+        // Open cell editor for row 0, col 1 (name "Alice"), pk = ["1"]
+        let pk_val = vec![Some("1".to_string())];
+        let orig = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("alice@example.com".to_string()),
+        ];
+        de.start_cell_edit(pk_val, 0, 1, Some("Alice"), false, orig);
+
+        // Confirm the edit with a new value
+        de.confirm_edit(Some("Bob".to_string()));
+
+        // ChangeLog should have exactly 1 Update
+        let (updates, inserts, deletes) = de.changes.pending_count();
+        assert_eq!((updates, inserts, deletes), (1, 0, 0));
+
+        // Generate DML and verify UPDATE statement
+        let pk_cols = de.pk_columns().to_vec();
+        let stmts = generate_dml("users", de.columns(), &pk_cols, de.changes());
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            r#"UPDATE "users" SET "name" = 'Bob' WHERE "id" = '1'"#
+        );
+    }
+
+    #[test]
+    fn test_edit_then_delete_coalescing() {
+        let mut de = make_editor_3col();
+
+        let pk_val = vec![Some("5".to_string())];
+        let orig = vec![
+            Some("5".to_string()),
+            Some("Carol".to_string()),
+            Some("carol@example.com".to_string()),
+        ];
+
+        // Edit a cell — creates an Update
+        de.start_cell_edit(pk_val.clone(), 0, 1, Some("Carol"), false, orig.clone());
+        de.confirm_edit(Some("Carrie".to_string()));
+        assert_eq!(de.changes.pending_count(), (1, 0, 0));
+
+        // Toggle delete on the same row — Update should be replaced by Delete
+        de.toggle_delete_row(&pk_val, &orig);
+        assert_eq!(de.changes.pending_count(), (0, 0, 1));
+
+        // DML should produce only 1 DELETE (no UPDATE)
+        let pk_cols = de.pk_columns().to_vec();
+        let stmts = generate_dml("users", de.columns(), &pk_cols, de.changes());
+        assert_eq!(stmts.len(), 1);
+        assert!(
+            stmts[0].starts_with("DELETE"),
+            "expected DELETE, got: {}",
+            stmts[0]
+        );
+    }
+
+    #[test]
+    fn test_insert_then_delete_cancellation() {
+        let mut de = make_editor_3col();
+
+        // Add a row — creates Insert + pending_insert
+        de.add_row();
+        assert_eq!(de.changes.pending_count(), (0, 1, 0));
+        assert_eq!(de.pending_inserts().len(), 1);
+
+        // Remove the pending insert (simulates deleting the uncommitted row)
+        de.remove_pending_insert(0);
+
+        // ChangeLog should be empty, pending_inserts should be empty
+        assert!(
+            de.changes.is_empty(),
+            "ChangeLog should be empty after cancellation"
+        );
+        assert!(
+            de.pending_inserts().is_empty(),
+            "pending_inserts should be empty"
+        );
+    }
+
+    #[test]
+    fn test_add_row_creates_null_filled_insert() {
+        let mut de = make_editor_3col();
+
+        de.add_row();
+
+        // pending_inserts should have one row with 3 None values
+        assert_eq!(de.pending_inserts().len(), 1);
+        let inserted = &de.pending_inserts()[0];
+        assert_eq!(inserted.len(), 3);
+        assert!(
+            inserted.iter().all(Option::is_none),
+            "all values should be None"
+        );
+
+        // Generate DML — should be INSERT with NULLs
+        let pk_cols = de.pk_columns().to_vec();
+        let stmts = generate_dml("users", de.columns(), &pk_cols, de.changes());
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            r#"INSERT INTO "users" ("id", "name", "email") VALUES (NULL, NULL, NULL)"#
+        );
+    }
+
+    #[test]
+    fn test_clone_row() {
+        let mut de = make_editor_3col();
+
+        let values = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("alice@example.com".to_string()),
+        ];
+        de.clone_row(values.clone());
+
+        // pending_inserts should have the cloned values
+        assert_eq!(de.pending_inserts().len(), 1);
+        assert_eq!(de.pending_inserts()[0], values);
+
+        // Generate DML — should be INSERT with those values
+        let pk_cols = de.pk_columns().to_vec();
+        let stmts = generate_dml("users", de.columns(), &pk_cols, de.changes());
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            r#"INSERT INTO "users" ("id", "name", "email") VALUES ('1', 'Alice', 'alice@example.com')"#
+        );
+    }
+
+    #[test]
+    fn test_revert_all_clears_everything() {
+        let mut de = make_editor_3col();
+
+        let pk1 = vec![Some("1".to_string())];
+        let orig1 = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("alice@example.com".to_string()),
+        ];
+        let pk2 = vec![Some("2".to_string())];
+        let orig2 = vec![
+            Some("2".to_string()),
+            Some("Bob".to_string()),
+            Some("bob@example.com".to_string()),
+        ];
+
+        // Cell edit
+        de.start_cell_edit(pk1, 0, 1, Some("Alice"), false, orig1);
+        de.confirm_edit(Some("Alicia".to_string()));
+
+        // Add a row
+        de.add_row();
+
+        // Delete a row
+        de.toggle_delete_row(&pk2, &orig2);
+
+        assert!(!de.changes.is_empty());
+        assert!(!de.pending_inserts().is_empty());
+
+        // Revert everything
+        de.revert_all_edits();
+
+        assert!(
+            de.changes.is_empty(),
+            "ChangeLog should be empty after revert_all"
+        );
+        assert!(
+            de.pending_inserts().is_empty(),
+            "pending_inserts should be empty after revert_all"
+        );
+    }
+
+    #[test]
+    fn test_fk_nav_preserves_edits() {
+        use crate::db::QueryKind;
+        use std::time::Duration;
+
+        let mut de = make_editor_3col();
+
+        // Edit a cell
+        let pk_val = vec![Some("1".to_string())];
+        let orig = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("alice@example.com".to_string()),
+        ];
+        de.start_cell_edit(pk_val, 0, 1, Some("Alice"), false, orig);
+        de.confirm_edit(Some("Bob".to_string()));
+        assert_eq!(de.changes.pending_count(), (1, 0, 0));
+
+        // Push current state onto the FK nav stack
+        let nav_result = QueryResult {
+            columns: vec![],
+            rows: vec![],
+            execution_time: Duration::ZERO,
+            truncated: false,
+            sql: String::new(),
+            rows_affected: 0,
+            query_kind: QueryKind::Select,
+            source_table: None,
+        };
+        de.push_fk_state(nav_result, 0, 1, 0);
+
+        // FK stack should have 1 entry with the changes preserved
+        assert_eq!(de.fk_depth(), 1);
+
+        // Pop and restore
+        let entry = de.pop_fk_state().unwrap();
+        assert_eq!(entry.changes.pending_count(), (1, 0, 0));
+        de.restore_from_fk_entry(entry);
+
+        // After restore, changes should be back
+        assert_eq!(de.changes.pending_count(), (1, 0, 0));
+    }
+
+    #[test]
+    fn test_multiple_edits_same_row_merge() {
+        let mut de = make_editor_3col();
+
+        let pk_val = vec![Some("1".to_string())];
+        let orig = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("alice@example.com".to_string()),
+        ];
+
+        // Edit col 1 (name)
+        de.start_cell_edit(pk_val.clone(), 0, 1, Some("Alice"), false, orig.clone());
+        de.confirm_edit(Some("Bob".to_string()));
+
+        // Edit col 2 (email) of the same row — should merge into the existing Update
+        de.start_cell_edit(pk_val, 0, 2, Some("alice@example.com"), false, orig);
+        de.confirm_edit(Some("bob@example.com".to_string()));
+
+        // ChangeLog should have exactly 1 Update with both columns in modified
+        let (updates, inserts, deletes) = de.changes.pending_count();
+        assert_eq!((updates, inserts, deletes), (1, 0, 0));
+
+        let edits = de.changes.edits();
+        assert_eq!(edits.len(), 1);
+        if let RowEdit::Update { modified, .. } = &edits[0] {
+            assert_eq!(modified.len(), 2, "both columns should be in modified map");
+            assert_eq!(modified.get(&1), Some(&Some("Bob".to_string())));
+            assert_eq!(modified.get(&2), Some(&Some("bob@example.com".to_string())));
+        } else {
+            panic!("expected Update");
+        }
+
+        // Generate DML — should be a single UPDATE with both SET clauses (ordered by col index)
+        let pk_cols = de.pk_columns().to_vec();
+        let stmts = generate_dml("users", de.columns(), &pk_cols, de.changes());
+        assert_eq!(stmts.len(), 1);
+        assert_eq!(
+            stmts[0],
+            r#"UPDATE "users" SET "name" = 'Bob', "email" = 'bob@example.com' WHERE "id" = '1'"#
+        );
     }
 }

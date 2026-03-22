@@ -301,6 +301,10 @@ pub(crate) struct AppState {
     pub history_db: Option<crate::history::HistoryDb>,
     #[allow(dead_code)]
     pub pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
+    /// Set to true by `FollowFK` before dispatching `ExecuteQuery`,
+    /// cleared by `QueryCompleted`. Used to distinguish FK navigation
+    /// activations (preserve stack) from manual queries (clear stack).
+    pub pending_fk_activation: bool,
 }
 
 impl AppState {
@@ -324,6 +328,7 @@ impl AppState {
             help_scroll: 0,
             history_db,
             pending_edit_table: None,
+            pending_fk_activation: false,
         }
     }
 

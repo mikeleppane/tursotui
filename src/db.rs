@@ -47,11 +47,8 @@ pub(crate) struct QueryResult {
 /// Foreign key relationship from one column to another table/column.
 #[derive(Debug, Clone)]
 pub(crate) struct ForeignKeyInfo {
-    #[allow(dead_code)]
     pub from_column: String,
-    #[allow(dead_code)]
     pub to_table: String,
-    #[allow(dead_code)]
     pub to_column: String,
 }
 

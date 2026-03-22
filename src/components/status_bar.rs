@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use ratatui::prelude::*;
@@ -5,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{AppState, BottomTab, PanelId, SubTab};
+use crate::components::data_editor::DataEditorStatus;
 use crate::db::QueryKind;
 use crate::theme::Theme;
 
@@ -114,6 +116,7 @@ pub(crate) fn render(
     selected_row: Option<usize>,
     total_rows: usize,
     theme: &Theme,
+    de_status: &DataEditorStatus,
 ) {
     // Transient messages take over the entire bar for TRANSIENT_TTL
     if let Some(ref tm) = app.transient_message
@@ -213,7 +216,7 @@ pub(crate) fn render(
     };
 
     // Right: row position when results focused, otherwise global hints
-    let right = if db.focus == PanelId::Bottom && total_rows > 0 {
+    let base_right = if db.focus == PanelId::Bottom && total_rows > 0 {
         if let Some(sel) = selected_row {
             format!(
                 "Row {} of {}  {global_hints} ",
@@ -227,11 +230,138 @@ pub(crate) fn render(
         format!("{global_hints} ")
     };
 
-    // Compose the three sections into a single line
+    // Build plain-text data editor status segment for layout width calculation.
+    // It is prepended to base_right so edit info appears left of the global hints.
+    let edit_plain = build_edit_status_plain(de_status);
+    let right = format!("{edit_plain}{base_right}");
+
+    // Compose plain bar for exact-width layout
     let bar = compose_status_line(&left, &center, &right, width);
 
-    let status = Paragraph::new(bar).style(theme.status_bar_style);
-    frame.render_widget(status, area);
+    if edit_plain.is_empty() {
+        // No edit info — render plain
+        let status = Paragraph::new(bar).style(theme.status_bar_style);
+        frame.render_widget(status, area);
+    } else {
+        // Re-build as a styled Line, applying accent/dim to edit-info segments
+        let styled_line = build_styled_line(bar, de_status, &edit_plain, theme);
+        let status = Paragraph::new(styled_line).style(theme.status_bar_style);
+        frame.render_widget(status, area);
+    }
+}
+
+/// Build the plain-text edit-status segment (used for layout width calculation).
+///
+/// Returns an empty string when the data editor is inactive.
+fn build_edit_status_plain(de: &DataEditorStatus) -> String {
+    if !de.active {
+        return String::new();
+    }
+
+    let mut s = String::new();
+
+    // FK breadcrumb trail: "users → departments → divisions | "
+    if !de.fk_breadcrumbs.is_empty() {
+        s.push_str(&de.fk_breadcrumbs.join(" \u{2192} "));
+        s.push_str(" | ");
+    }
+
+    // Editable table indicator
+    match &de.table {
+        Some(table) => write!(s, "[editable: {table}]").unwrap(),
+        None => s.push_str("[editable]"),
+    }
+
+    // Pending changes
+    let (upd, ins, del) = de.pending;
+    let total = upd + ins + del;
+    if total > 0 {
+        write!(s, "  {total} changes ({upd} upd, {ins} ins, {del} del)").unwrap();
+    }
+
+    // Cell editor hint
+    if de.editing_cell {
+        s.push_str("  Ctrl+N=NULL  Enter=confirm");
+    }
+
+    // Trailing gap before base_right
+    s.push_str("  ");
+    s
+}
+
+/// Build a styled `Line` from the composed plain bar.
+///
+/// The `edit_plain` substring within `bar` is decomposed into styled spans:
+/// - FK breadcrumbs: dimmed
+/// - table name inside `[editable: …]`: accent + bold
+/// - cell-editor hint: dimmed
+///
+/// Everything else inherits the base `status_bar_style` from the caller.
+#[allow(clippy::doc_lazy_continuation)]
+fn build_styled_line(
+    bar: String,
+    de: &DataEditorStatus,
+    edit_plain: &str,
+    theme: &Theme,
+) -> Line<'static> {
+    // Locate edit_plain within bar (it is always present when edit_plain is non-empty)
+    let Some(edit_start) = bar.find(edit_plain) else {
+        return Line::from(bar);
+    };
+
+    let before = bar[..edit_start].to_owned();
+    let after = bar[edit_start + edit_plain.len()..].to_owned();
+
+    let dim_style = Style::default().add_modifier(Modifier::DIM);
+    let accent_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    if !before.is_empty() {
+        spans.push(Span::raw(before));
+    }
+
+    // FK breadcrumbs
+    if !de.fk_breadcrumbs.is_empty() {
+        let crumb = de.fk_breadcrumbs.join(" \u{2192} ");
+        spans.push(Span::styled(crumb, dim_style));
+        spans.push(Span::raw(" | "));
+    }
+
+    // [editable: <table>]
+    match &de.table {
+        Some(table) => {
+            spans.push(Span::raw("[editable: "));
+            spans.push(Span::styled(table.clone(), accent_style));
+            spans.push(Span::raw("]"));
+        }
+        None => spans.push(Span::raw("[editable]")),
+    }
+
+    // Pending changes (plain)
+    let (upd, ins, del) = de.pending;
+    let total = upd + ins + del;
+    if total > 0 {
+        spans.push(Span::raw(format!(
+            "  {total} changes ({upd} upd, {ins} ins, {del} del)"
+        )));
+    }
+
+    // Cell editor hint (dimmed)
+    if de.editing_cell {
+        spans.push(Span::styled("  Ctrl+N=NULL  Enter=confirm", dim_style));
+    }
+
+    // Trailing gap
+    spans.push(Span::raw("  "));
+
+    if !after.is_empty() {
+        spans.push(Span::raw(after));
+    }
+
+    Line::from(spans)
 }
 
 /// Compose left, center, and right sections into a fixed-width line.

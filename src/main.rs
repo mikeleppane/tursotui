@@ -483,6 +483,8 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             // Editability detection: determine if result targets a single editable table.
             // Clear any pending deferred check — only the latest query matters.
             app.pending_edit_table = None;
+            let is_fk_activation = app.pending_fk_activation;
+            app.pending_fk_activation = false;
             let source_table = if result.source_table.is_some() {
                 result.source_table.clone() // Tier 1: hint from ExecuteQuery
             } else {
@@ -503,12 +505,29 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                         });
                     } else {
                         let cols_cloned = cols.clone();
-                        panels.data_editor.activate(
-                            table.clone(),
-                            pk_cols,
-                            cols_cloned,
-                            result.sql.clone(),
-                        );
+                        // Use activate_for_fk_nav when this QueryCompleted is from
+                        // an FK navigation follow (signaled by pending_fk_activation flag).
+                        if is_fk_activation {
+                            panels.data_editor.activate_for_fk_nav(
+                                table.clone(),
+                                pk_cols,
+                                cols_cloned,
+                                result.sql.clone(),
+                                result.clone(),
+                            );
+                        } else {
+                            panels.data_editor.activate(
+                                table.clone(),
+                                pk_cols,
+                                cols_cloned,
+                                result.sql.clone(),
+                                result.clone(),
+                            );
+                        }
+                        // Trigger FK loading if not yet cached
+                        if !app.active_db().schema_cache.fk_info.contains_key(table) {
+                            app.active_db_mut().handle.load_foreign_keys(table.clone());
+                        }
                     }
                 } else {
                     // Columns not cached — defer activation until ColumnsLoaded arrives.
@@ -584,12 +603,37 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 if pk_cols.is_empty() {
                     panels.data_editor.deactivate();
                 } else {
+                    // Use the cached result from ResultsTable (set when QueryCompleted ran)
+                    let cached = panels.results.current_result().cloned().unwrap_or_else(|| {
+                        db::QueryResult {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time: std::time::Duration::ZERO,
+                            truncated: false,
+                            sql: activating_sql.clone(),
+                            rows_affected: 0,
+                            query_kind: db::QueryKind::Select,
+                            source_table: Some(table_name.clone()),
+                        }
+                    });
                     panels.data_editor.activate(
                         table_name.clone(),
                         pk_cols,
                         columns.clone(),
                         activating_sql.clone(),
+                        cached,
                     );
+                    // Trigger FK loading if not yet cached
+                    if !app
+                        .active_db()
+                        .schema_cache
+                        .fk_info
+                        .contains_key(table_name)
+                    {
+                        app.active_db_mut()
+                            .handle
+                            .load_foreign_keys(table_name.clone());
+                    }
                 }
                 app.pending_edit_table = None;
             }
@@ -1081,6 +1125,125 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             });
             // Changes remain staged — user can inspect and retry
         }
+        app::Action::FKLoaded(table, fks) => {
+            // AppState::update() already stored the FK info in schema_cache.fk_info.
+            // If DataEditor is active and targets this table, update its fk_columns.
+            if panels.data_editor.is_active()
+                && panels.data_editor.source_table() == Some(table.as_str())
+            {
+                panels.data_editor.update_fk_columns(fks);
+            }
+        }
+        app::Action::FollowFK => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let col = panels.results.selected_col_index();
+            let col_name = panels
+                .data_editor
+                .columns()
+                .get(col)
+                .map(|c| c.name.clone());
+            let Some(col_name) = col_name else {
+                return;
+            };
+            // Look up FK info for this column
+            let source_table = panels
+                .data_editor
+                .source_table()
+                .map(str::to_string)
+                .unwrap_or_default();
+            let fk = app
+                .active_db()
+                .schema_cache
+                .fk_info
+                .get(&source_table)
+                .and_then(|fks| fks.iter().find(|fk| fk.from_column == col_name))
+                .cloned();
+            let Some(fk) = fk else {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "Not an FK column".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                return;
+            };
+            // Get cell value — reject NULL
+            let cell_val = panels
+                .results
+                .row_data(row_idx)
+                .and_then(|(_, row)| row.get(col).cloned())
+                .flatten();
+            let Some(cell_val) = cell_val else {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "NULL — cannot follow FK".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                return;
+            };
+            // Cache cursor state and current result before navigating
+            let col_offset = panels.results.col_offset();
+            let cached =
+                panels
+                    .results
+                    .current_result()
+                    .cloned()
+                    .unwrap_or_else(|| db::QueryResult {
+                        columns: vec![],
+                        rows: vec![],
+                        execution_time: std::time::Duration::ZERO,
+                        truncated: false,
+                        sql: String::new(),
+                        rows_affected: 0,
+                        query_kind: db::QueryKind::Select,
+                        source_table: None,
+                    });
+            panels
+                .data_editor
+                .push_fk_state(cached, row_idx, col, col_offset);
+            // Generate and dispatch the FK query
+            let target_table = fk.to_table.clone();
+            let target_col = fk.to_column;
+            let quoted_val = components::data_editor::quote_literal(&cell_val);
+            let quoted_table = components::data_editor::quote_identifier(&target_table);
+            let quoted_col = components::data_editor::quote_identifier(&target_col);
+            let sql = format!("SELECT * FROM {quoted_table} WHERE {quoted_col} = {quoted_val}");
+            // Signal that the next QueryCompleted is from FK navigation
+            // (so activate_for_fk_nav is used instead of activate)
+            app.pending_fk_activation = true;
+            let execute_action = app::Action::ExecuteQuery(
+                sql,
+                app::ExecutionSource::FullBuffer,
+                Some(target_table),
+            );
+            app.update(&execute_action);
+            dispatch_action_to_components(&execute_action, app, panels);
+        }
+        app::Action::FKNavigateBack => {
+            let Some(entry) = panels.data_editor.pop_fk_state() else {
+                return;
+            };
+            // Restore ResultsTable from the cached result
+            panels.results.set_results(&entry.result);
+            panels
+                .results
+                .restore_cursor(entry.selected_row, entry.selected_col, entry.col_offset);
+            // Restore DataEditor state
+            panels.data_editor.restore_from_fk_entry(entry);
+            // Update fk_columns if FK info is cached for the restored table
+            let table = panels
+                .data_editor
+                .source_table()
+                .map(str::to_string)
+                .unwrap_or_default();
+            if let Some(fks) = app.active_db().schema_cache.fk_info.get(&table).cloned() {
+                panels.data_editor.update_fk_columns(&fks);
+            }
+        }
         _ => {}
     }
 }
@@ -1160,6 +1323,7 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
     }
 
     // Status bar
+    let de_status = panels.data_editor.status();
     components::status_bar::render(
         frame,
         status_area,
@@ -1167,6 +1331,7 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         panels.results.selected_row(),
         panels.results.row_count(),
         theme,
+        &de_status,
     );
 
     // JSON overlay (renders on top of everything except help)

@@ -51,6 +51,8 @@ pub(crate) struct ResultsTable {
     null_display: String,
     /// Edit state injected by `DataEditor` before each render call.
     edit_state: Option<EditRenderState>,
+    /// Cached raw `QueryResult` from the last `set_results` call — used for FK back-navigation.
+    last_result: Option<QueryResult>,
 }
 
 impl ResultsTable {
@@ -69,6 +71,7 @@ impl ResultsTable {
             max_col_width: DEFAULT_MAX_COL_WIDTH,
             null_display: "NULL".to_string(),
             edit_state: None,
+            last_result: None,
         }
     }
 
@@ -80,9 +83,15 @@ impl ResultsTable {
         }
     }
 
+    /// Returns the raw `QueryResult` from the last `set_results` call, if any.
+    pub(crate) fn current_result(&self) -> Option<&QueryResult> {
+        self.last_result.as_ref()
+    }
+
     /// Populate the table from a `QueryResult`, converting `Value`s to display strings.
     /// Selects the first row automatically.
     pub(crate) fn set_results(&mut self, result: &QueryResult) {
+        self.last_result = Some(result.clone());
         self.columns.clone_from(&result.columns);
         self.rows = result
             .rows
@@ -126,6 +135,11 @@ impl ResultsTable {
 
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.state.selected()
+    }
+
+    /// Current horizontal scroll offset (first visible column index).
+    pub(crate) fn col_offset(&self) -> usize {
+        self.col_offset
     }
 
     /// Inject edit render state before each draw call.
