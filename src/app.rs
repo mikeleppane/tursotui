@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::config::{AppConfig, ThemeMode};
@@ -5,6 +6,32 @@ use crate::db::{
     ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryKind, QueryResult, SchemaEntry,
 };
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
+
+/// In-memory cache of schema metadata for autocomplete.
+/// Populated eagerly after schema loads — all columns for all tables/views.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SchemaCache {
+    /// All table and view names from `sqlite_schema`.
+    pub(crate) entries: Vec<SchemaEntry>,
+    /// Column info keyed by table/view name. Populated via PRAGMA `table_info`.
+    pub(crate) columns: HashMap<String, Vec<ColumnInfo>>,
+    /// True once all tables have had their columns loaded.
+    pub(crate) fully_loaded: bool,
+}
+
+impl SchemaCache {
+    /// Case-insensitive column lookup. Tries exact match first, then
+    /// falls back to a linear scan comparing lowercased names.
+    pub(crate) fn get_columns(&self, table: &str) -> Option<&Vec<ColumnInfo>> {
+        self.columns.get(table).or_else(|| {
+            let lower = table.to_lowercase();
+            self.columns
+                .iter()
+                .find(|(k, _)| k.to_lowercase() == lower)
+                .map(|(_, v)| v)
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransientMessage {
@@ -132,6 +159,7 @@ pub(crate) struct DatabaseContext {
     pub last_rows_affected: u64,
     pub last_execution_source: ExecutionSource,
     pub last_executed_sql: Option<String>,
+    pub schema_cache: SchemaCache,
 }
 
 impl DatabaseContext {
@@ -160,6 +188,7 @@ impl DatabaseContext {
             last_rows_affected: 0,
             last_execution_source: ExecutionSource::FullBuffer,
             last_executed_sql: None,
+            schema_cache: SchemaCache::default(),
         }
     }
 

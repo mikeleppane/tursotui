@@ -1,4 +1,5 @@
 mod app;
+mod autocomplete;
 mod components;
 mod config;
 mod db;
@@ -420,9 +421,35 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
         }
         app::Action::SchemaLoaded(entries) => {
             panels.schema.set_schema(entries);
+            // Populate schema cache and trigger eager column loading for autocomplete
+            let db = app.active_db_mut();
+            db.schema_cache.entries.clone_from(entries);
+            db.schema_cache.columns.clear();
+            db.schema_cache.fully_loaded = false;
+            let table_names: Vec<String> = entries
+                .iter()
+                .filter(|e| e.obj_type == "table" || e.obj_type == "view")
+                .map(|e| e.name.clone())
+                .collect();
+            db.handle.load_all_columns(&table_names);
         }
         app::Action::ColumnsLoaded(table_name, columns) => {
             panels.schema.set_columns(table_name, columns.clone());
+            // Update schema cache for autocomplete
+            let db = app.active_db_mut();
+            db.schema_cache
+                .columns
+                .insert(table_name.clone(), columns.clone());
+            // Check if all tables/views have been loaded
+            let expected = db
+                .schema_cache
+                .entries
+                .iter()
+                .filter(|e| e.obj_type == "table" || e.obj_type == "view")
+                .count();
+            if db.schema_cache.columns.len() >= expected {
+                db.schema_cache.fully_loaded = true;
+            }
         }
         app::Action::SwitchBottomTab(BottomTab::Detail) => {
             // Populate record detail with the currently selected row

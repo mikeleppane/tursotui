@@ -571,6 +571,14 @@ impl DatabaseHandle {
         });
     }
 
+    /// Fire `load_columns` for every table/view name in the given list.
+    /// Used for eager column loading after schema loads.
+    pub fn load_all_columns(&self, table_names: &[String]) {
+        for name in table_names {
+            self.load_columns(name.clone());
+        }
+    }
+
     async fn run_column_load(
         db: &turso::Database,
         table_name: &str,
