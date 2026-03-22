@@ -59,12 +59,15 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // History
         (KeyModifiers::CONTROL, KeyCode::Char('h')) => Some(Action::ShowHistory),
 
-        // Export popup
-        (m, KeyCode::Char('e' | 'E')) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
+        // Export popup — Ctrl+E (traditional terminals can't distinguish Ctrl+Shift+E).
+        // When editor is focused, Ctrl+E is consumed as end-of-line and never reaches here.
+        (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::ShowExport),
+        // Ctrl+Shift+E also works in kitty-protocol terminals
+        (m, KeyCode::Char('E')) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
             Some(Action::ShowExport)
         }
 
-        // Quick export: copy all results as TSV
+        // Quick export: copy all results as TSV — Ctrl+Shift+C or plain Ctrl+C with shift.
         // Note: Ctrl+Shift+C is the standard terminal copy shortcut on Linux.
         // Some terminals intercept it before the application receives it.
         // Terminals supporting the kitty keyboard protocol deliver it correctly.

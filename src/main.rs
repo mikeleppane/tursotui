@@ -53,6 +53,9 @@ struct UiPanels {
     pragmas: PragmaDashboard,
     history: QueryHistoryPanel,
     export_popup: Option<components::export::ExportPopup>,
+    /// Persistent clipboard handle — kept alive for the app's lifetime so that
+    /// clipboard contents survive on Linux/Wayland (arboard drops contents on Drop).
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl UiPanels {
@@ -75,6 +78,7 @@ impl UiPanels {
             pragmas: PragmaDashboard::new(),
             history: QueryHistoryPanel::new(),
             export_popup: None,
+            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 }
@@ -302,8 +306,19 @@ fn handle_key_event(
         dispatch_action_to_components(action, app, panels);
     }
 
-    // Refresh autocomplete after editor key input (typing, backspace)
-    if app.active_db().focus == PanelId::Editor && panels.editor.autocomplete_popup.is_some() {
+    // Refresh autocomplete after buffer-modifying keys only (typing, backspace).
+    // Navigation keys (Up/Down/Esc/Tab) are handled by the popup interceptor and
+    // should NOT trigger a refresh — that would dismiss the popup when prefix is
+    // below min_chars.
+    let buffer_changed = matches!(
+        (key.modifiers, key.code),
+        (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(_))
+            | (KeyModifiers::NONE, KeyCode::Backspace)
+    );
+    if buffer_changed
+        && app.active_db().focus == PanelId::Editor
+        && panels.editor.autocomplete_popup.is_some()
+    {
         let schema = &app.active_db().schema_cache;
         panels.editor.refresh_autocomplete(schema);
     }
@@ -759,7 +774,12 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
             if let Some((columns, rows)) = panels.results.export_data() {
                 let tsv = export::format_tsv(columns, rows);
                 let row_count = rows.len();
-                match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&tsv)) {
+                match panels
+                    .clipboard
+                    .as_mut()
+                    .ok_or(arboard::Error::ContentNotAvailable)
+                    .and_then(|cb| cb.set_text(&tsv))
+                {
                     Ok(()) => {
                         app.transient_message = Some(app::TransientMessage {
                             text: format!("{row_count} rows copied as TSV"),
@@ -1054,7 +1074,7 @@ fn render_admin_tab(
         .render(frame, right, focus == PanelId::Pragmas, theme);
 }
 
-fn execute_export(app: &mut AppState, panels: &UiPanels) {
+fn execute_export(app: &mut AppState, panels: &mut UiPanels) {
     let Some(ref popup) = panels.export_popup else {
         return;
     };
@@ -1074,7 +1094,12 @@ fn execute_export(app: &mut AppState, panels: &UiPanels) {
 
     match popup.target {
         components::export::ExportTarget::Clipboard => {
-            match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&formatted)) {
+            match panels
+                .clipboard
+                .as_mut()
+                .ok_or(arboard::Error::ContentNotAvailable)
+                .and_then(|cb| cb.set_text(&formatted))
+            {
                 Ok(()) => {
                     app.transient_message = Some(app::TransientMessage {
                         text: format!("{row_count} rows copied as {}", popup.format.label()),

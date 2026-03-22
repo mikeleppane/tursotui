@@ -214,7 +214,7 @@ impl ExportPopup {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let popup_width = 40_u16.min(area.width.saturating_sub(4));
+        let popup_width = 60_u16.min(area.width.saturating_sub(4));
         let desired_height = if self.format == ExportFormat::SqlInsert {
             14_u16 // extra row for table name
         } else {

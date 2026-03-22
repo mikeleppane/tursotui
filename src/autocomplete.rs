@@ -221,6 +221,9 @@ pub(crate) fn detect_context(
         _ => {
             if is_at_statement_start(before_prefix) {
                 CompletionContext::Keyword
+            } else if is_in_table_list(before_prefix) {
+                // After a comma in a FROM/JOIN clause: `FROM t1, |` → still table context
+                CompletionContext::TableName
             } else {
                 let tables = extract_referenced_tables(&full_text, schema);
                 CompletionContext::Expression { tables }
@@ -325,6 +328,50 @@ fn extract_last_keyword(text: &str) -> Option<String> {
 fn is_at_statement_start(text: &str) -> bool {
     let trimmed = text.trim();
     trimmed.is_empty() || trimmed.ends_with(';')
+}
+
+/// Check if cursor is in a comma-separated table list (e.g., `FROM t1, |`).
+/// Scans backward from the trailing comma through words (table names, aliases,
+/// AS keywords) and commas, looking for a FROM/JOIN keyword.
+fn is_in_table_list(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    if !trimmed.ends_with(',') {
+        return false;
+    }
+    // Strip the comma and scan backward through tokens
+    let mut remaining = trimmed[..trimmed.len() - 1].trim_end();
+    loop {
+        if remaining.is_empty() {
+            return false;
+        }
+        // Extract the last word
+        let word_start = remaining
+            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
+            .map_or(0, |i| i + 1);
+        let word = &remaining[word_start..];
+        if word.is_empty() {
+            return false;
+        }
+        let upper = word.to_uppercase();
+
+        // Found a table-context keyword — we're in a table list
+        if TABLE_CONTEXT_KEYWORDS.contains(&upper.as_str()) {
+            return true;
+        }
+
+        // If it's a non-table keyword (SELECT, WHERE, etc.), stop — not in a table list
+        if COLUMN_CONTEXT_KEYWORDS.contains(&upper.as_str()) || upper == "AS" {
+            return false;
+        }
+
+        // Otherwise it's a table name or alias — keep scanning backward
+        remaining = remaining[..word_start].trim_end();
+
+        // Skip commas between table entries
+        if let Some(stripped) = remaining.strip_suffix(',') {
+            remaining = stripped.trim_end();
+        }
+    }
 }
 
 // ─── Alias Resolution ───────────────────────────────────────────────────────
@@ -810,6 +857,32 @@ mod tests {
         let lines = vec!["SELECT name AS ".into()];
         let (ctx, _) = detect_context(&lines, 0, 15, &schema);
         assert_eq!(ctx, CompletionContext::NoSuggestion);
+    }
+
+    #[test]
+    fn context_after_comma_in_from() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users, ".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 21, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
+        assert_eq!(prefix, "");
+    }
+
+    #[test]
+    fn context_after_comma_in_from_with_prefix() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users, or".into()];
+        let (ctx, prefix) = detect_context(&lines, 0, 23, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
+        assert_eq!(prefix, "or");
+    }
+
+    #[test]
+    fn context_after_comma_with_alias() {
+        let schema = test_schema();
+        let lines = vec!["SELECT * FROM users u, ".into()];
+        let (ctx, _) = detect_context(&lines, 0, 23, &schema);
+        assert_eq!(ctx, CompletionContext::TableName);
     }
 
     // ─── Helper functions ───────────────────────────────────────────────

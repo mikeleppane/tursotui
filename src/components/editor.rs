@@ -636,8 +636,10 @@ impl Component for QueryEditor {
         }
 
         match (key.modifiers, key.code) {
-            // Trigger autocomplete
-            (KeyModifiers::CONTROL, KeyCode::Char(' ')) => Some(Action::TriggerAutocomplete),
+            // Trigger autocomplete — Ctrl+Space arrives as Char(' ') with CONTROL
+            // in kitty-protocol terminals, but as Char('\0') (NUL) in traditional
+            // terminals that send ^@ for Ctrl+Space.
+            (KeyModifiers::CONTROL, KeyCode::Char(' ' | '\0')) => Some(Action::TriggerAutocomplete),
 
             // Execute selection or statement at cursor: Ctrl+Shift+Enter
             (m, KeyCode::Enter) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
@@ -759,11 +761,15 @@ impl Component for QueryEditor {
                 self.move_home();
                 None
             }
-            (KeyModifiers::NONE, KeyCode::End) | (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+            (KeyModifiers::NONE, KeyCode::End) => {
                 self.clear_selection();
                 self.move_end();
                 None
             }
+            // Ctrl+E: open export popup (not end-of-line — use End key or Home/End instead).
+            // Traditional terminals can't distinguish Ctrl+E from Ctrl+Shift+E,
+            // so Ctrl+E triggers export even from the editor.
+            (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::ShowExport),
 
             // Enter → replace selection or newline
             (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -1183,9 +1189,11 @@ mod tests {
         assert_eq!(editor.cursor, (0, 11));
         editor.handle_key(press(KeyCode::Home));
         assert_eq!(editor.cursor, (0, 0));
-        // Ctrl+E goes to end
-        editor.handle_key(ctrl_press(KeyCode::Char('e')));
-        assert_eq!(editor.cursor, (0, 11));
+        // Ctrl+E now opens export popup (not end-of-line)
+        let action = editor.handle_key(ctrl_press(KeyCode::Char('e')));
+        assert!(matches!(action, Some(Action::ShowExport)));
+        // Cursor stays at 0 since Ctrl+E no longer moves it
+        assert_eq!(editor.cursor, (0, 0));
     }
 
     fn shift_press(code: KeyCode) -> KeyEvent {
