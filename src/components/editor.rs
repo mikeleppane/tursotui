@@ -664,12 +664,12 @@ impl Component for QueryEditor {
             // Execute selection or statement at cursor: Ctrl+Shift+Enter
             (m, KeyCode::Enter) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
                 let (text, source) = self.text_to_execute();
-                Some(Action::ExecuteQuery(text, source))
+                Some(Action::ExecuteQuery(text, source, None))
             }
 
             // Execute full buffer: F5 or Ctrl+Enter
             (_, KeyCode::F(5)) | (KeyModifiers::CONTROL, KeyCode::Enter) => Some(
-                Action::ExecuteQuery(self.contents(), ExecutionSource::FullBuffer),
+                Action::ExecuteQuery(self.contents(), ExecutionSource::FullBuffer, None),
             ),
 
             // Release focus
@@ -1177,7 +1177,7 @@ mod tests {
         editor.set_contents("SELECT 1");
         let action = editor.handle_key(press(KeyCode::F(5)));
         assert!(
-            matches!(action, Some(Action::ExecuteQuery(ref s, ExecutionSource::FullBuffer)) if s == "SELECT 1")
+            matches!(action, Some(Action::ExecuteQuery(ref s, ExecutionSource::FullBuffer, None)) if s == "SELECT 1")
         );
     }
 
@@ -1570,6 +1570,7 @@ mod tests {
                 ),
             ]),
             fully_loaded: true,
+            fk_info: HashMap::new(),
         }
     }
 

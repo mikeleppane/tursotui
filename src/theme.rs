@@ -47,6 +47,13 @@ pub(crate) struct Theme {
     pub er_pk_style: Style,
     pub er_fk_style: Style,
     pub er_relationship: Style,
+
+    // Data editor
+    pub edit_modified: Style,
+    pub edit_inserted: Style,
+    pub edit_deleted: Style,
+    pub edit_cell_active: Style,
+    pub fk_indicator: Style,
 }
 
 /// Catppuccin Mocha-inspired dark theme.
@@ -80,6 +87,14 @@ pub(crate) const DARK_THEME: Theme = Theme {
     er_pk_style: Style::new().fg(YELLOW).add_modifier(Modifier::BOLD),
     er_fk_style: Style::new().fg(TEAL),
     er_relationship: Style::new().fg(SUBTEXT0),
+
+    edit_modified: Style::new().bg(Color::Rgb(62, 53, 18)),
+    edit_inserted: Style::new().bg(Color::Rgb(26, 52, 26)),
+    edit_deleted: Style::new()
+        .fg(SUBTEXT0)
+        .add_modifier(Modifier::CROSSED_OUT),
+    edit_cell_active: Style::new().fg(BASE).bg(TEAL),
+    fk_indicator: Style::new().fg(BLUE),
 };
 
 /// Catppuccin Latte-inspired light theme.
@@ -121,4 +136,14 @@ pub(crate) const LIGHT_THEME: Theme = Theme {
         .add_modifier(Modifier::BOLD),
     er_fk_style: Style::new().fg(Color::Rgb(23, 146, 153)),
     er_relationship: Style::new().fg(Color::Rgb(172, 176, 190)),
+
+    edit_modified: Style::new().bg(Color::Rgb(255, 248, 195)),
+    edit_inserted: Style::new().bg(Color::Rgb(212, 237, 218)),
+    edit_deleted: Style::new()
+        .fg(Color::Rgb(172, 176, 190))
+        .add_modifier(Modifier::CROSSED_OUT),
+    edit_cell_active: Style::new()
+        .fg(Color::Rgb(239, 241, 245))
+        .bg(Color::Rgb(23, 146, 153)),
+    fk_indicator: Style::new().fg(Color::Rgb(30, 102, 245)),
 };

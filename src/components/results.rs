@@ -731,6 +731,7 @@ mod tests {
             sql: String::new(),
             rows_affected: 0,
             query_kind: QueryKind::Select,
+            source_table: None,
         }
     }
 

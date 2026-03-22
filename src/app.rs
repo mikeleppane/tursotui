@@ -3,7 +3,8 @@ use std::time::{Duration, Instant};
 
 use crate::config::{AppConfig, ThemeMode};
 use crate::db::{
-    ColumnInfo, DatabaseHandle, DbInfo, PragmaEntry, QueryKind, QueryResult, SchemaEntry,
+    ColumnInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind, QueryResult,
+    SchemaEntry,
 };
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
@@ -17,6 +18,8 @@ pub(crate) struct SchemaCache {
     pub(crate) columns: HashMap<String, Vec<ColumnInfo>>,
     /// True once all tables have had their columns loaded.
     pub(crate) fully_loaded: bool,
+    /// Foreign key info keyed by table name.
+    pub(crate) fk_info: HashMap<String, Vec<ForeignKeyInfo>>,
 }
 
 impl SchemaCache {
@@ -45,6 +48,7 @@ pub(crate) enum Overlay {
     Help,
     History,
     Export,
+    DmlPreview { submit_enabled: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +113,7 @@ pub(crate) enum Action {
     ShowHelp,
     Quit,
     ClearEditor,
-    ExecuteQuery(String, ExecutionSource),
+    ExecuteQuery(String, ExecutionSource, Option<String>), // third = source_table hint
     QueryCompleted(QueryResult),
     QueryFailed(String),
     SchemaLoaded(Vec<SchemaEntry>),
@@ -148,6 +152,45 @@ pub(crate) enum Action {
     ShowExport,
     ExecuteExport,
     CopyAllResults,
+    #[allow(dead_code)]
+    DataEditorActivated {
+        table: String,
+        pk_columns: Vec<usize>,
+    },
+    #[allow(dead_code)]
+    DataEditorDeactivated,
+    #[allow(dead_code)]
+    StartCellEdit,
+    #[allow(dead_code)]
+    ConfirmCellEdit(Option<String>),
+    #[allow(dead_code)]
+    CancelCellEdit,
+    #[allow(dead_code)]
+    AddRow,
+    #[allow(dead_code)]
+    ToggleDeleteRow,
+    #[allow(dead_code)]
+    CloneRow(Vec<Option<String>>),
+    #[allow(dead_code)]
+    RevertCell,
+    #[allow(dead_code)]
+    RevertRow,
+    #[allow(dead_code)]
+    RevertAll,
+    #[allow(dead_code)]
+    ShowDmlPreview(bool),
+    #[allow(dead_code)]
+    SubmitDataEdits,
+    #[allow(dead_code)]
+    DataEditsCommitted,
+    #[allow(dead_code)]
+    DataEditsFailed(String),
+    #[allow(dead_code)]
+    FollowFK,
+    #[allow(dead_code)]
+    FKNavigateBack,
+    #[allow(dead_code)]
+    FKLoaded(String, Vec<crate::db::ForeignKeyInfo>),
 }
 
 /// Per-database workspace.
@@ -256,6 +299,8 @@ pub(crate) struct AppState {
     pub active_overlay: Option<Overlay>,
     pub help_scroll: usize,
     pub history_db: Option<crate::history::HistoryDb>,
+    #[allow(dead_code)]
+    pub pending_edit_table: Option<String>,
 }
 
 impl AppState {
@@ -278,6 +323,7 @@ impl AppState {
             active_overlay: None,
             help_scroll: 0,
             history_db,
+            pending_edit_table: None,
         }
     }
 
@@ -319,7 +365,7 @@ impl AppState {
             Action::PopulateEditor(_) => {
                 self.active_db_mut().focus = PanelId::Editor;
             }
-            Action::ExecuteQuery(sql, source) => {
+            Action::ExecuteQuery(sql, source, _source_table) => {
                 if !sql.trim().is_empty() {
                     let db = self.active_db_mut();
                     db.executing = true;
@@ -374,7 +420,10 @@ impl AppState {
                     Some(Overlay::History)
                 };
             }
-            Action::RecallHistory(_) | Action::RecallAndExecute(_) => {
+            Action::RecallHistory(_)
+            | Action::RecallAndExecute(_)
+            | Action::DataEditsCommitted
+            | Action::DataEditsFailed(_) => {
                 self.active_overlay = None;
             }
             Action::ShowExport => {
@@ -383,6 +432,15 @@ impl AppState {
                 } else {
                     Some(Overlay::Export)
                 };
+            }
+            Action::ShowDmlPreview(b) => {
+                self.active_overlay = Some(Overlay::DmlPreview { submit_enabled: *b });
+            }
+            Action::FKLoaded(table, fks) => {
+                self.active_db_mut()
+                    .schema_cache
+                    .fk_info
+                    .insert(table.clone(), fks.clone());
             }
             Action::SchemaLoaded(_)
             | Action::ColumnsLoaded(_, _)
@@ -413,7 +471,21 @@ impl AppState {
             | Action::AcceptCompletion(_)
             | Action::DismissAutocomplete
             | Action::ExecuteExport
-            | Action::CopyAllResults => {
+            | Action::CopyAllResults
+            | Action::StartCellEdit
+            | Action::ConfirmCellEdit(_)
+            | Action::CancelCellEdit
+            | Action::AddRow
+            | Action::ToggleDeleteRow
+            | Action::CloneRow(_)
+            | Action::RevertCell
+            | Action::RevertRow
+            | Action::RevertAll
+            | Action::SubmitDataEdits
+            | Action::FollowFK
+            | Action::FKNavigateBack
+            | Action::DataEditorActivated { .. }
+            | Action::DataEditorDeactivated => {
                 // No AppState mutation needed; dispatched to components
             }
         }

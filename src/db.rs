@@ -40,6 +40,19 @@ pub(crate) struct QueryResult {
     pub rows_affected: u64,
     /// The detected kind of query.
     pub query_kind: QueryKind,
+    /// The source table that triggered this query, if known.
+    pub source_table: Option<String>,
+}
+
+/// Foreign key relationship from one column to another table/column.
+#[derive(Debug, Clone)]
+pub(crate) struct ForeignKeyInfo {
+    #[allow(dead_code)]
+    pub from_column: String,
+    #[allow(dead_code)]
+    pub to_table: String,
+    #[allow(dead_code)]
+    pub to_column: String,
 }
 
 /// Detected query type — used for status bar messaging and execution routing.
@@ -254,6 +267,12 @@ pub(crate) enum QueryMessage {
     WalCheckpointFailed(String),
     IntegrityCheckCompleted(String),
     IntegrityCheckFailed(String),
+    #[allow(dead_code)]
+    TransactionCommitted,
+    #[allow(dead_code)]
+    TransactionFailed(String),
+    #[allow(dead_code)]
+    ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
 }
 
 /// Wraps an `Arc<Database>` and provides a channel for receiving query results.
@@ -305,7 +324,7 @@ impl DatabaseHandle {
     }
 
     /// Execute a SQL query in the background. Results arrive via `try_recv()`.
-    pub fn execute(&self, sql: String) {
+    pub fn execute(&self, sql: String, source_table: Option<String>) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
 
@@ -327,6 +346,7 @@ impl DatabaseHandle {
                 match result {
                     Ok(mut qr) => {
                         qr.execution_time = elapsed;
+                        qr.source_table = source_table;
                         QueryMessage::Completed(qr)
                     }
                     Err(e) => QueryMessage::Failed(e.to_string()),
@@ -389,6 +409,7 @@ impl DatabaseHandle {
                 sql: sql.to_string(),
                 rows_affected: 0,
                 query_kind: kind,
+                source_table: None,
             })
         } else if matches!(
             kind,
@@ -404,6 +425,7 @@ impl DatabaseHandle {
                 sql: sql.to_string(),
                 rows_affected: affected,
                 query_kind: kind,
+                source_table: None,
             })
         } else {
             unreachable!("Batch kind should not reach run_query")
@@ -486,6 +508,7 @@ impl DatabaseHandle {
                     statement_count: total_count,
                     has_trailing_select: false,
                 },
+                source_table: None,
             })
         }
     }
@@ -985,6 +1008,7 @@ impl DatabaseHandle {
                 sql: "PRAGMA integrity_check".to_string(),
                 rows_affected: 0,
                 query_kind: QueryKind::Pragma,
+                source_table: None,
             };
             Ok((msg, Some(qr)))
         }

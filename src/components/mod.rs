@@ -1,5 +1,8 @@
 pub(crate) mod autocomplete;
+pub(crate) mod cell_editor;
+pub(crate) mod data_editor;
 pub(crate) mod db_info;
+pub(crate) mod dml_preview;
 pub(crate) mod editor;
 pub(crate) mod explain;
 pub(crate) mod export;

@@ -232,6 +232,7 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
         db::QueryMessage::Failed(err) => app::Action::QueryFailed(err),
         db::QueryMessage::SchemaFailed(err) => app::Action::SetTransient(err, true),
+        db::QueryMessage::TransactionFailed(err) => app::Action::DataEditsFailed(err),
         db::QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
         db::QueryMessage::ColumnsLoaded(table, cols) => app::Action::ColumnsLoaded(table, cols),
         db::QueryMessage::ExplainCompleted(bytecode, plan) => {
@@ -248,6 +249,8 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
         db::QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
         db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
+        db::QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
+        db::QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
     }
 }
 
@@ -290,6 +293,12 @@ fn handle_key_event(
                     app.update(&action);
                     dispatch_action_to_components(&action, app, panels);
                 }
+            }
+            return;
+        }
+        Some(app::Overlay::DmlPreview { .. }) => {
+            if key.code == KeyCode::Esc {
+                app.active_overlay = None;
             }
             return;
         }
@@ -396,9 +405,11 @@ fn route_key_to_component(
 #[allow(clippy::too_many_lines)]
 fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panels: &mut UiPanels) {
     match action {
-        app::Action::ExecuteQuery(sql, _source) => {
+        app::Action::ExecuteQuery(sql, _source, source_table) => {
             if !sql.trim().is_empty() {
-                app.active_db_mut().handle.execute(sql.clone());
+                app.active_db_mut()
+                    .handle
+                    .execute(sql.clone(), source_table.clone());
             }
         }
         app::Action::LoadColumns(table_name) => {
@@ -680,7 +691,7 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 db.executing = true;
                 db.last_execution_source = app::ExecutionSource::FullBuffer;
                 db.last_executed_sql = Some(sql.clone());
-                db.handle.execute(sql.clone());
+                db.handle.execute(sql.clone(), None);
             }
         }
         app::Action::DeleteHistoryEntry(id) => {
