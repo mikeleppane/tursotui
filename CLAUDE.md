@@ -37,11 +37,47 @@ Milestone plans live in `docs/plans/`.
 - SQL identifiers must be escaped with `quote_identifier()` (double-quotes), literals with `quote_literal()` (single-quotes) — both in `data_editor.rs`
 - Status bar is intentionally minimal — show panel name + context info + "F1 Help", no keybinding cheat sheets (those belong in the help overlay)
 
-### Turso/libsql gotchas
+### Turso/libsql compatibility
 
-- **PRAGMA `foreign_key_list` is NOT supported** by turso/libsql — returns "Not a valid pragma name". FK info must be parsed from CREATE TABLE SQL in `SchemaEntry::sql` using `parse_foreign_keys()` in `db.rs`.
-- **PRAGMA syntax quirk**: turso uses single-quoted values in PRAGMA SET (`PRAGMA name = 'value'`), not double-quoted.
-- **Transaction execution**: use `PRAGMA defer_foreign_keys = ON` inside the transaction preamble to avoid FK constraint violations during multi-statement DML.
+The authoritative reference is [COMPAT.md](https://github.com/tursodatabase/turso/blob/main/COMPAT.md).
+Turso aims for full SQLite compatibility but has gaps that directly affect this project.
+
+#### PRAGMA limitations
+
+- **`foreign_key_list` NOT supported** — returns "Not a valid pragma name". FK info must be parsed from CREATE TABLE SQL in `SchemaEntry::sql` using `parse_foreign_keys()` in `db.rs`.
+- **`defer_foreign_keys` NOT supported** at the PRAGMA level. Use `PRAGMA defer_foreign_keys = ON` inside transaction SQL strings (our `execute_transaction` does this).
+- **Syntax quirk**: turso uses single-quoted values in PRAGMA SET (`PRAGMA name = 'value'`), not double-quoted.
+- **65+ PRAGMAs work**, including: `foreign_keys`, `journal_mode`, `cache_size`, `page_size`, `table_info`, `index_info`, `integrity_check`, `quick_check`, `user_version`, `busy_timeout`.
+- **Notable unsupported PRAGMAs**: `auto_vacuum`, `mmap_size`, `locking_mode`, `optimize`, `secure_delete`, `recursive_triggers`, `collation_list`, `compile_options`.
+
+#### SQL feature gaps
+
+- **Window functions partial** — default frame definitions work but ranking functions (`RANK()`, `ROW_NUMBER()`, `DENSE_RANK()`) fail with "no such function". `FILTER (WHERE...)` on aggregates is silently ignored.
+- **CTEs partial** — `WITH` works but no `RECURSIVE`, no `MATERIALIZED` hint, only `SELECT` in CTE body.
+- **JOINs** — no `RIGHT JOIN`, no `CROSS JOIN`. `LEFT JOIN` and `NATURAL JOIN` work.
+- **Not supported** — `SAVEPOINT`/`RELEASE`, `GENERATED` columns, `INDEXED BY`, `REINDEX`, `VACUUM`, `MATCH` operator.
+- **Binary `%` operator** not supported in expressions.
+- **Subqueries** — scalar subqueries only; tuple comparisons with subqueries don't work.
+
+#### What DOES work well
+
+- All core DML/DDL: `CREATE TABLE`, `ALTER TABLE`, `INSERT` (with `UPSERT`/`RETURNING`), `UPDATE`, `DELETE`, `SELECT`
+- `GROUP BY`, `HAVING`, `ORDER BY`, `LIMIT`, `LIKE`, `GLOB`, `BETWEEN`, `IN`, `EXISTS`, `CASE WHEN`
+- Transactions: `BEGIN`/`COMMIT`/`ROLLBACK` (also `BEGIN CONCURRENT` for MVCC)
+- 80+ scalar functions: `printf`, `coalesce`, `ifnull`, `substr`, `replace`, `round`, `abs`, `hex`, `typeof`, `json_*`, all trig/math functions
+- Aggregate functions: `avg`, `count`, `group_concat`, `sum`, `total`, `min`, `max`
+- Full date/time functions: `date`, `time`, `datetime`, `strftime`, `unixepoch`, `julianday`
+- 30+ JSON functions including `json_extract`, `json_each`, operators (`->`, `->>`)
+- Built-in extensions: UUID (`uuid4()`, `uuid7()`), regexp, vector search, FTS (Tantivy-powered), CSV virtual tables, `generate_series`, percentile aggregates
+
+#### Rust SDK notes
+
+- Crate: `libsql` (our `turso` crate wraps it). `Builder::new_local(path).build().await?` for local files.
+- `db.connect()?` gives a `Connection`. Each connection is independent — safe to create per-task.
+- Positional params: `libsql::params![val]` with `?1` placeholders. Named: `libsql::named_params!{":key": val}`.
+- `execute_batch()` runs multiple statements in an implicit transaction — all-or-nothing.
+- `de::from_row` can deserialize into serde structs (not used in this project, but available).
+- No concurrent multi-process access to the same database file.
 
 ## Dependencies
 
