@@ -11,6 +11,7 @@ use crate::db::{ColumnDef, QueryResult};
 use crate::theme::Theme;
 
 use super::Component;
+use super::data_editor::{EditRenderState, RowMarker};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SortOrder {
@@ -48,6 +49,8 @@ pub(crate) struct ResultsTable {
     max_col_width: u16,
     /// Display string for SQL NULL values (configurable).
     null_display: String,
+    /// Edit state injected by `DataEditor` before each render call.
+    edit_state: Option<EditRenderState>,
 }
 
 impl ResultsTable {
@@ -65,6 +68,7 @@ impl ResultsTable {
             original_rows: Vec::new(),
             max_col_width: DEFAULT_MAX_COL_WIDTH,
             null_display: "NULL".to_string(),
+            edit_state: None,
         }
     }
 
@@ -116,13 +120,30 @@ impl ResultsTable {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn selected_col(&self) -> usize {
+    pub(crate) fn selected_col_index(&self) -> usize {
         self.selected_col
     }
 
     pub(crate) fn selected_row(&self) -> Option<usize> {
         self.state.selected()
+    }
+
+    /// Inject edit render state before each draw call.
+    pub(crate) fn set_edit_state(&mut self, state: Option<EditRenderState>) {
+        self.edit_state = state;
+    }
+
+    /// Restore the table cursor to `(row, col)` after a navigation state reset.
+    #[allow(dead_code)] // used by future FK navigation (Task 13)
+    pub(crate) fn restore_cursor(&mut self, row: usize, col: usize, col_offset: usize) {
+        if !self.rows.is_empty() {
+            self.state
+                .select(Some(row.min(self.rows.len().saturating_sub(1))));
+        }
+        if !self.columns.is_empty() {
+            self.selected_col = col.min(self.columns.len().saturating_sub(1));
+        }
+        self.col_offset = col_offset;
     }
 
     pub(crate) fn row_count(&self) -> usize {
@@ -448,11 +469,17 @@ impl Component for ResultsTable {
             Style::default().fg(theme.fg)
         };
 
-        let has_results = !self.rows.is_empty();
+        // When edit mode is active, pending inserts count as additional rows.
+        let pending_count = self
+            .edit_state
+            .as_ref()
+            .map_or(0, |s| s.pending_inserts.len());
+        let total_rows = self.rows.len() + pending_count;
+        let has_results = total_rows > 0 || !self.columns.is_empty();
 
-        let title = if has_results {
+        let title = if has_results && total_rows > 0 {
             let selected = self.state.selected().map_or(0, |i| i + 1);
-            format!("Results [{}/{}]", selected, self.rows.len())
+            format!("Results [{selected}/{total_rows}]")
         } else {
             "Results".to_string()
         };
@@ -488,7 +515,7 @@ impl Component for ResultsTable {
 
         // Calculate visible rows for the scrollbar (header takes 1 row)
         let visible_rows = inner.height.saturating_sub(1) as usize;
-        let show_scrollbar = self.rows.len() > visible_rows;
+        let show_scrollbar = total_rows > visible_rows;
 
         // Reserve 1 column on the right for the scrollbar when needed
         let table_area = if show_scrollbar {
@@ -518,6 +545,7 @@ impl Component for ResultsTable {
             self.selected_col,
             sort_state,
             &self.null_display,
+            self.edit_state.as_ref(),
             theme,
         );
 
@@ -531,15 +559,133 @@ impl Component for ResultsTable {
                 height: inner.height,
             };
             // Use viewport offset (not selection index) so the thumb tracks the visible window
-            let mut scrollbar_state =
-                ScrollbarState::new(self.rows.len()).position(self.state.offset());
+            let mut scrollbar_state = ScrollbarState::new(total_rows).position(self.state.offset());
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
         }
     }
 }
 
+/// Extract PK values from a row using the given PK column indices.
+fn extract_pk(row: &[Option<String>], pk_columns: &[usize]) -> Vec<Option<String>> {
+    pk_columns
+        .iter()
+        .map(|&i| row.get(i).cloned().flatten())
+        .collect()
+}
+
+/// Build the header row for the visible column range.
+fn build_header_row<'a>(
+    columns: &'a [ColumnDef],
+    visible_range: &std::ops::Range<usize>,
+    selected_col: usize,
+    sort_state: Option<(usize, SortOrder)>,
+    edit_state: Option<&'a EditRenderState>,
+    theme: &'a Theme,
+) -> Row<'a> {
+    let selected_header_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::UNDERLINED);
+
+    let cells: Vec<Cell<'a>> = columns[visible_range.clone()]
+        .iter()
+        .enumerate()
+        .map(|(vis_idx, col)| {
+            let abs_idx = visible_range.start + vis_idx;
+            let style = if abs_idx == selected_col {
+                selected_header_style
+            } else {
+                theme.header_style
+            };
+            let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_idx);
+            let is_fk = edit_state.is_some_and(|s| s.fk_columns.contains(&abs_idx));
+            let header_text = build_header_text(&col.name, is_sorted, is_fk, sort_state);
+            Cell::from(header_text).style(style)
+        })
+        .collect();
+    Row::new(cells).height(1)
+}
+
+/// Build the display text for a single column header.
+fn build_header_text(
+    name: &str,
+    is_sorted: bool,
+    is_fk: bool,
+    sort_state: Option<(usize, SortOrder)>,
+) -> String {
+    if is_sorted {
+        let arrow = match sort_state.unwrap().1 {
+            SortOrder::Ascending => " \u{25B2}",
+            SortOrder::Descending => " \u{25BC}",
+        };
+        if is_fk {
+            format!("{name}\u{2197}{arrow}")
+        } else {
+            format!("{name}{arrow}")
+        }
+    } else if is_fk {
+        format!("{name}\u{2197}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Build a single data row with edit-state markers applied.
+fn build_edited_row<'a>(
+    row_vals: &'a [Option<String>],
+    visible_range: &std::ops::Range<usize>,
+    null_display: &'a str,
+    es: &EditRenderState,
+    theme: &'a Theme,
+) -> Row<'a> {
+    let pk = extract_pk(row_vals, &es.pk_columns);
+    match es.row_markers.get(&pk).copied() {
+        Some(RowMarker::Deleted) => {
+            let cells: Vec<Cell<'a>> = row_vals[visible_range.clone()]
+                .iter()
+                .map(|val| {
+                    Cell::from(val.as_deref().unwrap_or(null_display).to_string())
+                        .style(theme.edit_deleted)
+                })
+                .collect();
+            Row::new(cells).height(1)
+        }
+        Some(RowMarker::Modified) => {
+            let cells: Vec<Cell<'a>> = row_vals[visible_range.clone()]
+                .iter()
+                .enumerate()
+                .map(|(vis_idx, val)| {
+                    let abs_col = visible_range.start + vis_idx;
+                    let is_mod = es.modified_cells.contains(&(pk.clone(), abs_col));
+                    let mod_style = if is_mod {
+                        theme.edit_modified
+                    } else {
+                        Style::default()
+                    };
+                    match val {
+                        None => Cell::from(null_display).style(if is_mod {
+                            theme.edit_modified
+                        } else {
+                            theme.null_style
+                        }),
+                        Some(s) => Cell::from(s.clone()).style(mod_style),
+                    }
+                })
+                .collect();
+            Row::new(cells).height(1)
+        }
+        None => build_plain_row(row_vals, visible_range, null_display, theme),
+    }
+}
+
 /// Build a ratatui `Table` for the visible column range, highlighting the selected column header.
+///
+/// When `edit_state` is present, applies visual markers:
+/// - Modified rows: `edit_modified` style on modified cells
+/// - Deleted rows: `edit_deleted` style (strikethrough) on all cells
+/// - Pending inserts: appended after query rows with `edit_inserted` style
+/// - FK column headers: `↗` suffix (accent color)
 #[allow(clippy::too_many_arguments)]
 fn build_visible_table<'a>(
     columns: &'a [ColumnDef],
@@ -549,7 +695,8 @@ fn build_visible_table<'a>(
     selected_col: usize,
     sort_state: Option<(usize, SortOrder)>,
     null_display: &'a str,
-    theme: &Theme,
+    edit_state: Option<&'a EditRenderState>,
+    theme: &'a Theme,
 ) -> Table<'a> {
     let col_widths: Vec<Constraint> = column_widths[visible_range.clone()]
         .iter()
@@ -562,54 +709,67 @@ fn build_visible_table<'a>(
         })
         .collect();
 
-    let selected_header_style = Style::default()
-        .fg(theme.accent)
-        .add_modifier(Modifier::BOLD)
-        .add_modifier(Modifier::UNDERLINED);
+    let header = build_header_row(
+        columns,
+        visible_range,
+        selected_col,
+        sort_state,
+        edit_state,
+        theme,
+    );
 
-    let header_cells: Vec<Cell> = columns[visible_range.clone()]
+    let mut data_rows: Vec<Row<'a>> = rows
         .iter()
-        .enumerate()
-        .map(|(vis_idx, col)| {
-            let abs_idx = visible_range.start + vis_idx;
-            let style = if abs_idx == selected_col {
-                selected_header_style
+        .map(|row_vals| {
+            if let Some(es) = edit_state {
+                build_edited_row(row_vals, visible_range, null_display, es, theme)
             } else {
-                theme.header_style
-            };
-            let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_idx);
-            if is_sorted {
-                let arrow = match sort_state.unwrap().1 {
-                    SortOrder::Ascending => " \u{25B2}",
-                    SortOrder::Descending => " \u{25BC}",
-                };
-                Cell::from(format!("{}{arrow}", col.name)).style(style)
-            } else {
-                Cell::from(col.name.as_str()).style(style)
+                build_plain_row(row_vals, visible_range, null_display, theme)
             }
         })
         .collect();
-    let header = Row::new(header_cells).height(1);
 
-    let data_rows: Vec<Row> = rows
-        .iter()
-        .map(|row_vals| {
-            let cells: Vec<Cell> = row_vals[visible_range.clone()]
-                .iter()
-                .map(|val| match val {
-                    None => Cell::from(null_display).style(theme.null_style),
-                    Some(s) => Cell::from(s.as_str()),
+    // Append pending inserts
+    if let Some(es) = edit_state {
+        let num_visible = visible_range.len();
+        for insert_vals in &es.pending_inserts {
+            let cells: Vec<Cell<'a>> = (0..num_visible)
+                .map(|vis_idx| {
+                    let abs_col = visible_range.start + vis_idx;
+                    let text = insert_vals
+                        .get(abs_col)
+                        .and_then(Option::as_deref)
+                        .unwrap_or(null_display)
+                        .to_string();
+                    Cell::from(text).style(theme.edit_inserted)
                 })
                 .collect();
-            Row::new(cells).height(1)
-        })
-        .collect();
+            data_rows.push(Row::new(cells).height(1));
+        }
+    }
 
     Table::new(data_rows, col_widths)
         .header(header)
         .row_highlight_style(theme.selected_style)
         .highlight_symbol("▌ ")
         .highlight_spacing(HighlightSpacing::Always)
+}
+
+/// Build a plain (no-edit-state) row.
+fn build_plain_row<'a>(
+    row_vals: &'a [Option<String>],
+    visible_range: &std::ops::Range<usize>,
+    null_display: &'a str,
+    theme: &'a Theme,
+) -> Row<'a> {
+    let cells: Vec<Cell<'a>> = row_vals[visible_range.clone()]
+        .iter()
+        .map(|val| match val {
+            None => Cell::from(null_display).style(theme.null_style),
+            Some(s) => Cell::from(s.as_str()),
+        })
+        .collect();
+    Row::new(cells).height(1)
 }
 
 /// Format a single cell value for clipboard. Returns the display text.
@@ -666,7 +826,7 @@ fn compare_non_null(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// Convert a `turso::Value` to a display string. Returns `None` for SQL NULL.
-fn value_to_display(val: &turso::Value) -> Option<String> {
+pub(crate) fn value_to_display(val: &turso::Value) -> Option<String> {
     match val {
         turso::Value::Null => None,
         turso::Value::Integer(n) => Some(n.to_string()),

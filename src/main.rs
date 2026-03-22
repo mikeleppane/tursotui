@@ -886,6 +886,130 @@ fn dispatch_action_to_components(action: &app::Action, app: &mut AppState, panel
                 });
             }
         }
+        // Data editor cell edit actions
+        app::Action::StartCellEdit => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let col = panels.results.selected_col_index();
+            let Some((cols, row_vals)) = panels.results.row_data(row_idx) else {
+                // Row is a pending insert (beyond query-returned rows) — not yet editable
+                app.transient_message = Some(app::TransientMessage {
+                    text: "Pending insert rows cannot be edited — submit first".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                return;
+            };
+            // Reject BLOB columns
+            let col_info = panels.data_editor.columns().get(col);
+            if col_info.is_some_and(|c| c.col_type.to_lowercase().contains("blob")) {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "Cannot edit BLOB columns".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                return;
+            }
+            let pk_cols = panels.data_editor.pk_columns();
+            let pk: Vec<Option<String>> = pk_cols
+                .iter()
+                .map(|&i| row_vals.get(i).cloned().flatten())
+                .collect();
+            let value = row_vals.get(col).and_then(Option::as_deref);
+            let notnull = col_info.is_some_and(|c| c.notnull);
+            // Pass the full original row snapshot for ChangeLog::original field
+            let _ = cols;
+            let original_row: Vec<Option<String>> = row_vals.to_vec();
+            panels
+                .data_editor
+                .start_cell_edit(pk, row_idx, col, value, notnull, original_row);
+        }
+        app::Action::ConfirmCellEdit(value) => {
+            panels.data_editor.confirm_edit(value.clone());
+        }
+        app::Action::CancelCellEdit => {
+            panels.data_editor.cancel_edit();
+        }
+        app::Action::AddRow => {
+            panels.data_editor.add_row();
+        }
+        app::Action::ToggleDeleteRow => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let Some((_cols, row_vals)) = panels.results.row_data(row_idx) else {
+                // Pending insert row — remove the insert instead of toggling delete
+                let query_row_count = panels.results.row_count();
+                let insert_idx = row_idx.saturating_sub(query_row_count);
+                panels.data_editor.remove_pending_insert(insert_idx);
+                return;
+            };
+            let pk_cols = panels.data_editor.pk_columns();
+            let pk: Vec<Option<String>> = pk_cols
+                .iter()
+                .map(|&i| row_vals.get(i).cloned().flatten())
+                .collect();
+            let original: Vec<Option<String>> = row_vals.to_vec();
+            panels.data_editor.toggle_delete_row(&pk, &original);
+        }
+        app::Action::CloneRow(_) => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let Some((_cols, row_vals)) = panels.results.row_data(row_idx) else {
+                return;
+            };
+            let values: Vec<Option<String>> = row_vals.to_vec();
+            panels.data_editor.clone_row(values);
+        }
+        app::Action::RevertCell => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let col = panels.results.selected_col_index();
+            let Some((_cols, row_vals)) = panels.results.row_data(row_idx) else {
+                return;
+            };
+            let pk_cols = panels.data_editor.pk_columns();
+            let pk: Vec<Option<String>> = pk_cols
+                .iter()
+                .map(|&i| row_vals.get(i).cloned().flatten())
+                .collect();
+            panels.data_editor.revert_cell_edit(&pk, col);
+        }
+        app::Action::RevertRow => {
+            if !panels.data_editor.is_active() {
+                return;
+            }
+            let Some(row_idx) = panels.results.selected_row() else {
+                return;
+            };
+            let Some((_cols, row_vals)) = panels.results.row_data(row_idx) else {
+                return;
+            };
+            let pk_cols = panels.data_editor.pk_columns();
+            let pk: Vec<Option<String>> = pk_cols
+                .iter()
+                .map(|&i| row_vals.get(i).cloned().flatten())
+                .collect();
+            panels.data_editor.revert_row_edit(&pk);
+        }
+        app::Action::RevertAll => {
+            panels.data_editor.revert_all_edits();
+        }
         _ => {}
     }
 }
@@ -990,6 +1114,19 @@ fn render_ui(frame: &mut Frame, app: &AppState, panels: &mut UiPanels) {
         popup.render(frame, area, theme);
     }
 
+    // Modal cell editor overlay (renders above content, below help)
+    if let Some(editor) = panels.data_editor.cell_editor()
+        && editor.modal
+    {
+        let table = panels.data_editor.source_table().unwrap_or("table");
+        let col_name = panels
+            .data_editor
+            .columns()
+            .get(editor.col)
+            .map_or("col", |c| c.name.as_str());
+        editor.render_modal(frame, area, table, col_name, theme);
+    }
+
     // Help overlay (rendered last so it floats on top)
     if app.active_overlay == Some(app::Overlay::Help) {
         components::help::render(frame, app.help_scroll, theme);
@@ -1087,6 +1224,15 @@ fn render_bottom_panel(
                 .add_modifier(Modifier::BOLD),
         );
     frame.render_widget(bottom_tabs, bottom_tabs_area);
+
+    // Inject edit state into ResultsTable before rendering
+    if panels.data_editor.is_active() {
+        panels
+            .results
+            .set_edit_state(Some(panels.data_editor.build_render_state()));
+    } else {
+        panels.results.set_edit_state(None);
+    }
 
     // Render the active bottom component
     let is_focused = focus == PanelId::Bottom;

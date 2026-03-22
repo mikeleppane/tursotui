@@ -1,12 +1,46 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 
 use super::Component;
+use super::cell_editor::CellEditor;
 use crate::app::Action;
 use crate::db::{ColumnInfo, SchemaEntry};
 use crate::theme::Theme;
+
+// ---------------------------------------------------------------------------
+// Visual marker types — used by ResultsTable to decorate edited rows/cells
+// ---------------------------------------------------------------------------
+
+/// Row-level visual marker: how this row is annotated in the results table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowMarker {
+    Modified,
+    Deleted,
+}
+
+/// Cell-level visual marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CellMarker {
+    Modified,
+}
+
+/// Pre-computed render state passed to `ResultsTable` before each draw call.
+pub(crate) struct EditRenderState {
+    /// Indices of PK columns (used to extract PK keys from result rows).
+    pub pk_columns: Vec<usize>,
+    /// Row-level annotations keyed by PK tuple.
+    pub row_markers: HashMap<Vec<Option<String>>, RowMarker>,
+    /// Set of `(pk_tuple, column_index)` pairs that have been modified.
+    pub modified_cells: HashSet<(Vec<Option<String>>, usize)>,
+    /// Pending INSERTs to be appended after query rows.
+    pub pending_inserts: Vec<Vec<Option<String>>>,
+    /// Columns that are FK targets (accent indicator). Empty until Task 13.
+    pub fk_columns: HashSet<usize>,
+}
+
+// ---------------------------------------------------------------------------
 
 /// Strip SQL line comments (`-- ...`) and block comments (`/* ... */`).
 fn strip_comments(sql: &str) -> String {
@@ -255,17 +289,14 @@ impl ChangeLog {
     pub(crate) fn log_delete(&mut self, pk: &[Option<String>], original_row: &[Option<String>]) {
         // If a prior Update exists for this PK, extract its modified map
         // so toggle_delete (undelete) can restore it.
-        let prior_modified = self
-            .edits
-            .iter()
-            .find_map(|e| match e {
-                RowEdit::Update {
-                    pk: existing_pk,
-                    modified,
-                    ..
-                } if existing_pk.as_slice() == pk => Some(modified.clone()),
-                _ => None,
-            });
+        let prior_modified = self.edits.iter().find_map(|e| match e {
+            RowEdit::Update {
+                pk: existing_pk,
+                modified,
+                ..
+            } if existing_pk.as_slice() == pk => Some(modified.clone()),
+            _ => None,
+        });
         self.edits.retain(|e| {
             !matches!(e, RowEdit::Update { pk: existing_pk, .. } if existing_pk.as_slice() == pk)
         });
@@ -554,10 +585,12 @@ pub(crate) struct DataEditor {
     activating_query: String,
     changes: ChangeLog,
     pending_inserts: Vec<Vec<Option<String>>>,
-    // cell_editor: Option<CellEditor>,  // Added in Task 7
+    cell_editor: Option<CellEditor>,
     fk_nav_stack: Vec<FKNavEntry>,
     preview_dml: Vec<String>,
     preview_scroll: usize,
+    /// Original row snapshot stored when cell editor opens — passed to `ChangeLog` on confirm.
+    editing_original_row: Vec<Option<String>>,
     active: bool,
 }
 
@@ -570,9 +603,11 @@ impl DataEditor {
             activating_query: String::new(),
             changes: ChangeLog::new(),
             pending_inserts: Vec::new(),
+            cell_editor: None,
             fk_nav_stack: Vec::new(),
             preview_dml: Vec::new(),
             preview_scroll: 0,
+            editing_original_row: Vec::new(),
             active: false,
         }
     }
@@ -594,6 +629,7 @@ impl DataEditor {
         self.activating_query = query;
         self.changes = ChangeLog::new();
         self.pending_inserts.clear();
+        self.cell_editor = None;
         self.fk_nav_stack.clear(); // Fresh query — stack has no prior context
         self.preview_dml.clear();
         self.preview_scroll = 0;
@@ -616,6 +652,7 @@ impl DataEditor {
         self.activating_query = query;
         self.changes = ChangeLog::new();
         self.pending_inserts.clear();
+        self.cell_editor = None;
         // Do NOT clear fk_nav_stack — the prior state was pushed before this query
         self.preview_dml.clear();
         self.preview_scroll = 0;
@@ -629,6 +666,7 @@ impl DataEditor {
         self.activating_query.clear();
         self.changes = ChangeLog::new();
         self.pending_inserts.clear();
+        self.cell_editor = None;
         self.fk_nav_stack.clear();
         self.preview_dml.clear();
         self.preview_scroll = 0;
@@ -639,12 +677,10 @@ impl DataEditor {
         self.active
     }
 
-    #[allow(dead_code)] // used by status bar / ResultsTable in later tasks
     pub(crate) fn source_table(&self) -> Option<&str> {
         self.source_table.as_deref()
     }
 
-    #[allow(dead_code)] // used by ResultsTable in later tasks
     pub(crate) fn pk_columns(&self) -> &[usize] {
         &self.pk_columns
     }
@@ -666,7 +702,6 @@ impl DataEditor {
         Vec::new()
     }
 
-    #[allow(dead_code)] // used by cell editor in later tasks
     pub(crate) fn columns(&self) -> &[ColumnInfo] {
         &self.columns
     }
@@ -680,11 +715,210 @@ impl DataEditor {
     pub(crate) fn activating_query(&self) -> &str {
         &self.activating_query
     }
+
+    /// Returns `true` if a cell editor is currently open.
+    #[allow(dead_code)] // used in tests and future inline rendering
+    pub(crate) fn has_cell_editor(&self) -> bool {
+        self.cell_editor.is_some()
+    }
+
+    /// Access the active cell editor (for rendering in main.rs).
+    pub(crate) fn cell_editor(&self) -> Option<&CellEditor> {
+        self.cell_editor.as_ref()
+    }
+
+    // ------------------------------------------------------------------
+    // Visual marker helpers (Task 6)
+    // ------------------------------------------------------------------
+
+    /// Look up the row-level marker for a row identified by its PK values.
+    #[allow(dead_code)] // used in tests; `build_render_state` is the production path
+    pub(crate) fn row_marker(&self, pk: &[Option<String>]) -> Option<RowMarker> {
+        for edit in self.changes.edits() {
+            match edit {
+                RowEdit::Update { pk: epk, .. } if epk.as_slice() == pk => {
+                    return Some(RowMarker::Modified);
+                }
+                RowEdit::Delete { pk: epk, .. } if epk.as_slice() == pk => {
+                    return Some(RowMarker::Deleted);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Look up the cell-level marker for `(pk, col_index)`.
+    #[allow(dead_code)] // used in tests; `build_render_state` is the production path
+    pub(crate) fn cell_marker(&self, pk: &[Option<String>], col: usize) -> Option<CellMarker> {
+        for edit in self.changes.edits() {
+            if let RowEdit::Update {
+                pk: epk, modified, ..
+            } = edit
+                && epk.as_slice() == pk
+                && modified.contains_key(&col)
+            {
+                return Some(CellMarker::Modified);
+            }
+        }
+        None
+    }
+
+    /// Pending insert rows (those appended to the bottom of the results view).
+    #[allow(dead_code)] // exposed for tests and future detail view
+    pub(crate) fn pending_inserts(&self) -> &[Vec<Option<String>>] {
+        &self.pending_inserts
+    }
+
+    /// FK columns — empty until Task 13.
+    #[allow(clippy::unused_self)]
+    pub(crate) fn fk_columns(&self) -> HashSet<usize> {
+        HashSet::new()
+    }
+
+    /// Build the `EditRenderState` snapshot passed to `ResultsTable` before render.
+    pub(crate) fn build_render_state(&self) -> EditRenderState {
+        let mut row_markers = HashMap::new();
+        let mut modified_cells = HashSet::new();
+
+        for edit in self.changes.edits() {
+            match edit {
+                RowEdit::Update { pk, modified, .. } => {
+                    row_markers.insert(pk.clone(), RowMarker::Modified);
+                    for &col in modified.keys() {
+                        modified_cells.insert((pk.clone(), col));
+                    }
+                }
+                RowEdit::Delete { pk, .. } => {
+                    row_markers.insert(pk.clone(), RowMarker::Deleted);
+                }
+                RowEdit::Insert { .. } => {
+                    // Pending inserts are surfaced via pending_inserts field
+                }
+            }
+        }
+
+        EditRenderState {
+            pk_columns: self.pk_columns.clone(),
+            row_markers,
+            modified_cells,
+            pending_inserts: self.pending_inserts.clone(),
+            fk_columns: self.fk_columns(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Mutation methods (Task 9)
+    // ------------------------------------------------------------------
+
+    /// Open a cell editor for the given cell.
+    ///
+    /// `original_row` is the full row snapshot from `ResultsTable` — stored so
+    /// `confirm_edit` can pass it to `ChangeLog::log_cell_edit` for the `original`
+    /// field on first edit of this row.
+    pub(crate) fn start_cell_edit(
+        &mut self,
+        pk: Vec<Option<String>>,
+        row: usize,
+        col: usize,
+        value: Option<&str>,
+        notnull: bool,
+        original_row: Vec<Option<String>>,
+    ) {
+        let modal = value.is_some_and(|v| v.contains('\n') || v.len() > 80);
+        self.cell_editor = Some(CellEditor::new(pk, row, col, value, notnull, modal));
+        self.editing_original_row = original_row;
+    }
+
+    /// Confirm the current cell edit, writing the new value into the `ChangeLog`.
+    pub(crate) fn confirm_edit(&mut self, value: Option<String>) {
+        let Some(editor) = self.cell_editor.take() else {
+            return;
+        };
+        self.changes
+            .log_cell_edit(&editor.pk, editor.col, value, &self.editing_original_row);
+    }
+
+    /// Cancel the current cell edit without changes.
+    pub(crate) fn cancel_edit(&mut self) {
+        self.cell_editor = None;
+    }
+
+    /// Append a NULL-filled row to `pending_inserts` and `ChangeLog`.
+    pub(crate) fn add_row(&mut self) {
+        let null_row: Vec<Option<String>> = self.columns.iter().map(|_| None).collect();
+        self.changes.log_insert(null_row.clone());
+        self.pending_inserts.push(null_row);
+    }
+
+    /// Clone an existing row into `pending_inserts` and `ChangeLog`.
+    pub(crate) fn clone_row(&mut self, values: Vec<Option<String>>) {
+        self.changes.log_insert(values.clone());
+        self.pending_inserts.push(values);
+    }
+
+    /// Toggle the delete mark for a row.
+    pub(crate) fn toggle_delete_row(&mut self, pk: &[Option<String>], original: &[Option<String>]) {
+        self.changes.toggle_delete(pk, original);
+    }
+
+    /// Revert the modified cell at `(pk, col)`.
+    pub(crate) fn revert_cell_edit(&mut self, pk: &[Option<String>], col: usize) {
+        self.changes.revert_cell(pk, col);
+    }
+
+    /// Revert all changes for a row (Update or Delete).
+    pub(crate) fn revert_row_edit(&mut self, pk: &[Option<String>]) {
+        self.changes.revert_row(pk);
+    }
+
+    /// Revert everything — clear `ChangeLog` and `pending_inserts`.
+    pub(crate) fn revert_all_edits(&mut self) {
+        self.changes.revert_all();
+        self.pending_inserts.clear();
+    }
+
+    /// Remove a pending insert by index (for deleting an uncommitted row).
+    pub(crate) fn remove_pending_insert(&mut self, insert_idx: usize) {
+        if insert_idx < self.pending_inserts.len() {
+            self.pending_inserts.remove(insert_idx);
+            self.changes.remove_insert(insert_idx);
+        }
+    }
 }
 
 impl Component for DataEditor {
-    fn handle_key(&mut self, _key: KeyEvent) -> Option<Action> {
-        None // Task 9 adds key handling
+    fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+        if !self.active {
+            return None;
+        }
+
+        // Delegate ALL keys to cell editor when one is open
+        if let Some(ref mut editor) = self.cell_editor {
+            return editor.handle_key(key);
+        }
+
+        // Edit-mode keys
+        match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Char('e') | KeyCode::F(2)) => Some(Action::StartCellEdit),
+            (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::AddRow),
+            (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::ToggleDeleteRow),
+            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                // Signal: main.rs will read actual row data and call clone_row()
+                Some(Action::CloneRow(Vec::new()))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::RevertCell),
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('U')) => {
+                Some(Action::RevertRow)
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::RevertAll),
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ShowDmlPreview(false)),
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(Action::ShowDmlPreview(true)),
+            _ => None, // fall through to ResultsTable
+        }
     }
 
     fn render(&mut self, _frame: &mut Frame, _area: Rect, _focused: bool, _theme: &Theme) {
@@ -1397,5 +1631,84 @@ mod tests {
 
         let stmts = generate_dml("users", &cols, &pk_cols, &log);
         assert!(stmts.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // DataEditor visual markers (Task 6)
+    // -------------------------------------------------------------------------
+
+    fn make_data_editor_activated() -> DataEditor {
+        let columns = vec![
+            ColumnInfo {
+                name: "id".to_string(),
+                col_type: "INTEGER".to_string(),
+                notnull: true,
+                default_value: None,
+                pk: true,
+            },
+            ColumnInfo {
+                name: "name".to_string(),
+                col_type: "TEXT".to_string(),
+                notnull: false,
+                default_value: None,
+                pk: false,
+            },
+        ];
+        let mut de = DataEditor::new();
+        de.activate(
+            "users".to_string(),
+            vec![0],
+            columns,
+            "SELECT * FROM users".to_string(),
+        );
+        de
+    }
+
+    fn some_pk(id: &str) -> Vec<Option<String>> {
+        vec![Some(id.to_string())]
+    }
+
+    fn some_row(id: &str, name: &str) -> Vec<Option<String>> {
+        vec![Some(id.to_string()), Some(name.to_string())]
+    }
+
+    #[test]
+    fn test_row_marker_modified() {
+        let mut de = make_data_editor_activated();
+        let pk = some_pk("1");
+        let orig = some_row("1", "Alice");
+        de.changes
+            .log_cell_edit(&pk, 1, Some("Alicia".to_string()), &orig);
+        assert_eq!(de.row_marker(&pk), Some(RowMarker::Modified));
+    }
+
+    #[test]
+    fn test_row_marker_deleted() {
+        let mut de = make_data_editor_activated();
+        let pk = some_pk("2");
+        let orig = some_row("2", "Bob");
+        de.changes.log_delete(&pk, &orig);
+        assert_eq!(de.row_marker(&pk), Some(RowMarker::Deleted));
+    }
+
+    #[test]
+    fn test_cell_marker_modified() {
+        let mut de = make_data_editor_activated();
+        let pk = some_pk("3");
+        let orig = some_row("3", "Carol");
+        de.changes
+            .log_cell_edit(&pk, 1, Some("Caroline".to_string()), &orig);
+        // Column 1 is modified
+        assert_eq!(de.cell_marker(&pk, 1), Some(CellMarker::Modified));
+        // Column 0 (PK) is NOT modified
+        assert_eq!(de.cell_marker(&pk, 0), None);
+    }
+
+    #[test]
+    fn test_row_marker_none_for_unchanged() {
+        let de = make_data_editor_activated();
+        let pk = some_pk("99");
+        assert_eq!(de.row_marker(&pk), None);
+        assert_eq!(de.cell_marker(&pk, 0), None);
     }
 }
