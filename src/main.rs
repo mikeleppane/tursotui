@@ -386,7 +386,9 @@ fn handle_key_event(
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
                     if let Some(ref mut viewer) = app.ddl_viewer {
-                        let max = viewer.sql.lines().count().saturating_sub(1);
+                        // With word wrapping, wrapped line count exceeds raw line count.
+                        // Use a generous upper bound; render-time clamp refines it.
+                        let max = viewer.sql.len();
                         viewer.scroll = viewer.scroll.saturating_add(1).min(max);
                     }
                 }
@@ -534,6 +536,10 @@ fn route_key_to_component(
             }
             _ => match db.bottom_tab {
                 BottomTab::Results => {
+                    // Filter bar takes absolute priority when typing
+                    if db.results.filter_bar_active {
+                        return db.results.handle_key(key);
+                    }
                     // DataEditor intercepts before ResultsTable when active
                     if db.data_editor.is_active()
                         && let Some(action) = db.data_editor.handle_key(key)
@@ -614,7 +620,12 @@ fn dispatch_action_to_db(
         app::Action::QueryCompleted(result) => {
             let db = &mut app.databases[db_idx];
             db.last_filter_query = false;
-            db.results.set_results(result);
+            // Enrich source_table if not provided (Tier 2: parse from SQL)
+            let mut enriched = result.clone();
+            if enriched.source_table.is_none() {
+                enriched.source_table = components::data_editor::detect_source_table(&enriched.sql);
+            }
+            db.results.set_results(&enriched);
             // Mark explain as stale with the executed SQL
             db.explain.mark_stale(result.sql.clone());
             // Populate record detail with the first row
@@ -1905,7 +1916,9 @@ fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut GlobalUi) {
         let total_lines = lines.len();
         let max_scroll = total_lines.saturating_sub(inner.height as usize);
         let effective_scroll = viewer.scroll.min(max_scroll);
-        let para = Paragraph::new(lines).scroll((effective_scroll as u16, 0));
+        let para = Paragraph::new(lines)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((effective_scroll as u16, 0));
         frame.render_widget(para, inner);
     }
 
