@@ -222,6 +222,14 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
 
     // Phase 2: process each, routing to the specific database
     for (db_idx, msg) in pending {
+        // Handle RowCount directly (needs db_idx routing, no Action needed)
+        if let db::QueryMessage::RowCount(ref table, count) = msg {
+            app.databases[db_idx]
+                .schema_cache
+                .row_counts
+                .insert(table.clone(), count);
+            continue;
+        }
         let action = map_query_message(msg);
         app.update_for_db(db_idx, &action);
         dispatch_action_to_db(db_idx, &action, app, global_ui);
@@ -268,6 +276,7 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
         db::QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
         db::QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
+        db::QueryMessage::RowCount(..) => unreachable!("handled in drain loop"),
     }
 }
 
@@ -711,6 +720,7 @@ fn dispatch_action_to_db(
             // Populate schema cache and trigger eager column loading for autocomplete
             db.schema_cache.entries.clone_from(entries);
             db.schema_cache.columns.clear();
+            db.schema_cache.row_counts.clear();
             db.schema_cache.fully_loaded = false;
             let table_names: Vec<String> = entries
                 .iter()
@@ -733,11 +743,23 @@ fn dispatch_action_to_db(
                 .iter()
                 .filter(|e| e.obj_type == "table" || e.obj_type == "view")
                 .count();
+            let was_loaded = db.schema_cache.fully_loaded;
             if db.schema_cache.columns.len() >= expected {
                 db.schema_cache.fully_loaded = true;
                 // Build ER diagram now that all columns are loaded.
                 db.er_diagram
                     .build_from_schema(&db.schema_cache.entries, &db.schema_cache.columns);
+                // Fire row count queries once when fully_loaded first becomes true
+                if !was_loaded {
+                    let table_names: Vec<String> = db
+                        .schema_cache
+                        .entries
+                        .iter()
+                        .filter(|e| e.obj_type == "table") // tables only, NOT views
+                        .map(|e| e.name.clone())
+                        .collect();
+                    db.handle.load_row_counts(&table_names);
+                }
             }
             // Check if this completes a deferred editability check
             let pending = app.databases[db_idx].pending_edit_table.clone();
@@ -1805,6 +1827,7 @@ fn render_query_tab(
         ])
         .areas(area);
 
+        db.schema.set_row_counts(&db.schema_cache.row_counts);
         db.schema
             .render(frame, sidebar_area, focus == PanelId::Schema, theme);
 

@@ -1563,6 +1563,7 @@ mod tests {
             ]),
             fully_loaded: true,
             fk_info: HashMap::new(),
+            row_counts: HashMap::new(),
         }
     }
 

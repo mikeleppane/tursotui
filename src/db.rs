@@ -270,6 +270,7 @@ pub(crate) enum QueryMessage {
     TransactionFailed(String),
     #[allow(dead_code)]
     ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
+    RowCount(String, u64), // (table_name_lowercase, count)
 }
 
 /// Wraps an `Arc<Database>` and provides a channel for receiving query results.
@@ -596,6 +597,32 @@ impl DatabaseHandle {
     pub fn load_all_columns(&self, table_names: &[String]) {
         for name in table_names {
             self.load_columns(name.clone());
+        }
+    }
+
+    /// Spawn async `COUNT(*)` queries for a list of table names.
+    /// Results arrive as `QueryMessage::RowCount`.
+    pub(crate) fn load_row_counts(&self, tables: &[String]) {
+        for table in tables {
+            let db = Arc::clone(&self.database);
+            let tx = self.result_tx.clone();
+            let table_name = table.clone();
+            let table_lower = table.to_lowercase();
+            tokio::spawn(async move {
+                let Ok(conn) = db.connect() else { return };
+                let sql = format!(
+                    "SELECT COUNT(*) FROM {}",
+                    crate::components::data_editor::quote_identifier(&table_name)
+                );
+                let Ok(mut rows) = conn.query(&sql, ()).await else {
+                    return;
+                };
+                if let Ok(Some(row)) = rows.next().await
+                    && let Ok(count) = row.get::<i64>(0)
+                {
+                    let _ = tx.send(QueryMessage::RowCount(table_lower, count.max(0) as u64));
+                }
+            });
         }
     }
 

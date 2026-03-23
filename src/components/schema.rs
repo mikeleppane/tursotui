@@ -67,6 +67,8 @@ pub(crate) struct SchemaExplorer {
     filter_active: bool,
     /// Cache of DDL SQL keyed by object name, populated on schema load.
     ddl_cache: std::collections::HashMap<String, String>,
+    /// Approximate row counts keyed by lowercase table name.
+    row_counts: std::collections::HashMap<String, u64>,
 }
 
 impl SchemaExplorer {
@@ -79,6 +81,7 @@ impl SchemaExplorer {
             filter: None,
             filter_active: false,
             ddl_cache: std::collections::HashMap::new(),
+            row_counts: std::collections::HashMap::new(),
         }
     }
 
@@ -189,6 +192,11 @@ impl SchemaExplorer {
                 }
             }
         }
+    }
+
+    /// Update row counts for display next to table names.
+    pub(crate) fn set_row_counts(&mut self, counts: &std::collections::HashMap<String, u64>) {
+        self.row_counts.clone_from(counts);
     }
 
     /// Look up cached DDL SQL for a schema object by name.
@@ -950,11 +958,28 @@ impl Component for SchemaExplorer {
                         theme.schema_table
                     };
                     let type_hint = if is_view { " [view]" } else { "" };
+                    // Row count suffix for tables only (not views)
+                    let count_suffix = if is_view {
+                        String::new()
+                    } else {
+                        self.row_counts
+                            .get(&name.to_lowercase())
+                            .map(|c| format!(" ({})", format_count(*c)))
+                            .unwrap_or_default()
+                    };
 
                     let cw = content_width as usize;
                     let name_text = format!("  {arrow}{name}");
                     if is_selected {
-                        let text = format!("{name_text}{type_hint}");
+                        // Build text, only including count if it fits fully
+                        let base = format!("{name_text}{type_hint}");
+                        let base_w = unicode_width::UnicodeWidthStr::width(base.as_str());
+                        let count_w = unicode_width::UnicodeWidthStr::width(count_suffix.as_str());
+                        let text = if base_w + count_w <= cw {
+                            format!("{base}{count_suffix}")
+                        } else {
+                            base
+                        };
                         let display = truncate_str(&text, cw);
                         frame.render_widget(
                             Paragraph::new(display).style(theme.selected_style),
@@ -963,14 +988,22 @@ impl Component for SchemaExplorer {
                     } else {
                         let name_display = truncate_str(&name_text, cw);
                         let name_w = unicode_width::UnicodeWidthStr::width(name_display.as_str());
+                        // Build suffix spans: type hint first, then count
                         let hint_display = if name_w < cw && !type_hint.is_empty() {
                             truncate_str(type_hint, cw - name_w)
+                        } else {
+                            String::new()
+                        };
+                        let hint_w = unicode_width::UnicodeWidthStr::width(hint_display.as_str());
+                        let count_display = if name_w + hint_w < cw && !count_suffix.is_empty() {
+                            truncate_str(&count_suffix, cw - name_w - hint_w)
                         } else {
                             String::new()
                         };
                         let spans = vec![
                             Span::styled(name_display, Style::default().fg(icon_color)),
                             Span::styled(hint_display, dim_style),
+                            Span::styled(count_display, Style::default().fg(theme.border)),
                         ];
                         frame.render_widget(Paragraph::new(Line::from(spans)), row_area);
                     }
@@ -1108,6 +1141,19 @@ fn truncate_str(s: &str, max_width: usize) -> String {
     }
     truncated.push('\u{2026}');
     truncated
+}
+
+/// Format an integer with thousands separators (e.g. `1247` -> `"1,247"`).
+fn format_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result
 }
 
 #[cfg(test)]

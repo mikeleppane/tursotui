@@ -30,6 +30,8 @@ pub(crate) struct SchemaCache {
     pub(crate) fully_loaded: bool,
     /// Foreign key info keyed by table name.
     pub(crate) fk_info: HashMap<String, Vec<ForeignKeyInfo>>,
+    /// Approximate row counts keyed by lowercase table name.
+    pub(crate) row_counts: HashMap<String, u64>,
 }
 
 impl SchemaCache {
