@@ -418,6 +418,21 @@ fn handle_key_event(
             }
             return;
         }
+        Some(app::Overlay::ERDiagram) => {
+            if key.kind == KeyEventKind::Press {
+                if let (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('f') | KeyCode::F(6)) =
+                    (key.modifiers, key.code)
+                {
+                    app.active_overlay = None;
+                } else {
+                    let db = &mut app.databases[active_idx];
+                    if let Some(action) = db.er_diagram.handle_key(key) {
+                        dispatch_action_to_db(active_idx, &action, app, global_ui);
+                    }
+                }
+            }
+            return;
+        }
         Some(app::Overlay::GoToObject) => {
             if let Some(ref mut goto) = global_ui.goto_object {
                 let active_db_path = app.databases[active_idx].path.clone();
@@ -1861,6 +1876,26 @@ fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut GlobalUi) {
         let popup_area = Rect::new(x, y, popup_w, popup_h);
         frame.render_widget(Clear, popup_area);
         global_ui.bookmarks.render(frame, popup_area, &theme);
+    }
+
+    // ER Diagram fullscreen overlay
+    if active_overlay == Some(app::Overlay::ERDiagram) {
+        let full = frame.area();
+        let popup_w = full.width * 95 / 100;
+        let popup_h = full.height * 95 / 100;
+        let x = (full.width.saturating_sub(popup_w)) / 2;
+        let y = (full.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+        frame.render_widget(Clear, popup_area);
+        let block = components::overlay_block("ER Diagram (fullscreen)", &theme);
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let db = &mut app.databases[active_idx];
+        db.er_diagram.is_fullscreen = true;
+        db.er_diagram.render(frame, inner, true, &theme);
+        db.er_diagram.is_fullscreen = false;
     }
 
     // Export overlay

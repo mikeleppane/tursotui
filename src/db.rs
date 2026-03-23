@@ -1136,6 +1136,66 @@ impl DatabaseHandle {
             search_from = offset + table_len;
         }
 
+        // Also parse inline column-level FK syntax:
+        //   column_name TYPE [NOT NULL] REFERENCES table_name (column_name)
+        // Scan for REFERENCES not preceded by FOREIGN KEY.
+        let mut search_from = 0;
+        while let Some(ref_pos) = upper[search_from..].find("REFERENCES") {
+            let abs_pos = search_from + ref_pos;
+            search_from = abs_pos + 10;
+
+            // Skip if this REFERENCES is part of a FOREIGN KEY ... REFERENCES
+            // (already handled above). Look for "FOREIGN KEY" OR a closing paren
+            // between the last clause separator and REFERENCES — both indicate
+            // a table-level constraint, not an inline column FK.
+            let before = &upper[..abs_pos];
+            let last_separator = before.rfind([',', '(']).unwrap_or(0);
+            let clause_before = &before[last_separator..];
+            if clause_before.contains("FOREIGN KEY") || clause_before.contains(')') {
+                continue;
+            }
+
+            // Walk backwards from REFERENCES to find the column name.
+            // The text before REFERENCES looks like: "col_name TYPE [NOT NULL] [qualifiers] "
+            let before_ref = create_sql[..abs_pos].trim_end();
+            // Split the clause (from last comma or open paren) into tokens
+            let clause_start = before_ref.rfind([',', '(']).map_or(0, |p| p + 1);
+            let clause = before_ref[clause_start..].trim();
+            // First token in the clause is the column name
+            let from_col = clause.split_whitespace().next().unwrap_or("");
+            if from_col.is_empty() {
+                continue;
+            }
+
+            // Extract target table name after REFERENCES
+            let after_ref = &create_sql[abs_pos + 10..].trim_start();
+            let offset_after = create_sql.len() - after_ref.len();
+            let (to_table, rest) = Self::extract_identifier(after_ref);
+            if to_table.is_empty() {
+                continue;
+            }
+
+            // Extract target column from (col)
+            let rest_trimmed = rest.trim_start();
+            if !rest_trimmed.starts_with('(') {
+                continue;
+            }
+            let inner = &rest_trimmed[1..];
+            let Some(end) = inner.find(')') else {
+                continue;
+            };
+            let to_col = inner[..end].trim();
+
+            let tbl_len = to_table.len();
+            fks.push(ForeignKeyInfo {
+                from_column: Self::unquote(from_col),
+                to_table,
+                to_column: Self::unquote(to_col),
+            });
+
+            search_from = offset_after + tbl_len;
+        }
+
         fks
     }
 
@@ -1762,13 +1822,12 @@ mod tests {
 
     #[test]
     fn parse_fk_inline_column_constraint() {
-        // Inline FK syntax: column_name TYPE REFERENCES table(col)
-        // Our parser looks for "FOREIGN KEY" keyword, so inline FKs are NOT detected.
-        // This is a known limitation — document it.
         let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, ref_id INTEGER REFERENCES other(id))";
         let fks = DatabaseHandle::parse_foreign_keys(sql);
-        // Inline FK syntax is not parsed — only table-level FOREIGN KEY constraints
-        assert!(fks.is_empty());
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "other");
+        assert_eq!(fks[0].to_column, "id");
     }
 
     #[test]
@@ -1793,6 +1852,95 @@ mod tests {
         assert_eq!(fks[0].from_column, "ref_id");
         assert_eq!(fks[0].to_table, "other");
         assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_inline_with_not_null() {
+        let sql = r"CREATE TABLE albums (
+            id INTEGER PRIMARY KEY,
+            artist_id INTEGER NOT NULL REFERENCES artists (id),
+            title TEXT NOT NULL
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "artist_id");
+        assert_eq!(fks[0].to_table, "artists");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_inline_multiple() {
+        // Multiple inline FKs in the same table (like demo.db tracks table)
+        let sql = r"CREATE TABLE tracks (
+            id INTEGER PRIMARY KEY,
+            album_id INTEGER NOT NULL REFERENCES albums (id),
+            featured_artist_id INTEGER REFERENCES artists (id)
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        assert_eq!(fks[0].from_column, "album_id");
+        assert_eq!(fks[0].to_table, "albums");
+        assert_eq!(fks[0].to_column, "id");
+        assert_eq!(fks[1].from_column, "featured_artist_id");
+        assert_eq!(fks[1].to_table, "artists");
+        assert_eq!(fks[1].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_inline_quoted_table() {
+        let sql =
+            r#"CREATE TABLE t (id INTEGER PRIMARY KEY, ref_id INTEGER REFERENCES "My Table" (id))"#;
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "My Table");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_inline_case_insensitive() {
+        let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, ref_id INTEGER references other(id))";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "other");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_mixed_inline_and_table_level() {
+        // Both inline and table-level FKs in the same CREATE TABLE — no duplicates
+        let sql = r"CREATE TABLE t (
+            id INTEGER PRIMARY KEY,
+            a_id INTEGER REFERENCES a (id),
+            b_id INTEGER NOT NULL,
+            FOREIGN KEY (b_id) REFERENCES b (id)
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        // Table-level FK comes first (parsed in first pass)
+        assert_eq!(fks[0].from_column, "b_id");
+        assert_eq!(fks[0].to_table, "b");
+        // Inline FK comes second (parsed in second pass)
+        assert_eq!(fks[1].from_column, "a_id");
+        assert_eq!(fks[1].to_table, "a");
+    }
+
+    #[test]
+    fn parse_fk_inline_composite_pk_table() {
+        // Like demo.db playlist_tracks — composite PK with inline FKs
+        let sql = r"CREATE TABLE playlist_tracks (
+            playlist_id INTEGER NOT NULL REFERENCES playlists (id),
+            track_id INTEGER NOT NULL REFERENCES tracks (id),
+            position INTEGER NOT NULL,
+            PRIMARY KEY (playlist_id, track_id)
+        )";
+        let fks = DatabaseHandle::parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        assert_eq!(fks[0].from_column, "playlist_id");
+        assert_eq!(fks[0].to_table, "playlists");
+        assert_eq!(fks[1].from_column, "track_id");
+        assert_eq!(fks[1].to_table, "tracks");
     }
 
     #[test]

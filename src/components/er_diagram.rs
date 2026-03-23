@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
@@ -10,6 +10,13 @@ use crate::db::{ColumnInfo, DatabaseHandle, SchemaEntry};
 use crate::theme::Theme;
 
 use super::Component;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZoomLevel {
+    Overview,
+    Normal,
+    Detail,
+}
 
 // ─── Data model ──────────────────────────────────────────────────────────────
 
@@ -37,11 +44,9 @@ pub(crate) struct ERTable {
 pub(crate) struct Relationship {
     /// Index into the `tables` slice of the owning [`ERDiagram`].
     pub(crate) from_table: usize,
-    #[allow(dead_code)] // retained for edge labels and tooltip display (planned v2 feature)
     pub(crate) from_column: String,
     /// Index into the `tables` slice of the owning [`ERDiagram`].
     pub(crate) to_table: usize,
-    #[allow(dead_code)] // retained for edge labels and tooltip display (planned v2 feature)
     pub(crate) to_column: String,
     /// When `true`, this edge was part of a cycle and should be drawn dashed.
     pub(crate) is_cycle: bool,
@@ -53,16 +58,22 @@ pub(crate) struct ERDiagram {
     pub(crate) relationships: Vec<Relationship>,
     /// Pan offset (x, y) in virtual space.
     pub(crate) viewport: (i32, i32),
-    /// Spacing multiplier: 1 = tight, 2 = normal, 3 = spacious.
-    pub(crate) spacing: u8,
+    pub(crate) zoom: ZoomLevel,
     pub(crate) focused_table: Option<usize>,
-    pub(crate) compact_mode: bool,
     /// Indices of tables whose column list is expanded in the diagram.
     pub(crate) expanded_tables: Vec<usize>,
+    pub(crate) is_fullscreen: bool,
+    pub(crate) connected_tables: HashSet<usize>,
     /// True when the layout needs to be recalculated.
     pub(crate) layout_dirty: bool,
+    /// Last render area dimensions (width, height) — used by center-viewport logic.
+    last_area: (u16, u16),
     /// False until the first successful build from `schema_cache`.
     pub(crate) loaded: bool,
+    /// Grid layout metadata — x-origin of each grid column (set by `recalculate_layout`).
+    col_origins: Vec<i32>,
+    /// Max table width per grid column (set by `recalculate_layout`).
+    col_widths: Vec<i32>,
 }
 
 impl ERDiagram {
@@ -71,12 +82,16 @@ impl ERDiagram {
             tables: Vec::new(),
             relationships: Vec::new(),
             viewport: (0, 0),
-            spacing: 2,
+            zoom: ZoomLevel::Normal,
             focused_table: None,
-            compact_mode: false,
             expanded_tables: Vec::new(),
+            is_fullscreen: false,
+            connected_tables: HashSet::new(),
             layout_dirty: true,
+            last_area: (0, 0),
             loaded: false,
+            col_origins: Vec::new(),
+            col_widths: Vec::new(),
         }
     }
 
@@ -181,6 +196,23 @@ impl ERDiagram {
         } else {
             Some(0)
         };
+        self.rebuild_connected_tables();
+    }
+
+    /// Rebuild the set of tables directly connected to the focused table via FK.
+    fn rebuild_connected_tables(&mut self) {
+        self.connected_tables.clear();
+        let Some(focused) = self.focused_table else {
+            return;
+        };
+        for rel in &self.relationships {
+            if rel.from_table == focused {
+                self.connected_tables.insert(rel.to_table);
+            }
+            if rel.to_table == focused {
+                self.connected_tables.insert(rel.from_table);
+            }
+        }
     }
 }
 
@@ -280,9 +312,13 @@ impl ERDiagram {
     #[allow(clippy::too_many_lines)]
     fn render_table(&self, buf: &mut Buffer, area: Rect, table_idx: usize, theme: &Theme) {
         let table = &self.tables[table_idx];
-        let is_focused = self.focused_table == Some(table_idx);
-        let border_style = if is_focused {
+        let is_focused_table = self.focused_table == Some(table_idx);
+        let is_connected =
+            self.focused_table.is_some() && self.connected_tables.contains(&table_idx);
+        let border_style = if is_focused_table {
             Style::default().fg(theme.border_focused)
+        } else if is_connected {
+            theme.er_connected_border
         } else {
             theme.er_table_border
         };
@@ -299,7 +335,7 @@ impl ERDiagram {
 
         // Name row at ty + 1 (body row between top border and separator)
         let name = &table.name;
-        let name_style = if is_focused {
+        let name_style = if is_focused_table {
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD)
@@ -311,33 +347,37 @@ impl ERDiagram {
         put_char(vp, buf, area, tx + tw - 1, name_y, '│', border_style);
         put_str(vp, buf, area, tx + 2, name_y, name, name_style);
 
-        // Separator: ├──...──┤
-        let sep_y = ty + 2;
-        put_char(vp, buf, area, tx, sep_y, '├', border_style);
-        for dx in 1..tw - 1 {
-            put_char(vp, buf, area, tx + dx, sep_y, '─', border_style);
-        }
-        put_char(vp, buf, area, tx + tw - 1, sep_y, '┤', border_style);
-
-        let is_expanded = self.expanded_tables.contains(&table_idx);
-        let mut row_y = sep_y + 1;
-
-        if self.compact_mode {
-            put_char(vp, buf, area, tx, row_y, '│', border_style);
-            put_char(vp, buf, area, tx + tw - 1, row_y, '│', border_style);
-            row_y += 1;
+        // At Overview zoom, skip separator and columns entirely (box is just 3 rows).
+        let mut row_y = if self.zoom == ZoomLevel::Overview {
+            name_y + 1
         } else {
-            let pk_cols: Vec<usize> = table
-                .columns
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.is_pk)
-                .map(|(i, _)| i)
-                .collect();
-            let indices_to_show: Vec<usize> = if is_expanded {
-                (0..table.columns.len()).collect()
-            } else {
-                pk_cols.clone()
+            // Separator: ├──...──┤
+            let sep_y = ty + 2;
+            put_char(vp, buf, area, tx, sep_y, '├', border_style);
+            for dx in 1..tw - 1 {
+                put_char(vp, buf, area, tx + dx, sep_y, '─', border_style);
+            }
+            put_char(vp, buf, area, tx + tw - 1, sep_y, '┤', border_style);
+
+            let mut row_y = sep_y + 1;
+
+            let is_expanded = self.expanded_tables.contains(&table_idx);
+            let indices_to_show: Vec<usize> = match self.zoom {
+                ZoomLevel::Detail => (0..table.columns.len()).collect(),
+                ZoomLevel::Normal => {
+                    if is_expanded {
+                        (0..table.columns.len()).collect()
+                    } else {
+                        table
+                            .columns
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| c.is_pk)
+                            .map(|(i, _)| i)
+                            .collect()
+                    }
+                }
+                ZoomLevel::Overview => Vec::new(),
             };
 
             for &col_idx in &indices_to_show {
@@ -345,46 +385,47 @@ impl ERDiagram {
                 put_char(vp, buf, area, tx, row_y, '│', border_style);
                 put_char(vp, buf, area, tx + tw - 1, row_y, '│', border_style);
 
-                let (marker, marker_style) = if col.is_pk {
-                    ("ⓟ", theme.er_pk_style)
+                let (marker, marker_style) = if col.is_pk && col.is_fk {
+                    ("🔑", theme.er_fk_style)
+                } else if col.is_pk {
+                    ("🔑", theme.er_pk_style)
                 } else if col.is_fk {
-                    ("ⓕ", theme.er_fk_style)
+                    ("🔗", theme.er_fk_style)
                 } else {
-                    (" ", Style::default().fg(theme.fg))
+                    ("  ", Style::default().fg(theme.fg))
                 };
                 put_str(vp, buf, area, tx + 1, row_y, marker, marker_style);
 
                 let col_text = format!("{}: {}", col.name, col.type_name);
-                let col_style = if col.is_pk {
+                let col_style = if col.is_pk && col.is_fk {
+                    theme.er_fk_style
+                } else if col.is_pk {
                     theme.er_pk_style
                 } else if col.is_fk {
                     theme.er_fk_style
                 } else {
                     Style::default().fg(theme.fg)
                 };
-                put_str(vp, buf, area, tx + 2, row_y, &col_text, col_style);
+                put_str(vp, buf, area, tx + 3, row_y, &col_text, col_style);
                 row_y += 1;
             }
 
-            if !is_expanded {
-                let hidden = table.columns.len().saturating_sub(pk_cols.len());
+            // (+N) indicator only shows at Normal zoom when not expanded
+            if self.zoom == ZoomLevel::Normal && !is_expanded {
+                let pk_count = table.columns.iter().filter(|c| c.is_pk).count();
+                let hidden = table.columns.len().saturating_sub(pk_count);
                 if hidden > 0 {
                     put_char(vp, buf, area, tx, row_y, '│', border_style);
                     put_char(vp, buf, area, tx + tw - 1, row_y, '│', border_style);
                     let indicator = format!("(+{hidden})");
-                    put_str(
-                        vp,
-                        buf,
-                        area,
-                        tx + 2,
-                        row_y,
-                        &indicator,
-                        Style::default().fg(theme.dim),
-                    );
+                    let indicator_style = Style::default().fg(theme.dim);
+                    put_str(vp, buf, area, tx + 3, row_y, &indicator, indicator_style);
                     row_y += 1;
                 }
             }
-        }
+
+            row_y
+        };
 
         while row_y < ty + th - 1 {
             put_char(vp, buf, area, tx, row_y, '│', border_style);
@@ -403,15 +444,18 @@ impl ERDiagram {
     /// Number of visible rows for a table in the current display mode.
     fn display_row_count(&self, table_idx: usize) -> i32 {
         let table = &self.tables[table_idx];
-        if self.compact_mode {
-            1 // just a spacer row below header
-        } else if self.expanded_tables.contains(&table_idx) {
-            table.columns.len() as i32
-        } else {
-            // PK columns + optional (+N) indicator
-            let pk_count = table.columns.iter().filter(|c| c.is_pk).count() as i32;
-            let hidden = table.columns.len() as i32 - pk_count;
-            pk_count + i32::from(hidden > 0) // +1 for (+N) indicator
+        match self.zoom {
+            ZoomLevel::Overview => 0,
+            ZoomLevel::Detail => table.columns.len() as i32,
+            ZoomLevel::Normal => {
+                if self.expanded_tables.contains(&table_idx) {
+                    table.columns.len() as i32
+                } else {
+                    let pk_count = table.columns.iter().filter(|c| c.is_pk).count() as i32;
+                    let hidden = table.columns.len() as i32 - pk_count;
+                    pk_count + i32::from(hidden > 0)
+                }
+            }
         }
     }
 
@@ -431,18 +475,28 @@ impl ERDiagram {
                 .max()
                 .unwrap_or(0);
             let content_width = name_width.max(max_col_width);
-            let box_width = content_width + 4; // borders + padding
+            let box_width = content_width + 5; // borders + padding + marker column
 
             let visible_rows = self.display_row_count(idx);
-            // +4 for top border + name row + separator + bottom border
-            let box_height = visible_rows + 4;
+            let box_height = if self.zoom == ZoomLevel::Overview {
+                3 // border + name + border (no separator)
+            } else {
+                visible_rows + 4
+            };
 
-            self.tables[idx].size = (box_width.max(6), box_height.max(4));
+            let min_h = if self.zoom == ZoomLevel::Overview {
+                3
+            } else {
+                4
+            };
+            self.tables[idx].size = (box_width.max(6), box_height.max(min_h));
         }
         // Assign positions using pre-computed sizes and grid_pos.
-        let sp = self.spacing.clamp(1, 3);
-        let gap_x = 4 * i32::from(sp);
-        let gap_y = 2 * i32::from(sp);
+        let (gap_x, gap_y): (i32, i32) = match self.zoom {
+            ZoomLevel::Overview => (4, 2),
+            ZoomLevel::Normal => (14, 4),
+            ZoomLevel::Detail => (12, 6),
+        };
 
         let max_col = self.tables.iter().map(|t| t.grid_pos.1).max().unwrap_or(0);
         let max_row = self.tables.iter().map(|t| t.grid_pos.0).max().unwrap_or(0);
@@ -472,12 +526,232 @@ impl ERDiagram {
             table.pos = (col_origins[c], row_origins[r]);
         }
 
+        self.col_origins = col_origins;
+        self.col_widths = col_widths;
         self.layout_dirty = false;
     }
 
+    /// Return the Y coordinate for an edge endpoint on a given table.
+    ///
+    /// If the FK/PK column is visible (expanded in Normal zoom, or Detail zoom),
+    /// returns that column's row Y. Otherwise returns the header row Y.
+    fn column_anchor_y(&self, table_idx: usize, col_name: &str, is_pk: bool) -> i32 {
+        let table = &self.tables[table_idx];
+        let header_y = table.pos.1 + 1;
+        if self.zoom == ZoomLevel::Overview {
+            return header_y;
+        }
+        // Overview returns early above, so only Normal and Detail remain.
+        let columns_visible = match self.zoom {
+            ZoomLevel::Detail => true,
+            ZoomLevel::Normal => self.expanded_tables.contains(&table_idx),
+            ZoomLevel::Overview => unreachable!(),
+        };
+        if !columns_visible && !is_pk {
+            return header_y;
+        }
+        let sep_y = table.pos.1 + 2;
+        if columns_visible {
+            if let Some(idx) = table.columns.iter().position(|c| c.name == col_name) {
+                return sep_y + 1 + idx as i32;
+            }
+        } else {
+            // Normal zoom, collapsed — only PK rows visible
+            let pk_idx = table
+                .columns
+                .iter()
+                .filter(|c| c.is_pk)
+                .position(|c| c.name == col_name);
+            if let Some(idx) = pk_idx {
+                return sep_y + 1 + idx as i32;
+            }
+        }
+        header_y
+    }
+
+    /// Find the x-coordinate for a vertical edge segment between two grid columns.
+    ///
+    /// Picks the inter-column gap whose center is closest to `ideal_x`.
+    /// Falls back to `ideal_x` when layout metadata is unavailable.
+    fn find_gap_x(&self, col_a: usize, col_b: usize, ideal_x: i32) -> i32 {
+        if self.col_origins.is_empty() {
+            return ideal_x;
+        }
+        let (lo, hi) = if col_a < col_b {
+            (col_a, col_b)
+        } else {
+            (col_b, col_a)
+        };
+        let mut best_x = ideal_x;
+        let mut best_dist = i32::MAX;
+        for c in lo..hi {
+            if c + 1 < self.col_origins.len() {
+                let right_edge = self.col_origins[c] + self.col_widths[c];
+                let left_edge = self.col_origins[c + 1];
+                let center = i32::midpoint(right_edge, left_edge);
+                let dist = (center - ideal_x).abs();
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_x = center;
+                }
+            }
+        }
+        best_x
+    }
+
+    /// Find the x-coordinate for routing same-column edges (right-side bypass).
+    ///
+    /// Uses the inter-column gap to the right of `col`, or adds padding past the
+    /// rightmost table edge if this is the last column.
+    fn same_col_gap_x(&self, col: usize) -> i32 {
+        let (center, _) = self.gap_bounds_for_col(col);
+        center
+    }
+
+    /// Return `(center, usable_half_width)` for the gap to the right of `col`.
+    ///
+    /// `usable_half_width` is the maximum distance an edge can be offset from
+    /// the center without overlapping a table border (includes 1-cell padding).
+    fn gap_bounds_for_col(&self, col: usize) -> (i32, i32) {
+        if !self.col_origins.is_empty() && col + 1 < self.col_origins.len() {
+            let right_edge = self.col_origins[col] + self.col_widths[col];
+            let left_edge = self.col_origins[col + 1];
+            let center = i32::midpoint(right_edge, left_edge);
+            // 1-cell clearance from each table border
+            let half = ((left_edge - right_edge) / 2).max(1) - 1;
+            (center, half)
+        } else {
+            // Last column — generous space to the right.
+            let right_edge = self
+                .tables
+                .iter()
+                .filter(|t| t.grid_pos.1 == col)
+                .map(|t| t.pos.0 + t.size.0)
+                .max()
+                .unwrap_or(0);
+            let center = right_edge + 6;
+            (center, 5)
+        }
+    }
+
+    /// Pre-compute the gap x-coordinate for each relationship's vertical segment,
+    /// spreading edges that share a corridor so they don't overlap.
+    ///
+    /// Returns a Vec parallel to `self.relationships`; `None` for edges that have
+    /// no vertical segment (straight horizontal or self-referential).
+    fn compute_edge_gap_assignments(&self) -> Vec<Option<i32>> {
+        let n = self.relationships.len();
+        let mut base_gap: Vec<Option<i32>> = vec![None; n];
+
+        // First pass: compute the base (un-separated) gap_x for each edge.
+        for (i, rel) in self.relationships.iter().enumerate() {
+            if rel.from_table >= self.tables.len() || rel.to_table >= self.tables.len() {
+                continue;
+            }
+            if rel.from_table == rel.to_table {
+                continue;
+            }
+            let from = &self.tables[rel.from_table];
+            let to = &self.tables[rel.to_table];
+
+            if from.grid_pos.1 == to.grid_pos.1 {
+                base_gap[i] = Some(self.same_col_gap_x(from.grid_pos.1));
+            } else {
+                let from_is_pk = from
+                    .columns
+                    .iter()
+                    .any(|c| c.name == rel.from_column && c.is_pk);
+                let from_y = self.column_anchor_y(rel.from_table, &rel.from_column, from_is_pk);
+                let to_y = self.column_anchor_y(rel.to_table, &rel.to_column, true);
+
+                if from_y != to_y {
+                    let from_cx = from.pos.0 + from.size.0 / 2;
+                    let to_cx = to.pos.0 + to.size.0 / 2;
+                    let target_right = to_cx >= from_cx;
+                    let (fx, tx) = if target_right {
+                        (from.pos.0 + from.size.0, to.pos.0)
+                    } else {
+                        (from.pos.0, to.pos.0 + to.size.0)
+                    };
+                    let ideal = i32::midpoint(fx, tx);
+                    base_gap[i] = Some(self.find_gap_x(from.grid_pos.1, to.grid_pos.1, ideal));
+                }
+            }
+        }
+
+        // Second pass: group edges that share the same base gap_x, sort by
+        // average Y to minimise visual crossings, then spread with 2-cell gaps.
+        let mut groups: HashMap<i32, Vec<usize>> = HashMap::new();
+        for (i, gx) in base_gap.iter().enumerate() {
+            if let Some(x) = gx {
+                groups.entry(*x).or_default().push(i);
+            }
+        }
+
+        // Pre-compute gap bounds for each grid column so the spread can be clamped.
+        let num_cols = self.col_origins.len();
+        let gap_bounds: Vec<(i32, i32)> = (0..num_cols.max(1))
+            .map(|c| self.gap_bounds_for_col(c))
+            .collect();
+
+        let mut result: Vec<Option<i32>> = vec![None; n];
+        for (center, group) in &mut groups {
+            // Sort by average Y of endpoints so adjacent vertical segments
+            // don't cross each other's horizontal stubs.
+            group.sort_by_key(|&ri| {
+                let rel = &self.relationships[ri];
+                let from = &self.tables[rel.from_table];
+                let to = &self.tables[rel.to_table];
+                let fy = from.pos.1 + from.size.1 / 2;
+                let ty = to.pos.1 + to.size.1 / 2;
+                fy + ty // proportional to average Y
+            });
+
+            // Find the usable half-width for the gap containing this center.
+            let half = gap_bounds
+                .iter()
+                .find(|(c, _)| (*c - *center).abs() <= 1)
+                .map_or(6, |&(_, h)| h);
+
+            let count = group.len() as i32;
+            // Reduce spacing when many edges share a corridor so they fit.
+            let spacing = if count <= 1 {
+                0
+            } else {
+                let max_span = half * 2;
+                (max_span / (count - 1)).clamp(1, 2)
+            };
+            let span = (count - 1) * spacing;
+            let start = *center - span / 2;
+            for (slot, &rel_idx) in group.iter().enumerate() {
+                result[rel_idx] = Some(start + slot as i32 * spacing);
+            }
+        }
+        result
+    }
+
     /// Render all FK edges (behind table boxes).
-    fn render_edges(&self, buf: &mut Buffer, area: Rect, theme: &Theme) {
-        for rel in &self.relationships {
+    ///
+    /// Unified approach: every edge exits the right side of the source table
+    /// and enters the left side of the target table.  When source is to the
+    /// right of target the roles swap.  An L-shaped route is used when the
+    /// two endpoints have different Y values; the turn point sits at the
+    /// horizontal midpoint between the two tables.
+    /// Draw edge line segments and return deferred endpoint markers.
+    ///
+    /// Markers must be drawn after tables so arrows aren't overwritten by
+    /// table border characters.
+    #[allow(clippy::too_many_lines)]
+    fn render_edges(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        theme: &Theme,
+    ) -> Vec<(i32, i32, char, Style)> {
+        let edge_gap_x = self.compute_edge_gap_assignments();
+        let mut markers: Vec<(i32, i32, char, Style)> = Vec::new();
+
+        for (rel_idx, rel) in self.relationships.iter().enumerate() {
             if rel.from_table >= self.tables.len() || rel.to_table >= self.tables.len() {
                 continue;
             }
@@ -487,20 +761,26 @@ impl ERDiagram {
                 continue;
             }
 
-            let from = &self.tables[rel.from_table];
-            let to = &self.tables[rel.to_table];
-            let edge_style = if rel.is_cycle {
+            // ── styling ──────────────────────────────────────────────
+            let involves_focused = self
+                .focused_table
+                .is_some_and(|f| rel.from_table == f || rel.to_table == f);
+            let edge_style = if involves_focused {
+                theme.er_connected_border
+            } else if rel.is_cycle {
                 theme.er_relationship.add_modifier(Modifier::DIM)
             } else {
                 theme.er_relationship
             };
-            let dash_char = if rel.is_cycle { '╌' } else { '─' };
+            let h_char = if rel.is_cycle { '╌' } else { '─' };
+            let v_char = if rel.is_cycle { '╎' } else { '│' };
 
-            // Self-referential FK: draw a small loop on the right side of the table.
+            // ── self-referential FK ──────────────────────────────────
             if rel.from_table == rel.to_table {
-                let rx = from.pos.0 + from.size.0; // right edge
-                let ry = from.pos.1 + 1; // name row
-                put_char(self.viewport, buf, area, rx, ry, dash_char, edge_style);
+                let t = &self.tables[rel.from_table];
+                let rx = t.pos.0 + t.size.0;
+                let ry = t.pos.1 + 1;
+                put_char(self.viewport, buf, area, rx, ry, h_char, edge_style);
                 put_char(self.viewport, buf, area, rx + 1, ry, '╮', edge_style);
                 put_char(self.viewport, buf, area, rx + 1, ry + 1, '╰', edge_style);
                 put_str(
@@ -515,78 +795,137 @@ impl ERDiagram {
                 continue;
             }
 
-            let (from_x, from_y) = (from.pos.0 + from.size.0, from.pos.1 + 1);
-            let (to_x, to_y) = (to.pos.0, to.pos.1 + 1);
+            let from = &self.tables[rel.from_table];
+            let to = &self.tables[rel.to_table];
 
-            if from_y == to_y {
-                // Straight horizontal line
-                let (start_x, end_x) = if from_x <= to_x {
-                    (from_x, to_x)
-                } else {
-                    (to_x + to.size.0, from.pos.0)
-                };
-                for x in start_x..end_x {
-                    put_char(self.viewport, buf, area, x, from_y, dash_char, edge_style);
-                }
-                let marker_x = if from_x <= to_x { to_x - 4 } else { start_x };
-                let label = if rel.is_cycle { "[cyc]" } else { "1──*" };
-                put_str(
-                    self.viewport,
-                    buf,
-                    area,
-                    marker_x.max(start_x),
-                    from_y,
-                    label,
-                    edge_style,
-                );
+            // ── anchor Y ─────────────────────────────────────────────
+            let from_is_pk = from
+                .columns
+                .iter()
+                .any(|c| c.name == rel.from_column && c.is_pk);
+            let from_y = self.column_anchor_y(rel.from_table, &rel.from_column, from_is_pk);
+            let to_y = self.column_anchor_y(rel.to_table, &rel.to_column, true);
+
+            // ── determine exit/entry sides ───────────────────────────
+            // Compare table centers to decide direction.
+            let from_center_x = from.pos.0 + from.size.0 / 2;
+            let to_center_x = to.pos.0 + to.size.0 / 2;
+            let target_right = to_center_x >= from_center_x;
+
+            let (from_x, to_x) = if target_right {
+                (from.pos.0 + from.size.0, to.pos.0) // exit right, enter left
             } else {
-                // L-shaped: horizontal then vertical
-                let mid_x = if from_x <= to_x { to_x } else { from.pos.0 };
-                let (h_start, h_end) = if from_x <= mid_x {
-                    (from_x, mid_x)
-                } else {
-                    (mid_x, from_x)
-                };
-                for x in h_start..=h_end {
-                    put_char(self.viewport, buf, area, x, from_y, dash_char, edge_style);
+                (from.pos.0, to.pos.0 + to.size.0) // exit left, enter right
+            };
+
+            // ── routing ───────────────────────────────────────────────
+            //
+            // Same-column tables (shared grid_pos.1): both exits use the right
+            // side, routing around the column into the gap on the right.
+            //
+            // Cross-column edges:
+            //   Straight: from_y == to_y → single horizontal line.
+            //   Z-shape: horizontal stub → vertical in the inter-column gap
+            //            (midpoint of from_x and to_x) → horizontal stub.
+
+            if from.grid_pos.1 == to.grid_pos.1 {
+                // Both tables in the same grid column — route via the right-side
+                // inter-column gap so the vertical segment never crosses a table.
+                let from_exit_x = from.pos.0 + from.size.0;
+                let to_exit_x = to.pos.0 + to.size.0;
+                // Ensure the vertical segment is always past both tables' right edges.
+                let min_corner = from_exit_x.max(to_exit_x) + 1;
+                let corner_x = edge_gap_x[rel_idx]
+                    .unwrap_or_else(|| self.same_col_gap_x(from.grid_pos.1))
+                    .max(min_corner);
+                // Horizontal stubs from each exit to the corner
+                for x in from_exit_x..=corner_x {
+                    put_char(self.viewport, buf, area, x, from_y, h_char, edge_style);
                 }
-                let (v_start, v_end) = if from_y <= to_y {
-                    (from_y, to_y)
-                } else {
-                    (to_y, from_y)
-                };
-                let v_char = if rel.is_cycle { '╎' } else { '│' };
-                for y in v_start..=v_end {
-                    put_char(self.viewport, buf, area, mid_x, y, v_char, edge_style);
+                for x in to_exit_x..=corner_x {
+                    put_char(self.viewport, buf, area, x, to_y, h_char, edge_style);
                 }
-                let corner = if from_x <= mid_x {
+                // Vertical segment in the column gap
+                for y in from_y.min(to_y)..=from_y.max(to_y) {
+                    put_char(self.viewport, buf, area, corner_x, y, v_char, edge_style);
+                }
+                // Corners — only when there is a horizontal stub before the turn
+                if from_exit_x < corner_x {
+                    let c = if from_y < to_y { '╮' } else { '╯' };
+                    put_char(self.viewport, buf, area, corner_x, from_y, c, edge_style);
+                }
+                if to_exit_x < corner_x {
+                    let c = if from_y < to_y { '╯' } else { '╮' };
+                    put_char(self.viewport, buf, area, corner_x, to_y, c, edge_style);
+                }
+                // Defer endpoint markers to the final pass.
+                markers.push((from_exit_x, from_y, '┤', edge_style));
+                markers.push((to_exit_x, to_y, '◄', edge_style));
+                continue;
+            } else if from_y == to_y {
+                // Straight horizontal
+                for x in from_x.min(to_x)..=from_x.max(to_x) {
+                    put_char(self.viewport, buf, area, x, from_y, h_char, edge_style);
+                }
+            } else {
+                // Z-shape: horizontal stub → vertical in gap → horizontal stub.
+                // Use the pre-computed gap_x (with separation offset applied).
+                let gap_x = edge_gap_x[rel_idx].unwrap_or_else(|| {
+                    let ideal = i32::midpoint(from_x, to_x);
+                    self.find_gap_x(from.grid_pos.1, to.grid_pos.1, ideal)
+                });
+
+                // Segment 1: horizontal from source border to gap
+                for x in from_x.min(gap_x)..=from_x.max(gap_x) {
+                    put_char(self.viewport, buf, area, x, from_y, h_char, edge_style);
+                }
+                // Segment 2: vertical from from_y to to_y in the gap
+                for y in from_y.min(to_y)..=from_y.max(to_y) {
+                    put_char(self.viewport, buf, area, gap_x, y, v_char, edge_style);
+                }
+                // Segment 3: horizontal from gap to target border
+                for x in gap_x.min(to_x)..=gap_x.max(to_x) {
+                    put_char(self.viewport, buf, area, x, to_y, h_char, edge_style);
+                }
+                // Corner 1: source side (gap_x, from_y)
+                let c1 = if from_x <= gap_x {
                     if from_y < to_y { '╮' } else { '╯' }
                 } else if from_y < to_y {
                     '╭'
                 } else {
                     '╰'
                 };
-                put_char(self.viewport, buf, area, mid_x, from_y, corner, edge_style);
-                if rel.is_cycle {
-                    put_str(
-                        self.viewport,
-                        buf,
-                        area,
-                        mid_x + 1,
-                        to_y,
-                        "[cyc]",
-                        edge_style,
-                    );
+                put_char(self.viewport, buf, area, gap_x, from_y, c1, edge_style);
+                // Corner 2: target side (gap_x, to_y)
+                let c2 = if gap_x <= to_x {
+                    if from_y < to_y { '╰' } else { '╭' }
+                } else if from_y < to_y {
+                    '╯'
                 } else {
-                    put_str(self.viewport, buf, area, mid_x + 1, to_y, "*", edge_style);
-                    put_str(self.viewport, buf, area, h_start, from_y, "1", edge_style);
-                }
+                    '╮'
+                };
+                put_char(self.viewport, buf, area, gap_x, to_y, c2, edge_style);
+            }
+
+            // ── endpoint markers (deferred) ──────────────────────────
+            let src_char = if target_right { '┤' } else { '├' };
+            markers.push((from_x, from_y, src_char, edge_style));
+            let tgt_char = if target_right { '►' } else { '◄' };
+            markers.push((to_x, to_y, tgt_char, edge_style));
+
+            if rel.is_cycle {
+                let mid_x = i32::midpoint(from_x, to_x);
+                let mid_y = i32::midpoint(from_y, to_y);
+                put_str(self.viewport, buf, area, mid_x, mid_y, "[cyc]", edge_style);
             }
         }
+
+        markers
     }
 }
 
 impl Component for ERDiagram {
+    #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind != KeyEventKind::Press {
             return None;
@@ -611,9 +950,11 @@ impl Component for ERDiagram {
                 None
             }
 
-            // Toggle expand focused table
+            // Toggle expand focused table (Normal zoom only)
             (KeyModifiers::NONE, KeyCode::Enter) => {
-                if let Some(idx) = self.focused_table {
+                if self.zoom == ZoomLevel::Normal
+                    && let Some(idx) = self.focused_table
+                {
                     if let Some(pos) = self.expanded_tables.iter().position(|&i| i == idx) {
                         self.expanded_tables.remove(pos);
                     } else {
@@ -624,25 +965,33 @@ impl Component for ERDiagram {
                 None
             }
 
-            // Toggle compact mode
-            (KeyModifiers::NONE, KeyCode::Char('c')) => {
-                self.compact_mode = !self.compact_mode;
-                self.layout_dirty = true;
-                None
-            }
-
-            // Adjust spacing
+            // Zoom in
             (KeyModifiers::NONE, KeyCode::Char('+' | '=')) => {
-                if self.spacing < 3 {
-                    self.spacing += 1;
-                    self.layout_dirty = true;
+                match self.zoom {
+                    ZoomLevel::Overview => {
+                        self.zoom = ZoomLevel::Normal;
+                        self.layout_dirty = true;
+                    }
+                    ZoomLevel::Normal => {
+                        self.zoom = ZoomLevel::Detail;
+                        self.layout_dirty = true;
+                    }
+                    ZoomLevel::Detail => {}
                 }
                 None
             }
+            // Zoom out
             (KeyModifiers::NONE, KeyCode::Char('-')) => {
-                if self.spacing > 1 {
-                    self.spacing -= 1;
-                    self.layout_dirty = true;
+                match self.zoom {
+                    ZoomLevel::Detail => {
+                        self.zoom = ZoomLevel::Normal;
+                        self.layout_dirty = true;
+                    }
+                    ZoomLevel::Normal => {
+                        self.zoom = ZoomLevel::Overview;
+                        self.layout_dirty = true;
+                    }
+                    ZoomLevel::Overview => {}
                 }
                 None
             }
@@ -655,12 +1004,22 @@ impl Component for ERDiagram {
                         None => 0,
                     };
                     self.focused_table = Some(next);
-                    // Auto-pan viewport to show focused table
-                    let table = &self.tables[next];
-                    self.viewport.0 = table.pos.0 - 2;
-                    self.viewport.1 = table.pos.1 - 1;
+                    self.rebuild_connected_tables();
                 }
                 // Return Some to consume Tab — prevents global CycleFocus
+                Some(Action::SwitchBottomTab(BottomTab::ERDiagram))
+            }
+
+            // Reverse cycle focus between tables
+            (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+                if !self.tables.is_empty() {
+                    let prev = match self.focused_table {
+                        Some(0) | None => self.tables.len() - 1,
+                        Some(i) => i - 1,
+                    };
+                    self.focused_table = Some(prev);
+                    self.rebuild_connected_tables();
+                }
                 Some(Action::SwitchBottomTab(BottomTab::ERDiagram))
             }
 
@@ -674,21 +1033,69 @@ impl Component for ERDiagram {
                 None
             }
 
+            // Center viewport: on focused table, or fit entire diagram
+            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                if self.tables.is_empty() || self.last_area == (0, 0) {
+                    return None;
+                }
+                let (aw, ah) = (i32::from(self.last_area.0), i32::from(self.last_area.1));
+                if let Some(idx) = self.focused_table {
+                    // Center on focused table
+                    let t = &self.tables[idx];
+                    self.viewport.0 = t.pos.0 + t.size.0 / 2 - aw / 2;
+                    self.viewport.1 = t.pos.1 + t.size.1 / 2 - ah / 2;
+                } else {
+                    // Fit entire diagram: compute bounding box of all tables
+                    let min_x = self.tables.iter().map(|t| t.pos.0).min().unwrap_or(0);
+                    let min_y = self.tables.iter().map(|t| t.pos.1).min().unwrap_or(0);
+                    let max_x = self
+                        .tables
+                        .iter()
+                        .map(|t| t.pos.0 + t.size.0)
+                        .max()
+                        .unwrap_or(0);
+                    let max_y = self
+                        .tables
+                        .iter()
+                        .map(|t| t.pos.1 + t.size.1)
+                        .max()
+                        .unwrap_or(0);
+                    let diagram_w = max_x - min_x;
+                    let diagram_h = max_y - min_y;
+                    self.viewport.0 = min_x + diagram_w / 2 - aw / 2;
+                    self.viewport.1 = min_y + diagram_h / 2 - ah / 2;
+                }
+                None
+            }
+
+            // Toggle fullscreen overlay
+            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ShowERDiagram),
+
             // Esc releases focus
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                self.focused_table = None;
+                self.connected_tables.clear();
+                Some(Action::CycleFocus(Direction::Forward))
+            }
 
             _ => None,
         }
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let block = super::panel_block("ER Diagram", focused, theme);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        let inner = if self.is_fullscreen {
+            area
+        } else {
+            let block = super::panel_block("ER Diagram", focused, theme);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            inner
+        };
 
         if inner.height == 0 || inner.width == 0 {
             return;
         }
+        self.last_area = (inner.width, inner.height);
 
         // Check empty states
         if !self.loaded {
@@ -700,17 +1107,21 @@ impl Component for ERDiagram {
             return;
         }
 
-        // Recalculate layout if dirty (e.g., after spacing change or expand/compact toggle)
+        // Recalculate layout if dirty (e.g., after zoom change or expand toggle)
         self.recalculate_layout();
 
         let buf = frame.buffer_mut();
 
-        // Render edges first (behind tables), then tables on top.
-        self.render_edges(buf, inner, theme);
+        // Render edges first (behind tables), then tables, then arrow markers
+        // on top of everything so table borders don't overwrite them.
+        let markers = self.render_edges(buf, inner, theme);
         for idx in 0..self.tables.len() {
             if self.table_visible(&self.tables[idx], inner) {
                 self.render_table(buf, inner, idx, theme);
             }
+        }
+        for (mx, my, ch, style) in markers {
+            put_char(self.viewport, buf, inner, mx, my, ch, style);
         }
     }
 }
@@ -862,7 +1273,7 @@ pub(crate) fn detect_and_break_cycles(relationships: &mut [Relationship]) {
 }
 
 /// Convert `grid_pos` coordinates into virtual (x, y) positions and compute
-/// each table's rendered `size` (full column list, no compact/expand modes).
+/// each table's rendered `size` (full column list, no zoom/expand modes).
 ///
 /// Used by tests that need a standalone layout pipeline. In production,
 /// [`ERDiagram::recalculate_layout`] computes display-mode-aware sizes and
@@ -891,8 +1302,8 @@ fn compute_positions(tables: &mut [ERTable], spacing: u8) {
             .unwrap_or(0);
 
         let content_width = name_width.max(max_col_width);
-        // +4 for left/right border characters plus one padding space each side.
-        let box_width = content_width + 4;
+        // +5 for left/right border characters, padding, and marker column.
+        let box_width = content_width + 5;
         // +4 for top border + name row + separator + bottom border.
         let box_height = table.columns.len() as i32 + 4;
 
@@ -1085,12 +1496,14 @@ mod tests {
     #[test]
     fn new_has_correct_defaults() {
         let er = ERDiagram::new();
-        assert_eq!(er.spacing, 2);
+        assert_eq!(er.zoom, ZoomLevel::Normal);
         assert_eq!(er.viewport, (0, 0));
         assert!(!er.loaded);
         assert!(er.layout_dirty);
         assert!(er.tables.is_empty());
         assert!(er.relationships.is_empty());
+        assert!(!er.is_fullscreen);
+        assert!(er.connected_tables.is_empty());
     }
 
     #[test]
@@ -1439,34 +1852,35 @@ mod tests {
     }
 
     #[test]
-    fn plus_minus_clamp_spacing() {
+    fn plus_minus_cycle_zoom() {
         let mut er = make_diagram_with_tables();
-        assert_eq!(er.spacing, 2);
+        assert_eq!(er.zoom, ZoomLevel::Normal);
 
         let plus = KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE);
         let minus = KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE);
 
+        // Normal → Detail
         er.handle_key(plus);
-        assert_eq!(er.spacing, 3);
+        assert_eq!(er.zoom, ZoomLevel::Detail);
         assert!(er.layout_dirty);
 
-        // At max — should not increase further
+        // At Detail max — should stay Detail
         er.layout_dirty = false;
         er.handle_key(plus);
-        assert_eq!(er.spacing, 3);
-        assert!(!er.layout_dirty, "No change should not dirty layout");
+        assert_eq!(er.zoom, ZoomLevel::Detail);
 
+        // Detail → Normal
         er.handle_key(minus);
-        assert_eq!(er.spacing, 2);
+        assert_eq!(er.zoom, ZoomLevel::Normal);
 
+        // Normal → Overview
         er.handle_key(minus);
-        assert_eq!(er.spacing, 1);
+        assert_eq!(er.zoom, ZoomLevel::Overview);
 
-        // At min — should not decrease further
+        // At Overview min — should stay Overview
         er.layout_dirty = false;
         er.handle_key(minus);
-        assert_eq!(er.spacing, 1);
-        assert!(!er.layout_dirty, "No change should not dirty layout");
+        assert_eq!(er.zoom, ZoomLevel::Overview);
     }
 
     #[test]
@@ -1492,19 +1906,162 @@ mod tests {
     }
 
     #[test]
-    fn c_toggles_compact_mode() {
+    fn enter_noop_at_overview_and_detail() {
         let mut er = make_diagram_with_tables();
-        assert!(!er.compact_mode);
+        er.focused_table = Some(0);
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
 
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
-
-        er.handle_key(key);
-        assert!(er.compact_mode);
-        assert!(er.layout_dirty);
-
+        er.zoom = ZoomLevel::Overview;
         er.layout_dirty = false;
         er.handle_key(key);
-        assert!(!er.compact_mode);
-        assert!(er.layout_dirty);
+        assert!(
+            er.expanded_tables.is_empty(),
+            "Enter should be no-op at Overview"
+        );
+        assert!(!er.layout_dirty);
+
+        er.zoom = ZoomLevel::Detail;
+        er.layout_dirty = false;
+        er.handle_key(key);
+        assert!(
+            er.expanded_tables.is_empty(),
+            "Enter should be no-op at Detail"
+        );
+        assert!(!er.layout_dirty);
+    }
+
+    #[test]
+    fn zoom_boundary_does_not_dirty_layout() {
+        let mut er = make_diagram_with_tables();
+
+        er.zoom = ZoomLevel::Detail;
+        er.layout_dirty = false;
+        er.handle_key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE));
+        assert_eq!(er.zoom, ZoomLevel::Detail);
+        assert!(!er.layout_dirty, "+ at Detail should not dirty layout");
+
+        er.zoom = ZoomLevel::Overview;
+        er.layout_dirty = false;
+        er.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE));
+        assert_eq!(er.zoom, ZoomLevel::Overview);
+        assert!(!er.layout_dirty, "- at Overview should not dirty layout");
+    }
+
+    #[test]
+    fn rebuild_connected_tables_finds_direct_neighbors() {
+        let mut er = ERDiagram::new();
+        er.tables.push(make_er_table("a", &["id"]));
+        er.tables.push(make_er_table("b", &["id", "a_id"]));
+        er.tables.push(make_er_table("c", &["id", "b_id"]));
+        er.relationships.push(Relationship {
+            from_table: 1,
+            from_column: "a_id".to_string(),
+            to_table: 0,
+            to_column: "id".to_string(),
+            is_cycle: false,
+        });
+        er.relationships.push(Relationship {
+            from_table: 2,
+            from_column: "b_id".to_string(),
+            to_table: 1,
+            to_column: "id".to_string(),
+            is_cycle: false,
+        });
+
+        // Focus on table b (index 1) — connected to a and c
+        er.focused_table = Some(1);
+        er.rebuild_connected_tables();
+        assert!(
+            er.connected_tables.contains(&0),
+            "a should be connected to b"
+        );
+        assert!(
+            er.connected_tables.contains(&2),
+            "c should be connected to b"
+        );
+        assert!(
+            !er.connected_tables.contains(&1),
+            "b should not be in its own connected set"
+        );
+
+        // Focus on table a (index 0) — connected to b only (not transitive to c)
+        er.focused_table = Some(0);
+        er.rebuild_connected_tables();
+        assert!(
+            er.connected_tables.contains(&1),
+            "b should be connected to a"
+        );
+        assert!(
+            !er.connected_tables.contains(&2),
+            "c should NOT be connected to a (not transitive)"
+        );
+
+        // No focus — connected set empty
+        er.focused_table = None;
+        er.rebuild_connected_tables();
+        assert!(er.connected_tables.is_empty());
+    }
+
+    #[test]
+    fn column_anchor_y_overview_returns_header() {
+        let mut er = ERDiagram::new();
+        let mut table = make_er_table("t", &["id", "name", "ref_id"]);
+        table.pos = (0, 0);
+        table.size = (20, 8);
+        er.tables.push(table);
+        er.zoom = ZoomLevel::Overview;
+
+        // At Overview, all columns return header Y regardless of column name
+        let y = er.column_anchor_y(0, "ref_id", false);
+        assert_eq!(y, 1, "Overview should return header_y = pos.1 + 1");
+    }
+
+    #[test]
+    fn column_anchor_y_detail_returns_column_row() {
+        let mut er = ERDiagram::new();
+        let mut table = make_er_table("t", &["id", "name", "ref_id"]);
+        table.pos = (0, 0);
+        table.size = (20, 8);
+        er.tables.push(table);
+        er.zoom = ZoomLevel::Detail;
+
+        // At Detail, column should be at sep_y + 1 + column_index
+        // sep_y = pos.1 + 2 = 2, so ref_id (index 2) should be at 2 + 1 + 2 = 5
+        let y = er.column_anchor_y(0, "ref_id", false);
+        assert_eq!(y, 5, "Detail should return column's row position");
+    }
+
+    #[test]
+    fn shift_tab_cycles_backward() {
+        let mut er = make_diagram_with_tables();
+        er.focused_table = Some(0);
+        // Assign positions so viewport snap works
+        for (i, t) in er.tables.iter_mut().enumerate() {
+            t.pos = (i as i32 * 20, 0);
+            t.size = (15, 6);
+        }
+
+        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        er.handle_key(key);
+        assert_eq!(
+            er.focused_table,
+            Some(er.tables.len() - 1),
+            "Shift+Tab from 0 should wrap to last table"
+        );
+    }
+
+    #[test]
+    fn esc_clears_focus_and_connected() {
+        let mut er = make_diagram_with_tables();
+        er.focused_table = Some(1);
+        er.connected_tables.insert(0);
+        er.connected_tables.insert(2);
+
+        er.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(er.focused_table, None, "Esc should clear focused_table");
+        assert!(
+            er.connected_tables.is_empty(),
+            "Esc should clear connected_tables"
+        );
     }
 }

@@ -72,6 +72,7 @@ pub(crate) enum Overlay {
     GoToObject,
     DdlViewer,
     Bookmarks,
+    ERDiagram,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +259,7 @@ pub(crate) enum Action {
         where_clause: String,
     },
     ShowBookmarks,
+    ShowERDiagram,
     SaveBookmark {
         name: String,
         sql: String,
@@ -560,6 +562,13 @@ impl AppState {
                 } else {
                     Some(Overlay::Bookmarks)
                 };
+            }
+            Action::ShowERDiagram => {
+                if self.active_overlay == Some(Overlay::ERDiagram) {
+                    self.active_overlay = None;
+                } else {
+                    self.active_overlay = Some(Overlay::ERDiagram);
+                }
             }
             Action::RecallHistory(_)
             | Action::RecallAndExecute(_)

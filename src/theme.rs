@@ -9,6 +9,7 @@ const TEXT: Color = Color::Rgb(205, 214, 244);
 const SUBTEXT0: Color = Color::Rgb(166, 173, 200);
 const SUBTEXT1: Color = Color::Rgb(88, 91, 112);
 const OVERLAY0: Color = Color::Rgb(108, 112, 134);
+const OVERLAY1: Color = Color::Rgb(127, 132, 156);
 const BLUE: Color = Color::Rgb(137, 180, 250);
 const RED: Color = Color::Rgb(243, 139, 168);
 const GREEN: Color = Color::Rgb(166, 227, 161);
@@ -64,6 +65,9 @@ pub(crate) struct Theme {
     pub er_pk_style: Style,
     pub er_fk_style: Style,
     pub er_relationship: Style,
+    pub er_connected_border: Style,
+    pub er_dimmed: Style,
+    pub er_edge_label: Style,
 
     // Schema tree
     pub schema_table: Color,
@@ -126,6 +130,9 @@ pub(crate) const DARK_THEME: Theme = Theme {
     er_pk_style: Style::new().fg(YELLOW).add_modifier(Modifier::BOLD),
     er_fk_style: Style::new().fg(TEAL),
     er_relationship: Style::new().fg(OVERLAY0),
+    er_connected_border: Style::new().fg(GREEN),
+    er_dimmed: Style::new().fg(SURFACE0),
+    er_edge_label: Style::new().fg(OVERLAY1),
 
     // Schema tree colors
     schema_table: BLUE,
@@ -207,6 +214,9 @@ pub(crate) const LIGHT_THEME: Theme = Theme {
         .add_modifier(Modifier::BOLD),
     er_fk_style: Style::new().fg(Color::Rgb(23, 146, 153)),
     er_relationship: Style::new().fg(LATTE_OVERLAY0),
+    er_connected_border: Style::new().fg(Color::Rgb(64, 160, 43)),
+    er_dimmed: Style::new().fg(LATTE_SURFACE1),
+    er_edge_label: Style::new().fg(LATTE_OVERLAY0),
 
     // Schema tree (Catppuccin Latte colors)
     schema_table: LATTE_BLUE,

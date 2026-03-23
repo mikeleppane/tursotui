@@ -10,7 +10,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(129);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(138);
 
     // --- Global ---
     lines.push(Line::from(Span::styled("Global", header_style)));
@@ -101,6 +101,27 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from(
         "  1 / 2 / 3 / 4   Switch Results / Explain / Detail / ER",
     ));
+    lines.push(Line::from(""));
+
+    // --- ER Diagram ---
+    lines.push(Line::from(Span::styled("ER Diagram", header_style)));
+    lines.push(Line::from(
+        "  h/\u{2190}, l/\u{2192}, k/\u{2191}, j/\u{2193}  Pan viewport",
+    ));
+    lines.push(Line::from(
+        "  + / -            Zoom in / out (Overview \u{2192} Normal \u{2192} Detail)",
+    ));
+    lines.push(Line::from("  Tab / Shift+Tab  Cycle focus between tables"));
+    lines.push(Line::from(
+        "  Enter            Expand/collapse table columns (Normal zoom)",
+    ));
+    lines.push(Line::from(
+        "  o                Open focused table in query editor",
+    ));
+    lines.push(Line::from(
+        "  c                Center viewport (focused table or fit all)",
+    ));
+    lines.push(Line::from("  f / F6           Toggle fullscreen mode"));
     lines.push(Line::from(""));
 
     // --- EXPLAIN View ---

@@ -38,6 +38,12 @@
   <em>Saved Bookmarks — name, search, and recall frequently-used queries</em>
 </p>
 
+<p align="center">
+  <img src="images/screenshot4.png" alt="ER Diagram with table relationships and FK edges" width="700">
+  <br>
+  <em>ER Diagram — visual entity-relationship view with FK edges, PK/FK markers, and cycle detection</em>
+</p>
+
 ## Features
 
 **Multi-Database Tabs** — open multiple databases simultaneously with a tab bar. Switch between them with `Ctrl+PgDn`/`Ctrl+PgUp`, open new databases with `Ctrl+O` file picker, close with `Ctrl+W`. Each database has independent schema, editor, and results state.
