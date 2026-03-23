@@ -562,6 +562,31 @@ fn dispatch_action_to_db(
                     .execute(sql.clone(), source_table.clone());
             }
         }
+        app::Action::ExecuteFilteredQuery {
+            table,
+            where_clause,
+        } => {
+            let db = &mut app.databases[db_idx];
+            let sql = if where_clause.is_empty() {
+                // Empty where_clause = clear filter, re-run unfiltered
+                format!(
+                    "SELECT * FROM {} LIMIT 100",
+                    crate::components::data_editor::quote_identifier(table)
+                )
+            } else {
+                // SAFETY: where_clause is raw user SQL input — intentionally unescaped.
+                // The user is writing SQL directly; escaping would break their intent.
+                format!(
+                    "SELECT * FROM {} WHERE {} LIMIT 100",
+                    crate::components::data_editor::quote_identifier(table),
+                    where_clause
+                )
+            };
+            db.last_executed_sql = Some(sql.clone());
+            db.last_filter_query = true;
+            db.handle.execute(sql, Some(table.clone()));
+            db.executing = true;
+        }
         app::Action::LoadColumns(table_name) => {
             app.databases[db_idx]
                 .handle
@@ -572,6 +597,7 @@ fn dispatch_action_to_db(
         }
         app::Action::QueryCompleted(result) => {
             let db = &mut app.databases[db_idx];
+            db.last_filter_query = false;
             db.results.set_results(result);
             // Mark explain as stale with the executed SQL
             db.explain.mark_stale(result.sql.clone());
@@ -700,6 +726,14 @@ fn dispatch_action_to_db(
                 created_at: std::time::Instant::now(),
                 is_error: true,
             });
+            // Re-focus filter bar so the user can fix their WHERE clause
+            // (only if the failing query actually came from the filter bar)
+            if app.databases[db_idx].last_filter_query
+                && app.databases[db_idx].results.filter_input.is_some()
+            {
+                app.databases[db_idx].results.filter_bar_active = true;
+            }
+            app.databases[db_idx].last_filter_query = false;
             // Log failed query to history (use stored SQL from ExecuteQuery)
             if let Some(ref history) = app.history_db
                 && let Some(ref sql) = app.databases[db_idx].last_executed_sql

@@ -53,6 +53,12 @@ pub(crate) struct ResultsTable {
     edit_state: Option<EditRenderState>,
     /// Cached raw `QueryResult` from the last `set_results` call — used for FK back-navigation.
     last_result: Option<QueryResult>,
+    /// Active WHERE filter text. None = no filter bar visible.
+    pub(crate) filter_input: Option<String>,
+    /// Whether the filter bar is focused for typing.
+    pub(crate) filter_bar_active: bool,
+    /// Cursor position within filter text.
+    filter_cursor: usize,
 }
 
 impl ResultsTable {
@@ -72,6 +78,9 @@ impl ResultsTable {
             null_display: "NULL".to_string(),
             edit_state: None,
             last_result: None,
+            filter_input: None,
+            filter_bar_active: false,
+            filter_cursor: 0,
         }
     }
 
@@ -91,6 +100,19 @@ impl ResultsTable {
     /// Populate the table from a `QueryResult`, converting `Value`s to display strings.
     /// Selects the first row automatically.
     pub(crate) fn set_results(&mut self, result: &QueryResult) {
+        // Clear stale filter if the source table changed (e.g., user ran an editor query)
+        if self.filter_input.is_some() {
+            let old_table = self
+                .last_result
+                .as_ref()
+                .and_then(|r| r.source_table.as_deref());
+            let new_table = result.source_table.as_deref();
+            if old_table != new_table {
+                self.filter_input = None;
+                self.filter_bar_active = false;
+                self.filter_cursor = 0;
+            }
+        }
         self.last_result = Some(result.clone());
         self.columns.clone_from(&result.columns);
         self.rows = result
@@ -405,8 +427,53 @@ impl ResultsTable {
 }
 
 impl Component for ResultsTable {
+    #[allow(clippy::too_many_lines)]
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind != KeyEventKind::Press {
+            return None;
+        }
+
+        // Filter bar input handling (takes priority when active)
+        if self.filter_bar_active {
+            match key.code {
+                KeyCode::Esc => {
+                    // First Esc: defocus filter bar, filter stays applied
+                    self.filter_bar_active = false;
+                }
+                KeyCode::Enter => {
+                    if let Some(ref input) = self.filter_input
+                        && let Some(ref result) = self.last_result
+                        && let Some(ref table) = result.source_table
+                    {
+                        self.filter_bar_active = false;
+                        let where_clause = input.clone();
+                        if where_clause.is_empty() {
+                            // Empty filter = clear and re-run unfiltered
+                            self.filter_input = None;
+                            self.filter_cursor = 0;
+                        }
+                        return Some(Action::ExecuteFilteredQuery {
+                            table: table.clone(),
+                            where_clause,
+                        });
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(ref mut input) = self.filter_input
+                        && !input.is_empty()
+                    {
+                        input.pop();
+                        self.filter_cursor = input.len();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(ref mut input) = self.filter_input {
+                        input.push(c);
+                        self.filter_cursor = input.len();
+                    }
+                }
+                _ => {} // consume all other keys while filter is active
+            }
             return None;
         }
 
@@ -458,6 +525,40 @@ impl Component for ResultsTable {
             // Clipboard
             (KeyModifiers::NONE, KeyCode::Char('y')) => self.copy_cell(),
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('Y')) => self.copy_row(),
+
+            // WHERE filter
+            (KeyModifiers::NONE, KeyCode::Char('w')) => {
+                if let Some(ref result) = self.last_result
+                    && result.source_table.is_some()
+                {
+                    self.filter_bar_active = true;
+                    if self.filter_input.is_none() {
+                        self.filter_input = Some(String::new());
+                        self.filter_cursor = 0;
+                    } else {
+                        // Re-edit existing filter
+                        self.filter_cursor = self.filter_input.as_ref().map_or(0, String::len);
+                    }
+                }
+                None
+            }
+
+            // Esc when filter applied but not focused — clear filter and re-run unfiltered
+            (KeyModifiers::NONE, KeyCode::Esc) if self.filter_input.is_some() => {
+                let table = self
+                    .last_result
+                    .as_ref()
+                    .and_then(|r| r.source_table.clone());
+                self.filter_input = None;
+                self.filter_cursor = 0;
+                if let Some(table) = table {
+                    return Some(Action::ExecuteFilteredQuery {
+                        table,
+                        where_clause: String::new(), // empty = re-run unfiltered
+                    });
+                }
+                None
+            }
 
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
@@ -511,18 +612,42 @@ impl Component for ResultsTable {
             return;
         }
 
+        // If filter bar is visible, render it and reduce content area by 1 row
+        let content_area = if let Some(ref filter_text) = self.filter_input {
+            use ratatui::layout::{Constraint, Direction, Layout};
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(inner);
+            let filter_area = chunks[0];
+            let remaining = chunks[1];
+
+            let prefix = Span::styled("WHERE ", Style::default().fg(theme.accent).bold());
+            let input_text = Span::raw(filter_text.as_str());
+            let cursor = if self.filter_bar_active {
+                "\u{258E}"
+            } else {
+                ""
+            };
+            let line = Line::from(vec![prefix, input_text, Span::raw(cursor)]);
+            frame.render_widget(Paragraph::new(line), filter_area);
+            remaining
+        } else {
+            inner
+        };
+
         // Calculate visible rows for the scrollbar (header takes 1 row)
-        let visible_rows = inner.height.saturating_sub(1) as usize;
+        let visible_rows = content_area.height.saturating_sub(1) as usize;
         let show_scrollbar = total_rows > visible_rows;
 
         // Reserve 1 column on the right for the scrollbar when needed
         let table_area = if show_scrollbar {
             Rect {
-                width: inner.width.saturating_sub(1),
-                ..inner
+                width: content_area.width.saturating_sub(1),
+                ..content_area
             }
         } else {
-            inner
+            content_area
         };
 
         // The highlight symbol "▌ " consumes 2 columns; account for it when
@@ -551,10 +676,10 @@ impl Component for ResultsTable {
 
         if show_scrollbar {
             let scrollbar_area = Rect {
-                x: inner.x + inner.width.saturating_sub(1),
-                y: inner.y,
+                x: content_area.x + content_area.width.saturating_sub(1),
+                y: content_area.y,
                 width: 1,
-                height: inner.height,
+                height: content_area.height,
             };
             // Use viewport offset (not selection index) so the thumb tracks the visible window
             let mut scrollbar_state = ScrollbarState::new(total_rows).position(self.state.offset());

@@ -67,6 +67,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  < / >           Shrink / grow column"));
     lines.push(Line::from("  y               Copy cell to clipboard"));
     lines.push(Line::from("  Y               Copy row to clipboard"));
+    lines.push(Line::from("  w               WHERE filter"));
     lines.push(Line::from("  Esc             Release focus"));
     lines.push(Line::from(""));
 

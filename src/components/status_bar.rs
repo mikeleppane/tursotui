@@ -205,6 +205,30 @@ pub(crate) fn render(
         String::new()
     };
 
+    // Append WHERE filter indicator to center when a filter is active
+    let center = if let Some(ref filter) = db.results.filter_input {
+        if filter.is_empty() {
+            center
+        } else {
+            let truncated: String = if filter.width() > 30 {
+                let mut w = 0;
+                let s: String = filter
+                    .chars()
+                    .take_while(|c| {
+                        w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+                        w <= 30
+                    })
+                    .collect();
+                format!("{s}\u{2026}")
+            } else {
+                filter.clone()
+            };
+            format!("{center} [WHERE: {truncated}]")
+        }
+    } else {
+        center
+    };
+
     // Right: row position when results focused + F1 Help
     let base_right = if db.focus == PanelId::Bottom && total_rows > 0 {
         if let Some(sel) = selected_row {

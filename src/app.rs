@@ -249,6 +249,10 @@ pub(crate) enum Action {
         name: String,
         sql: String,
     },
+    ExecuteFilteredQuery {
+        table: String,
+        where_clause: String,
+    },
 }
 
 /// Per-database workspace.
@@ -269,6 +273,8 @@ pub(crate) struct DatabaseContext {
     pub(crate) last_rows_affected: u64,
     pub(crate) last_execution_source: ExecutionSource,
     pub(crate) last_executed_sql: Option<String>,
+    /// True when the last query was from the WHERE filter bar.
+    pub(crate) last_filter_query: bool,
     pub(crate) schema_cache: SchemaCache,
     // Components (owned per-database)
     pub(crate) schema: SchemaExplorer,
@@ -324,6 +330,7 @@ impl DatabaseContext {
             last_rows_affected: 0,
             last_execution_source: ExecutionSource::FullBuffer,
             last_executed_sql: None,
+            last_filter_query: false,
             schema_cache: SchemaCache::default(),
             schema: SchemaExplorer::new(),
             editor,
