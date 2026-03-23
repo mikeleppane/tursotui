@@ -20,6 +20,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Alt+1 / Alt+2   Switch Query / Admin tab"));
     lines.push(Line::from("  Ctrl+T          Toggle dark/light theme"));
     lines.push(Line::from("  F1 / ?          Toggle this help overlay"));
+    lines.push(Line::from("  F3              Bookmarks"));
     lines.push(Line::from("  Ctrl+Shift+E    Export results popup"));
     lines.push(Line::from("  Ctrl+Shift+C    Quick copy results (TSV)"));
     lines.push(Line::from(""));

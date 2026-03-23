@@ -62,6 +62,9 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // History
         (KeyModifiers::CONTROL, KeyCode::Char('h')) => Some(Action::ShowHistory),
 
+        // Bookmarks
+        (KeyModifiers::NONE, KeyCode::F(3)) => Some(Action::ShowBookmarks),
+
         // Export popup — Ctrl+E (traditional terminals can't distinguish Ctrl+Shift+E).
         // When editor is focused, Ctrl+E is consumed as end-of-line and never reaches here.
         (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::ShowExport),

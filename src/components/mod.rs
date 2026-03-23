@@ -1,4 +1,5 @@
 pub(crate) mod autocomplete;
+pub(crate) mod bookmarks;
 pub(crate) mod cell_editor;
 pub(crate) mod data_editor;
 pub(crate) mod db_info;

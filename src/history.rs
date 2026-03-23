@@ -21,6 +21,18 @@ impl HistoryEntry {
     }
 }
 
+/// A saved/bookmarked query.
+#[derive(Debug, Clone)]
+pub(crate) struct BookmarkEntry {
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) sql: String,
+    #[allow(dead_code)] // populated from DB for future filtering by database
+    pub(crate) database_path: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
+
 /// Data for inserting a new entry into the query log (fire-and-forget).
 pub(crate) struct LogEntry {
     pub(crate) sql: String,
@@ -38,6 +50,14 @@ pub(crate) enum HistoryMessage {
     LoadFailed(String),
     #[allow(dead_code)] // id carried for logging/debugging; mapped to HistoryReloadRequested
     Deleted(i64),
+    BookmarksLoaded(Vec<BookmarkEntry>),
+    #[allow(dead_code)] // id carried for logging/debugging; mapped to BookmarkReloadRequested
+    BookmarkSaved(i64),
+    #[allow(dead_code)] // id carried for logging/debugging; mapped to BookmarkReloadRequested
+    BookmarkDeleted(i64),
+    #[allow(dead_code)] // id carried for logging/debugging; mapped to BookmarkReloadRequested
+    BookmarkUpdated(i64),
+    BookmarkSaveFailed(String),
 }
 
 /// Persistent query history backed by a local `SQLite` database.
@@ -109,6 +129,27 @@ impl HistoryDb {
         )
         .await
         .map_err(|e| format!("failed to create sql index: {e}"))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                sql TEXT NOT NULL,
+                database_path TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+            (),
+        )
+        .await
+        .map_err(|e| format!("failed to create bookmarks table: {e}"))?;
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_name_db ON bookmarks(name, database_path)",
+            (),
+        )
+        .await
+        .map_err(|e| format!("failed to create bookmarks unique index: {e}"))?;
 
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
@@ -278,10 +319,193 @@ impl HistoryDb {
             .await;
     }
 
+    /// Save a bookmark. Sends `BookmarkSaved(id)` on success, `BookmarkSaveFailed(msg)` on error.
+    pub(crate) fn save_bookmark(&self, name: String, sql: String, database_path: Option<String>) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let result = async {
+                let conn = db
+                    .connect()
+                    .map_err(|e| format!("bookmark connect failed: {e}"))?;
+                conn.execute(
+                    "INSERT INTO bookmarks (name, sql, database_path) VALUES (?, ?, ?)",
+                    turso::params![name, sql, database_path],
+                )
+                .await
+                .map_err(|e| format!("bookmark insert failed: {e}"))?;
+                let mut rows = conn
+                    .query("SELECT last_insert_rowid()", ())
+                    .await
+                    .map_err(|e| format!("last_insert_rowid query failed: {e}"))?;
+                let row = rows
+                    .next()
+                    .await
+                    .map_err(|e| format!("last_insert_rowid read failed: {e}"))?
+                    .ok_or_else(|| "no row returned from last_insert_rowid".to_string())?;
+                let id: i64 = row.get(0).map_err(|e| format!("id read failed: {e}"))?;
+                Ok::<_, String>(id)
+            }
+            .await;
+
+            let msg = match result {
+                Ok(id) => HistoryMessage::BookmarkSaved(id),
+                Err(e) => HistoryMessage::BookmarkSaveFailed(e),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Load bookmarks for a given database path (or all if `None`).
+    /// Results arrive via [`Self::try_recv`] as `HistoryMessage::BookmarksLoaded`.
+    pub(crate) fn load_bookmarks(&self, database_path: Option<&str>) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+        let database_path = database_path.map(String::from);
+
+        tokio::spawn(async move {
+            let result = async {
+                let conn = db
+                    .connect()
+                    .map_err(|e| format!("bookmark connect failed: {e}"))?;
+
+                let (sql, params): (&str, Vec<turso::Value>) =
+                    if let Some(ref db_path) = database_path {
+                        (
+                            "SELECT id, name, sql, database_path, created_at, updated_at \
+                         FROM bookmarks \
+                         WHERE database_path IS NULL OR database_path = ? \
+                         ORDER BY name ASC",
+                            vec![turso::Value::Text(db_path.clone())],
+                        )
+                    } else {
+                        (
+                            "SELECT id, name, sql, database_path, created_at, updated_at \
+                         FROM bookmarks \
+                         ORDER BY name ASC",
+                            vec![],
+                        )
+                    };
+
+                let mut rows = conn
+                    .query(sql, params)
+                    .await
+                    .map_err(|e| format!("bookmark query failed: {e}"))?;
+
+                let mut entries = Vec::new();
+                while let Some(row) = rows
+                    .next()
+                    .await
+                    .map_err(|e| format!("bookmark row iteration: {e}"))?
+                {
+                    entries.push(row_to_bookmark(&row)?);
+                }
+                Ok::<_, String>(entries)
+            }
+            .await;
+
+            let msg = match result {
+                Ok(entries) => HistoryMessage::BookmarksLoaded(entries),
+                Err(e) => HistoryMessage::LoadFailed(e),
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    /// Delete a bookmark by id.
+    /// Result arrives via [`Self::try_recv`] as `HistoryMessage::BookmarkDeleted`.
+    pub(crate) fn delete_bookmark(&self, id: i64) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let result = async {
+                let conn = db
+                    .connect()
+                    .map_err(|e| format!("bookmark connect failed: {e}"))?;
+                conn.execute("DELETE FROM bookmarks WHERE id = ?", [id])
+                    .await
+                    .map_err(|e| format!("bookmark delete failed: {e}"))?;
+                Ok::<_, String>(())
+            }
+            .await;
+
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(HistoryMessage::BookmarkDeleted(id));
+                }
+                Err(e) => {
+                    let _ = tx.send(HistoryMessage::BookmarkSaveFailed(format!(
+                        "Delete failed: {e}"
+                    )));
+                }
+            }
+        });
+    }
+
+    /// Update a bookmark's name (and set `updated_at`).
+    /// Result arrives via [`Self::try_recv`] as `HistoryMessage::BookmarkUpdated`.
+    pub(crate) fn update_bookmark(&self, id: i64, name: String) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let result = async {
+                let conn = db
+                    .connect()
+                    .map_err(|e| format!("bookmark connect failed: {e}"))?;
+                conn.execute(
+                    "UPDATE bookmarks SET name = ?, updated_at = datetime('now') WHERE id = ?",
+                    turso::params![name, id],
+                )
+                .await
+                .map_err(|e| format!("bookmark update failed: {e}"))?;
+                Ok::<_, String>(())
+            }
+            .await;
+
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(HistoryMessage::BookmarkUpdated(id));
+                }
+                Err(e) => {
+                    let _ = tx.send(HistoryMessage::BookmarkSaveFailed(format!(
+                        "Rename failed: {e}"
+                    )));
+                }
+            }
+        });
+    }
+
     /// Non-blocking poll for completed history messages.
     pub(crate) fn try_recv(&mut self) -> Option<HistoryMessage> {
         self.result_rx.try_recv().ok()
     }
+}
+
+/// Extract a `BookmarkEntry` from a query result row.
+fn row_to_bookmark(row: &turso::Row) -> Result<BookmarkEntry, String> {
+    let map_err = |field: &str, e: turso::Error| format!("failed to read bookmark {field}: {e}");
+
+    let id: i64 = row.get(0).map_err(|e| map_err("id", e))?;
+    let name: String = row.get(1).map_err(|e| map_err("name", e))?;
+    let sql: String = row.get(2).map_err(|e| map_err("sql", e))?;
+    let database_path = match row.get_value(3).map_err(|e| map_err("database_path", e))? {
+        turso::Value::Text(s) => Some(s),
+        _ => None,
+    };
+    let created_at: String = row.get(4).map_err(|e| map_err("created_at", e))?;
+    let updated_at: String = row.get(5).map_err(|e| map_err("updated_at", e))?;
+
+    Ok(BookmarkEntry {
+        id,
+        name,
+        sql,
+        database_path,
+        created_at,
+        updated_at,
+    })
 }
 
 /// Extract a `HistoryEntry` from a query result row.

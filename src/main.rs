@@ -36,6 +36,7 @@ struct Cli {
 /// Global UI state shared across all database tabs.
 struct GlobalUi {
     history: QueryHistoryPanel,
+    bookmarks: components::bookmarks::BookmarkPanel,
     /// Persistent clipboard handle — kept alive for the app's lifetime so that
     /// clipboard contents survive on Linux/Wayland (arboard drops contents on Drop).
     clipboard: Option<arboard::Clipboard>,
@@ -49,6 +50,7 @@ impl GlobalUi {
     fn new() -> Self {
         Self {
             history: QueryHistoryPanel::new(),
+            bookmarks: components::bookmarks::BookmarkPanel::new(),
             clipboard: arboard::Clipboard::new().ok(),
             file_picker: None,
             goto_object: None,
@@ -196,7 +198,7 @@ fn run_loop(
         }
 
         terminal.draw(|frame| {
-            render_ui(frame, app, &global_ui);
+            render_ui(frame, app, &mut global_ui);
         })?;
     }
 
@@ -284,8 +286,13 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
 fn map_history_message(msg: history::HistoryMessage) -> app::Action {
     match msg {
         history::HistoryMessage::Loaded(entries) => app::Action::HistoryLoaded(entries),
-        history::HistoryMessage::LoadFailed(err) => app::Action::SetTransient(err, true),
+        history::HistoryMessage::LoadFailed(err)
+        | history::HistoryMessage::BookmarkSaveFailed(err) => app::Action::SetTransient(err, true),
         history::HistoryMessage::Deleted(_) => app::Action::HistoryReloadRequested,
+        history::HistoryMessage::BookmarksLoaded(entries) => app::Action::BookmarksLoaded(entries),
+        history::HistoryMessage::BookmarkSaved(_)
+        | history::HistoryMessage::BookmarkDeleted(_)
+        | history::HistoryMessage::BookmarkUpdated(_) => app::Action::BookmarkReloadRequested,
     }
 }
 
@@ -399,6 +406,13 @@ fn handle_key_event(
                     }
                 }
                 _ => {}
+            }
+            return;
+        }
+        Some(app::Overlay::Bookmarks) => {
+            if let Some(action) = global_ui.bookmarks.handle_key(key) {
+                app.update(&action);
+                dispatch_action_to_db(active_idx, &action, app, global_ui);
             }
             return;
         }
@@ -592,7 +606,9 @@ fn dispatch_action_to_db(
                 .handle
                 .load_columns(table_name.clone());
         }
-        app::Action::PopulateEditor(sql) | app::Action::RecallHistory(sql) => {
+        app::Action::PopulateEditor(sql)
+        | app::Action::RecallHistory(sql)
+        | app::Action::RecallBookmark(sql) => {
             app.databases[db_idx].editor.set_contents(sql);
         }
         app::Action::QueryCompleted(result) => {
@@ -1072,6 +1088,59 @@ fn dispatch_action_to_db(
                     global_ui.history.search_text(),
                     global_ui.history.errors_only(),
                 );
+            }
+        }
+        app::Action::ShowBookmarks => {
+            if app.history_db.is_none() {
+                let action =
+                    app::Action::SetTransient("Bookmark database unavailable".to_string(), true);
+                app.update(&action);
+                return;
+            }
+            // Only load when overlay is actually opening (update() already toggled it)
+            if matches!(app.active_overlay, Some(app::Overlay::Bookmarks))
+                && let Some(ref hdb) = app.history_db
+            {
+                let db_path = &app.databases[db_idx].path;
+                hdb.load_bookmarks(Some(db_path));
+            }
+        }
+        app::Action::SaveBookmark {
+            name,
+            sql,
+            database_path,
+        } => {
+            if let Some(ref hdb) = app.history_db {
+                hdb.save_bookmark(name.clone(), sql.clone(), database_path.clone());
+            }
+        }
+        app::Action::UpdateBookmark { id, name } => {
+            if let Some(ref hdb) = app.history_db {
+                hdb.update_bookmark(*id, name.clone());
+            }
+        }
+        app::Action::DeleteBookmark(id) => {
+            if let Some(ref hdb) = app.history_db {
+                hdb.delete_bookmark(*id);
+            }
+        }
+        app::Action::BookmarksLoaded(entries) => {
+            global_ui.bookmarks.set_entries(entries.clone());
+        }
+        app::Action::BookmarkReloadRequested => {
+            if let Some(ref hdb) = app.history_db {
+                let db_path = &app.databases[db_idx].path;
+                hdb.load_bookmarks(Some(db_path));
+            }
+        }
+        app::Action::RecallAndExecuteBookmark(sql) => {
+            let db = &mut app.databases[db_idx];
+            db.editor.set_contents(sql);
+            if !sql.trim().is_empty() {
+                db.executing = true;
+                db.last_execution_source = app::ExecutionSource::FullBuffer;
+                db.last_executed_sql = Some(sql.clone());
+                db.handle.execute(sql.clone(), None);
             }
         }
         app::Action::ToggleTheme => {
@@ -1611,7 +1680,7 @@ fn build_tab_labels(databases: &[DatabaseContext]) -> Vec<String> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &GlobalUi) {
+fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut GlobalUi) {
     // Copy theme to avoid holding a borrow on app while we mutate databases
     let theme = app.theme;
     let area = frame.area();
@@ -1759,6 +1828,23 @@ fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &GlobalUi) {
     // History overlay
     if active_overlay == Some(app::Overlay::History) {
         global_ui.history.render(frame, area, &theme);
+    }
+
+    // Bookmarks overlay
+    if active_overlay == Some(app::Overlay::Bookmarks) {
+        let db = &app.databases[active_idx];
+        global_ui
+            .bookmarks
+            .set_editor_content(&db.editor.contents());
+        global_ui.bookmarks.set_database_path(&db.path);
+        let full = frame.area();
+        let popup_w = full.width * 70 / 100;
+        let popup_h = full.height * 80 / 100;
+        let x = (full.width.saturating_sub(popup_w)) / 2;
+        let y = (full.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect::new(x, y, popup_w, popup_h);
+        frame.render_widget(Clear, popup_area);
+        global_ui.bookmarks.render(frame, popup_area, &theme);
     }
 
     // Export overlay

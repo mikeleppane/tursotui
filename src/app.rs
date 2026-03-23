@@ -71,6 +71,7 @@ pub(crate) enum Overlay {
     FilePicker,
     GoToObject,
     DdlViewer,
+    Bookmarks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +254,21 @@ pub(crate) enum Action {
         table: String,
         where_clause: String,
     },
+    ShowBookmarks,
+    SaveBookmark {
+        name: String,
+        sql: String,
+        database_path: Option<String>,
+    },
+    UpdateBookmark {
+        id: i64,
+        name: String,
+    },
+    RecallBookmark(String),
+    RecallAndExecuteBookmark(String),
+    DeleteBookmark(i64),
+    BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
+    BookmarkReloadRequested,
 }
 
 /// Per-database workspace.
@@ -532,8 +548,20 @@ impl AppState {
                     Some(Overlay::History)
                 };
             }
+            Action::ShowBookmarks => {
+                if self.history_db.is_none() {
+                    return;
+                }
+                self.active_overlay = if let Some(Overlay::Bookmarks) = self.active_overlay {
+                    None
+                } else {
+                    Some(Overlay::Bookmarks)
+                };
+            }
             Action::RecallHistory(_)
             | Action::RecallAndExecute(_)
+            | Action::RecallBookmark(_)
+            | Action::RecallAndExecuteBookmark(_)
             | Action::DataEditsCommitted
             | Action::DataEditsFailed(_) => {
                 self.active_overlay = None;
