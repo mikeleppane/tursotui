@@ -55,6 +55,9 @@ pub(crate) struct Theme {
     pub sql_comment: Style,
     pub sql_function: Style,
     pub sql_operator: Style,
+    pub sql_type: Style,
+    pub sql_parameter: Style,
+    pub sql_field: Style,
 
     // ER diagram
     pub er_table_border: Style,
@@ -114,8 +117,10 @@ pub(crate) const DARK_THEME: Theme = Theme {
     sql_number: Style::new().fg(YELLOW),
     sql_comment: Style::new().fg(OVERLAY0),
     sql_function: Style::new().fg(TEAL),
-    // Inherits fg from the render context — operators use the surrounding text color
-    sql_operator: Style::new().add_modifier(Modifier::BOLD),
+    sql_operator: Style::new().fg(PEACH).add_modifier(Modifier::BOLD),
+    sql_type: Style::new().fg(MAUVE),
+    sql_parameter: Style::new().fg(PINK),
+    sql_field: Style::new().fg(LAVENDER),
 
     er_table_border: Style::new().fg(BLUE),
     er_pk_style: Style::new().fg(YELLOW).add_modifier(Modifier::BOLD),
@@ -188,8 +193,13 @@ pub(crate) const LIGHT_THEME: Theme = Theme {
     sql_string: Style::new().fg(Color::Rgb(64, 160, 43)),
     sql_number: Style::new().fg(Color::Rgb(223, 142, 29)),
     sql_comment: Style::new().fg(LATTE_OVERLAY0),
-    sql_function: Style::new().fg(Color::Rgb(23, 146, 153)),
-    sql_operator: Style::new().add_modifier(Modifier::BOLD),
+    sql_function: Style::new().fg(Color::Rgb(23, 146, 153)), // Latte Teal
+    sql_operator: Style::new()
+        .fg(Color::Rgb(254, 100, 11)) // Latte Peach
+        .add_modifier(Modifier::BOLD),
+    sql_type: Style::new().fg(Color::Rgb(136, 57, 239)), // Latte Mauve
+    sql_parameter: Style::new().fg(Color::Rgb(234, 118, 203)), // Latte Pink
+    sql_field: Style::new().fg(LATTE_LAVENDER),
 
     er_table_border: Style::new().fg(LATTE_BLUE),
     er_pk_style: Style::new()

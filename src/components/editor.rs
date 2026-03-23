@@ -1,6 +1,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::{Action, Direction, ExecutionSource, SchemaCache};
 use crate::autocomplete;
@@ -29,6 +30,53 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
 /// Number of chars in a string (not bytes).
 fn char_len(s: &str) -> usize {
     s.chars().count()
+}
+
+/// How many visual rows a line occupies when wrapped to `width` display columns.
+fn visual_line_height(line: &str, width: usize) -> usize {
+    if width == 0 || line.is_empty() {
+        return 1;
+    }
+    let mut rows = 1;
+    let mut col = 0;
+    for ch in line.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if col + w > width {
+            rows += 1;
+            col = w;
+        } else {
+            col += w;
+        }
+    }
+    rows
+}
+
+/// Map a char-offset cursor column to `(sub_row, display_col)` within a wrapped line.
+fn cursor_visual_pos(line: &str, col: usize, width: usize) -> (usize, usize) {
+    if width == 0 {
+        return (0, 0);
+    }
+    let mut sub_row = 0;
+    let mut display_col = 0;
+    for (i, ch) in line.chars().enumerate() {
+        if i == col {
+            // When accumulated width fills the row exactly, this char starts the next
+            // visual row (matches ratatui's Paragraph::wrap behaviour).
+            if display_col >= width {
+                return (sub_row + 1, 0);
+            }
+            return (sub_row, display_col);
+        }
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if display_col + w > width {
+            sub_row += 1;
+            display_col = w;
+        } else {
+            display_col += w;
+        }
+    }
+    // col == line length — cursor at end of line (render clamps to area)
+    (sub_row, display_col)
 }
 
 /// Apply selection highlighting to a syntax-highlighted line.
@@ -502,12 +550,27 @@ impl QueryEditor {
         }
     }
 
-    fn adjust_scroll(&mut self, visible_height: usize) {
+    fn adjust_scroll(&mut self, visible_height: usize, content_width: usize) {
         let row = self.cursor.0;
+
+        // Cursor above visible area — snap scroll to cursor line
         if row < self.scroll_offset {
             self.scroll_offset = row;
-        } else if row >= self.scroll_offset + visible_height {
-            self.scroll_offset = row - visible_height + 1;
+            return;
+        }
+
+        // Compute total visual rows from scroll_offset to cursor position
+        let mut total: usize = 0;
+        for i in self.scroll_offset..row {
+            total += visual_line_height(&self.buffer[i], content_width);
+        }
+        let (sub, _) = cursor_visual_pos(&self.buffer[row], self.cursor.1, content_width);
+        total += sub;
+
+        // Evict lines from the top until the cursor fits on screen
+        while total >= visible_height && self.scroll_offset < row {
+            total -= visual_line_height(&self.buffer[self.scroll_offset], content_width);
+            self.scroll_offset += 1;
         }
     }
 
@@ -609,6 +672,55 @@ impl QueryEditor {
     /// Returns the current scroll offset.
     pub(crate) fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+}
+
+/// Render the gutter (line number + blank continuation rows) for a buffer line.
+#[allow(clippy::too_many_arguments)]
+fn render_gutter(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    gutter_width: u16,
+    gutter_digits: usize,
+    line_num: usize,
+    rows: usize,
+    is_cursor_line: bool,
+    gutter_style: Style,
+    theme: &Theme,
+) {
+    let primary_style = if is_cursor_line {
+        Style::default().fg(theme.accent).bg(theme.active_line_bg)
+    } else {
+        gutter_style
+    };
+    let num_str = format!("{line_num:>gutter_digits$} ");
+    frame.render_widget(
+        Paragraph::new(num_str).style(primary_style),
+        Rect {
+            x,
+            y,
+            width: gutter_width,
+            height: 1,
+        },
+    );
+
+    let cont_style = if is_cursor_line {
+        Style::default().bg(theme.active_line_bg)
+    } else {
+        gutter_style
+    };
+    let blank = " ".repeat(gutter_width as usize);
+    for sub in 1..rows {
+        frame.render_widget(
+            Paragraph::new(blank.clone()).style(cont_style),
+            Rect {
+                x,
+                y: y + sub as u16,
+                width: gutter_width,
+                height: 1,
+            },
+        );
     }
 }
 
@@ -797,7 +909,7 @@ impl Component for QueryEditor {
                     self.delete_selection();
                 }
                 self.insert_newline();
-                None
+                Some(Action::Consumed)
             }
 
             // Backspace / Delete → delete selection or single char
@@ -807,7 +919,7 @@ impl Component for QueryEditor {
                 } else {
                     self.backspace();
                 }
-                None
+                Some(Action::Consumed)
             }
             (KeyModifiers::NONE, KeyCode::Delete) => {
                 if self.selection.is_some() {
@@ -815,7 +927,7 @@ impl Component for QueryEditor {
                 } else {
                     self.delete();
                 }
-                None
+                Some(Action::Consumed)
             }
 
             // Tab → indent, Shift+Tab → dedent
@@ -824,12 +936,12 @@ impl Component for QueryEditor {
                     self.delete_selection();
                 }
                 self.insert_tab();
-                None
+                Some(Action::Consumed)
             }
             (_, KeyCode::BackTab) => {
                 self.clear_selection();
                 self.dedent();
-                None
+                Some(Action::Consumed)
             }
 
             // Regular character input (replaces selection if active)
@@ -838,7 +950,7 @@ impl Component for QueryEditor {
                     self.delete_selection();
                 }
                 self.insert_char(ch);
-                None
+                Some(Action::Consumed)
             }
 
             _ => None,
@@ -856,94 +968,95 @@ impl Component for QueryEditor {
         }
 
         let visible_height = inner.height as usize;
-        self.adjust_scroll(visible_height);
 
         let line_count = self.buffer.len();
-        // Number of digits in the largest line number
         let gutter_digits = line_count.to_string().len();
-        // gutter = digits + 1 space separator
         let gutter_width = (gutter_digits + 1) as u16;
 
         if inner.width <= gutter_width {
             return;
         }
         let content_width = inner.width - gutter_width;
+        let cw = content_width as usize;
+
+        self.adjust_scroll(visible_height, cw);
 
         let gutter_style = Style::default()
             .fg(theme.border)
             .add_modifier(Modifier::DIM);
 
-        for (display_idx, line_idx) in
-            (self.scroll_offset..self.scroll_offset + visible_height).enumerate()
-        {
-            let y = inner.y + display_idx as u16;
-            if y >= inner.y + inner.height {
-                break;
+        let mut screen_row: usize = 0;
+        let mut buf_line = self.scroll_offset;
+
+        while screen_row < visible_height && buf_line < self.buffer.len() {
+            let line_text = &self.buffer[buf_line];
+            let vh = visual_line_height(line_text, cw);
+            let rows_available = visible_height - screen_row;
+            let rows_to_render = vh.min(rows_available);
+            let y = inner.y + screen_row as u16;
+            let is_cursor_line = focused && buf_line == self.cursor.0;
+
+            render_gutter(
+                frame,
+                inner.x,
+                y,
+                gutter_width,
+                gutter_digits,
+                buf_line + 1,
+                rows_to_render,
+                is_cursor_line,
+                gutter_style,
+                theme,
+            );
+
+            // Syntax-highlighted content with selection overlay and wrapping
+            let mut highlighted = highlight::highlight_line(line_text, theme);
+            let (sel_start, sel_end) = self.line_selection_cols(buf_line);
+            if sel_start < sel_end {
+                highlighted =
+                    apply_selection(highlighted, sel_start, sel_end, theme.selected_style);
+            } else if sel_start == 0
+                && sel_end == 0
+                && line_text.is_empty()
+                && let Some(((sr, _), (er, _))) = self.selection_bounds()
+                && buf_line > sr
+                && buf_line < er
+            {
+                highlighted = Line::from(Span::styled(" ", theme.selected_style));
             }
 
-            // Render gutter (line number), only for actual lines
-            if line_idx < self.buffer.len() {
-                let line_num = line_idx + 1;
-                let is_cursor_line = focused && line_idx == self.cursor.0;
-                let num_str = format!("{line_num:>gutter_digits$} ");
-                let gutter_area = Rect {
-                    x: inner.x,
-                    y,
-                    width: gutter_width,
-                    height: 1,
-                };
-                let cur_gutter_style = if is_cursor_line {
-                    Style::default().fg(theme.accent).bg(theme.active_line_bg)
-                } else {
-                    gutter_style
-                };
-                let gutter_widget = Paragraph::new(num_str).style(cur_gutter_style);
-                frame.render_widget(gutter_widget, gutter_area);
-
-                // Render syntax-highlighted line content, with selection overlay
-                let line_text = &self.buffer[line_idx];
-                let mut highlighted = highlight::highlight_line(line_text, theme);
-                let (sel_start, sel_end) = self.line_selection_cols(line_idx);
-                if sel_start < sel_end {
-                    highlighted =
-                        apply_selection(highlighted, sel_start, sel_end, theme.selected_style);
-                } else if sel_start == 0
-                    && sel_end == 0
-                    && line_text.is_empty()
-                    && let Some(((sr, _), (er, _))) = self.selection_bounds()
-                    && line_idx > sr
-                    && line_idx < er
-                {
-                    // Empty line within a multi-line selection: show a highlighted space
-                    highlighted = Line::from(Span::styled(" ", theme.selected_style));
-                }
-
-                let content_area = Rect {
-                    x: inner.x + gutter_width,
-                    y,
-                    width: content_width,
-                    height: 1,
-                };
-                let mut line_widget = Paragraph::new(highlighted);
-                if is_cursor_line {
-                    line_widget = line_widget.style(Style::default().bg(theme.active_line_bg));
-                }
-                frame.render_widget(line_widget, content_area);
+            let content_area = Rect {
+                x: inner.x + gutter_width,
+                y,
+                width: content_width,
+                height: rows_to_render as u16,
+            };
+            let mut line_widget = Paragraph::new(highlighted).wrap(Wrap { trim: false });
+            if is_cursor_line {
+                line_widget = line_widget.style(Style::default().bg(theme.active_line_bg));
             }
+            frame.render_widget(line_widget, content_area);
+
+            screen_row += rows_to_render;
+            buf_line += 1;
         }
 
         // Set terminal cursor position when focused
         if focused {
             let (row, col) = self.cursor;
             if row >= self.scroll_offset {
-                let screen_row = row - self.scroll_offset;
-                if screen_row < visible_height {
-                    let cursor_x = inner.x + gutter_width + col as u16;
-                    let cursor_y = inner.y + screen_row as u16;
-                    // Clamp to content area bounds
+                let mut cursor_screen_row: usize = 0;
+                for i in self.scroll_offset..row {
+                    cursor_screen_row += visual_line_height(&self.buffer[i], cw);
+                }
+                let (sub_row, sub_col) = cursor_visual_pos(&self.buffer[row], col, cw);
+                cursor_screen_row += sub_row;
+
+                if cursor_screen_row < visible_height {
+                    let cursor_x = inner.x + gutter_width + sub_col as u16;
+                    let cursor_y = inner.y + cursor_screen_row as u16;
                     let max_x = inner.x + gutter_width + content_width - 1;
-                    let clamped_x = cursor_x.min(max_x);
-                    frame.set_cursor_position((clamped_x, cursor_y));
+                    frame.set_cursor_position((cursor_x.min(max_x), cursor_y));
                 }
             }
         }
@@ -981,6 +1094,59 @@ mod tests {
         assert_eq!(editor.cursor, (0, 0));
         assert_eq!(editor.contents(), "");
     }
+
+    // ─── Word-wrap helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn test_visual_line_height_empty() {
+        assert_eq!(visual_line_height("", 40), 1);
+    }
+
+    #[test]
+    fn test_visual_line_height_fits() {
+        assert_eq!(visual_line_height("hello", 40), 1);
+    }
+
+    #[test]
+    fn test_visual_line_height_exact_fit() {
+        assert_eq!(visual_line_height("12345", 5), 1);
+    }
+
+    #[test]
+    fn test_visual_line_height_wraps() {
+        // 10 chars in width 4 → 3 visual rows (4+4+2)
+        assert_eq!(visual_line_height("1234567890", 4), 3);
+    }
+
+    #[test]
+    fn test_visual_line_height_zero_width() {
+        assert_eq!(visual_line_height("hello", 0), 1);
+    }
+
+    #[test]
+    fn test_cursor_visual_pos_no_wrap() {
+        assert_eq!(cursor_visual_pos("hello", 3, 40), (0, 3));
+    }
+
+    #[test]
+    fn test_cursor_visual_pos_at_wrap_boundary() {
+        // Width 5: "12345|67890" — col 5 is first char of second row
+        assert_eq!(cursor_visual_pos("1234567890", 5, 5), (1, 0));
+    }
+
+    #[test]
+    fn test_cursor_visual_pos_second_row() {
+        // Width 4: "1234|5678|90" — col 6 is on row 1, display_col 2
+        assert_eq!(cursor_visual_pos("1234567890", 6, 4), (1, 2));
+    }
+
+    #[test]
+    fn test_cursor_visual_pos_end_of_line() {
+        // Cursor past last char
+        assert_eq!(cursor_visual_pos("abc", 3, 40), (0, 3));
+    }
+
+    // ─── Editor tests ────────────────────────────────────────────────
 
     #[test]
     fn test_insert_char() {
@@ -1822,8 +1988,8 @@ mod tests {
         // The char insertion happens, popup still exists (refresh happens in main.rs)
         assert!(editor.autocomplete_popup.is_some());
         assert_eq!(editor.contents(), "SELECT * FROM us");
-        // No special action — buffer modification
-        assert!(action.is_none());
+        // Returns Consumed to block global key fallback
+        assert!(matches!(action, Some(Action::Consumed)));
     }
 
     #[test]

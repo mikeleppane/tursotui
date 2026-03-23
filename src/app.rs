@@ -144,6 +144,9 @@ pub(crate) struct ObjectRef {
 /// All state mutations flow through actions.
 #[derive(Debug)]
 pub(crate) enum Action {
+    /// Key was consumed by a component; suppress global fallback.
+    /// Intentionally a no-op in `update()` and `dispatch_action_to_db()` (falls to `_ => {}`).
+    Consumed,
     SwitchSubTab(SubTab),
     #[allow(dead_code)] // constructed when click-to-focus lands (later milestone)
     FocusPanel(PanelId),

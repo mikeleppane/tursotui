@@ -20,6 +20,9 @@ pub(crate) enum TokenKind {
     Comment,
     Function,
     Operator,
+    Type,
+    Parameter,
+    Field,
     Default,
 }
 
@@ -100,13 +103,6 @@ const SQL_KEYWORDS: &[&str] = &[
     "EXPLAIN",
     "PLAN",
     "QUERY",
-    "INTEGER",
-    "TEXT",
-    "REAL",
-    "BLOB",
-    "NUMERIC",
-    "VARCHAR",
-    "BOOLEAN",
     "WITHOUT",
     "ROWID",
     // REPLACE is intentionally in both SQL_KEYWORDS and SQL_FUNCTIONS.
@@ -146,8 +142,30 @@ const SQL_KEYWORDS: &[&str] = &[
     "NOTNULL",
 ];
 
-/// Word-form operators (spec §5.2: Default fg, bold — same style as symbol operators).
+/// Word-form operators.
 const SQL_WORD_OPERATORS: &[&str] = &["AND", "OR", "NOT"];
+
+/// SQL data types — highlighted distinctly from keywords.
+const SQL_TYPES: &[&str] = &[
+    "INTEGER",
+    "INT",
+    "TINYINT",
+    "SMALLINT",
+    "BIGINT",
+    "TEXT",
+    "REAL",
+    "FLOAT",
+    "DOUBLE",
+    "BLOB",
+    "NUMERIC",
+    "VARCHAR",
+    "BOOLEAN",
+    "CHAR",
+    "DECIMAL",
+    "DATE",
+    "DATETIME",
+    "TIMESTAMP",
+];
 
 /// Common SQL functions.
 const SQL_FUNCTIONS: &[&str] = &[
@@ -321,6 +339,39 @@ pub(crate) fn tokenize(input: &str) -> Vec<Token> {
             continue;
         }
 
+        // Positional parameter: ? or ?1, ?2, etc.
+        if ch == '?' {
+            let start = i;
+            i += 1;
+            while i < len && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            let text: String = chars[start..i].iter().collect();
+            tokens.push(Token {
+                kind: TokenKind::Parameter,
+                text,
+            });
+            continue;
+        }
+
+        // Named parameter: :name, $name, @name
+        if (ch == ':' || ch == '$' || ch == '@')
+            && i + 1 < len
+            && (chars[i + 1].is_alphabetic() || chars[i + 1] == '_')
+        {
+            let start = i;
+            i += 1;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let text: String = chars[start..i].iter().collect();
+            tokens.push(Token {
+                kind: TokenKind::Parameter,
+                text,
+            });
+            continue;
+        }
+
         // Number: digits optionally with decimal point
         if ch.is_ascii_digit() || (ch == '.' && i + 1 < len && chars[i + 1].is_ascii_digit()) {
             let start = i;
@@ -347,10 +398,17 @@ pub(crate) fn tokenize(input: &str) -> Vec<Token> {
             // Check if followed by '(' → function
             let is_fn_call = i < len && chars[i] == '(';
 
+            // Dot-qualified field: word immediately preceded by '.' (e.g. u.email)
+            let after_dot = start > 0 && chars[start - 1] == '.';
+
             let kind = if is_fn_call && SQL_FUNCTIONS.contains(&upper.as_str()) {
                 TokenKind::Function
+            } else if after_dot {
+                TokenKind::Field
             } else if SQL_WORD_OPERATORS.contains(&upper.as_str()) {
                 TokenKind::Operator
+            } else if SQL_TYPES.contains(&upper.as_str()) {
+                TokenKind::Type
             } else if SQL_KEYWORDS.contains(&upper.as_str()) {
                 TokenKind::Keyword
             } else {
@@ -402,6 +460,9 @@ pub(crate) fn highlight_line(input: &str, theme: &Theme) -> Line<'static> {
                 TokenKind::Comment => theme.sql_comment,
                 TokenKind::Function => theme.sql_function,
                 TokenKind::Operator => theme.sql_operator,
+                TokenKind::Type => theme.sql_type,
+                TokenKind::Parameter => theme.sql_parameter,
+                TokenKind::Field => theme.sql_field,
                 TokenKind::Default => Style::default(),
             };
             Span::styled(tok.text, style)
@@ -625,6 +686,137 @@ mod tests {
     fn test_whitespace_only() {
         let tokens = tokenize("   ");
         assert!(tokens.iter().all(|t| t.kind == TokenKind::Default));
+    }
+
+    #[test]
+    fn test_data_types_highlighted() {
+        let tokens = tokenize("CREATE TABLE t (id INTEGER, name TEXT, val REAL)");
+        let types: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Type)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(types, vec!["INTEGER", "TEXT", "REAL"]);
+    }
+
+    #[test]
+    fn test_data_types_case_insensitive() {
+        let tokens = tokenize("varchar boolean blob");
+        assert!(
+            tokens
+                .iter()
+                .filter(|t| !t.text.trim().is_empty())
+                .all(|t| t.kind == TokenKind::Type)
+        );
+    }
+
+    #[test]
+    fn test_date_type_vs_function() {
+        // Bare DATE → Type (column type in DDL)
+        let tokens = tokenize("col DATE");
+        let date_tok = tokens.iter().find(|t| t.text == "DATE").unwrap();
+        assert_eq!(date_tok.kind, TokenKind::Type);
+
+        // DATE(...) → Function
+        let tokens = tokenize("DATE('now')");
+        assert_eq!(tokens[0].kind, TokenKind::Function);
+    }
+
+    #[test]
+    fn test_positional_parameter() {
+        let tokens = tokenize("SELECT * FROM t WHERE id = ?1");
+        let params: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Parameter)
+            .collect();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].text, "?1");
+    }
+
+    #[test]
+    fn test_bare_question_mark_parameter() {
+        let tokens = tokenize("WHERE id = ?");
+        let params: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Parameter)
+            .collect();
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].text, "?");
+    }
+
+    #[test]
+    fn test_named_parameter() {
+        let tokens = tokenize("WHERE name = :user_name AND age > :min_age");
+        let params: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Parameter)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(params, vec![":user_name", ":min_age"]);
+    }
+
+    #[test]
+    fn test_dollar_parameter() {
+        let tokens = tokenize("WHERE id = $user_id");
+        let params: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Parameter)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(params, vec!["$user_id"]);
+    }
+
+    #[test]
+    fn test_at_parameter() {
+        let tokens = tokenize("WHERE id = @id AND name = @name");
+        let params: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Parameter)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(params, vec!["@id", "@name"]);
+    }
+
+    #[test]
+    fn test_colon_not_parameter_before_digit() {
+        // Bare colon followed by a digit is not a named parameter
+        let tokens = tokenize("a:1");
+        assert!(tokens.iter().all(|t| t.kind != TokenKind::Parameter));
+    }
+
+    #[test]
+    fn test_dot_qualified_field() {
+        let tokens = tokenize("u.email");
+        assert_eq!(tokens[0].kind, TokenKind::Default); // u
+        assert_eq!(tokens[1].kind, TokenKind::Default); // .
+        assert_eq!(tokens[2].kind, TokenKind::Field); // email
+    }
+
+    #[test]
+    fn test_multiple_qualified_fields() {
+        let tokens = tokenize("SELECT u.username, t.title FROM users u");
+        let fields: Vec<&str> = tokens
+            .iter()
+            .filter(|t| t.kind == TokenKind::Field)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(fields, vec!["username", "title"]);
+    }
+
+    #[test]
+    fn test_dot_qualified_function_beats_field() {
+        // is_fn_call takes priority over after_dot: t.count(...) → Function, not Field
+        let tokens = tokenize("t.count(*)");
+        let count_tok = tokens.iter().find(|t| t.text == "count").unwrap();
+        assert_eq!(count_tok.kind, TokenKind::Function);
+    }
+
+    #[test]
+    fn test_dot_qualified_type_name_becomes_field() {
+        // after_dot takes priority over SQL_TYPES: t.text → Field, not Type
+        let tokens = tokenize("t.text");
+        let text_tok = tokens.iter().find(|t| t.text == "text").unwrap();
+        assert_eq!(text_tok.kind, TokenKind::Field);
     }
 
     #[test]
