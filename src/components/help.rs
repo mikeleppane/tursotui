@@ -149,6 +149,12 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Ctrl+W          Close current database tab"));
     lines.push(Line::from("  Ctrl+O          Open database file"));
     lines.push(Line::from("  Ctrl+P          Go to Object (fuzzy search)"));
+    lines.push(Line::from(
+        "  Ctrl+←/→        Resize sidebar (narrower/wider)",
+    ));
+    lines.push(Line::from(
+        "  Ctrl+↑/↓        Resize editor (shorter/taller)",
+    ));
 
     lines
 }

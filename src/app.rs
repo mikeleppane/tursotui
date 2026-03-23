@@ -231,6 +231,8 @@ pub(crate) enum Action {
     OpenDatabase(std::path::PathBuf),
     OpenFilePicker,
     OpenGoToObject,
+    ResizeSidebar(i16), // delta in percentage points
+    ResizeEditor(i16),  // delta in percentage points
     #[allow(dead_code)] // Phase 4: Go to Object
     GoToObject(ObjectRef),
 }
@@ -265,6 +267,9 @@ pub(crate) struct DatabaseContext {
     pub(crate) data_editor: DataEditor,
     pub(crate) er_diagram: ERDiagram,
     pub(crate) export_popup: Option<ExportPopup>,
+    // Layout percentages (adjustable at runtime)
+    pub(crate) sidebar_pct: u16,
+    pub(crate) editor_pct: u16,
     #[allow(dead_code)]
     pub(crate) pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
     /// Set to true by `FollowFK` before dispatching `ExecuteQuery`,
@@ -319,6 +324,8 @@ impl DatabaseContext {
             data_editor: DataEditor::new(),
             er_diagram: ERDiagram::new(),
             export_popup: None,
+            sidebar_pct: 20,
+            editor_pct: 40,
             pending_edit_table: None,
             pending_fk_activation: false,
         }
@@ -585,6 +592,18 @@ impl AppState {
                 } else {
                     Some(Overlay::GoToObject)
                 };
+            }
+            Action::ResizeSidebar(delta) => {
+                let db = &mut self.databases[db_idx];
+                #[allow(clippy::cast_possible_wrap)]
+                let current = db.sidebar_pct as i16;
+                db.sidebar_pct = (current + delta).clamp(10, 50) as u16;
+            }
+            Action::ResizeEditor(delta) => {
+                let db = &mut self.databases[db_idx];
+                #[allow(clippy::cast_possible_wrap)]
+                let current = db.editor_pct as i16;
+                db.editor_pct = (current + delta).clamp(20, 80) as u16;
             }
             Action::GoToObject(obj_ref) => {
                 // Switch to target database, switch to Query sub-tab

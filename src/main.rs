@@ -1739,24 +1739,31 @@ fn render_query_tab(
     db: &mut DatabaseContext,
 ) {
     if sidebar_visible {
-        let [sidebar_area, main_area] =
-            Layout::horizontal([Constraint::Percentage(20), Constraint::Percentage(80)])
-                .areas(area);
+        let [sidebar_area, main_area] = Layout::horizontal([
+            Constraint::Percentage(db.sidebar_pct),
+            Constraint::Percentage(100 - db.sidebar_pct),
+        ])
+        .areas(area);
 
         db.schema
             .render(frame, sidebar_area, focus == PanelId::Schema, theme);
 
-        let [editor_area, bottom_area] =
-            Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .areas(main_area);
+        let [editor_area, bottom_area] = Layout::vertical([
+            Constraint::Percentage(db.editor_pct),
+            Constraint::Percentage(100 - db.editor_pct),
+        ])
+        .areas(main_area);
 
         db.editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
         render_autocomplete_popup(frame, &db.editor, editor_area, theme);
         render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, db);
     } else {
-        let [editor_area, bottom_area] =
-            Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(area);
+        let [editor_area, bottom_area] = Layout::vertical([
+            Constraint::Percentage(db.editor_pct),
+            Constraint::Percentage(100 - db.editor_pct),
+        ])
+        .areas(area);
 
         db.editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);

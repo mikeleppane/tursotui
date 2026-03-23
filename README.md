@@ -10,6 +10,8 @@
 
 ## Features
 
+**Multi-Database Tabs** — open multiple databases simultaneously with a tab bar. Switch between them with `Ctrl+PgDn`/`Ctrl+PgUp`, open new databases with `Ctrl+O` file picker, close with `Ctrl+W`. Each database has independent schema, editor, and results state.
+
 **Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering. Each entity type has a distinct color for quick visual scanning.
 
 **SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution.
@@ -23,6 +25,10 @@
 **Foreign Key Navigation** — follow FK references from any cell to the referenced row. Breadcrumb trail with back-navigation to retrace your path through related tables.
 
 **Record Detail** — vertical key-value view for inspecting a single row across all columns, with JSON syntax coloring for structured values.
+
+**ER Diagram** — visual entity-relationship diagram built from foreign key definitions. Grid layout with box-drawing borders, PK/FK markers, relationship edges, cycle detection with dashed lines, and adjustable spacing.
+
+**Go to Object** — fuzzy search across all open databases (`Ctrl+P`). Instantly navigate to any table, view, index, trigger, or column with ranked results.
 
 **EXPLAIN View** — bytecode table and query plan tree, toggled with a single key.
 
@@ -57,7 +63,7 @@ tursotui mydb.sqlite
 # Open an in-memory database
 tursotui
 
-# Open multiple databases (future)
+# Open multiple databases in tabs
 tursotui db1.sqlite db2.sqlite
 ```
 
@@ -73,6 +79,12 @@ tursotui db1.sqlite db2.sqlite
 | `Alt+1` / `Alt+2` | Switch Query / Admin tab |
 | `Ctrl+T` | Toggle dark/light theme |
 | `F1` / `?` | Help overlay |
+| `Ctrl+O` | Open database file |
+| `Ctrl+P` | Go to Object (fuzzy search) |
+| `Ctrl+PgDn` / `Ctrl+PgUp` | Next / previous database tab |
+| `Ctrl+W` | Close current database tab |
+| `Ctrl+Left` / `Ctrl+Right` | Resize sidebar (narrower / wider) |
+| `Ctrl+Up` / `Ctrl+Down` | Resize editor (shorter / taller) |
 | `Ctrl+Shift+E` | Export results |
 | `Ctrl+Shift+C` | Quick copy results (TSV) |
 
@@ -138,6 +150,12 @@ tursotui db1.sqlite db2.sqlite
 | `1` / `2` / `3` / `4` | Results / Explain / Detail / ER Diagram |
 | `Tab` (Explain) | Toggle Bytecode / Query Plan |
 | `Enter` (Explain) | Generate EXPLAIN |
+| `Tab` (ER Diagram) | Cycle focus between tables |
+| `Enter` (ER Diagram) | Expand / collapse table columns |
+| `h/j/k/l` (ER Diagram) | Pan viewport |
+| `+` / `-` (ER Diagram) | Adjust spacing |
+| `c` (ER Diagram) | Toggle compact mode |
+| `o` (ER Diagram) | Query focused table |
 
 ### Admin Tab
 

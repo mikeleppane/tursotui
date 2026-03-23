@@ -84,6 +84,12 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // Go to Object
         (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(Action::OpenGoToObject),
 
+        // Panel resizing
+        (KeyModifiers::CONTROL, KeyCode::Left) => Some(Action::ResizeSidebar(-5)),
+        (KeyModifiers::CONTROL, KeyCode::Right) => Some(Action::ResizeSidebar(5)),
+        (KeyModifiers::CONTROL, KeyCode::Up) => Some(Action::ResizeEditor(-5)),
+        (KeyModifiers::CONTROL, KeyCode::Down) => Some(Action::ResizeEditor(5)),
+
         // Multi-database tab switching
         (KeyModifiers::CONTROL, KeyCode::PageDown) => Some(Action::NextDatabase),
         (KeyModifiers::CONTROL, KeyCode::PageUp) => Some(Action::PrevDatabase),
