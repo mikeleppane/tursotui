@@ -166,6 +166,33 @@ impl BookmarkPanel {
                 }
                 None
             }
+            KeyCode::Home => {
+                self.name_cursor = 0;
+                None
+            }
+            KeyCode::End => {
+                if let Some(ref input) = self.name_input {
+                    self.name_cursor = input.chars().count();
+                }
+                None
+            }
+            KeyCode::Delete => {
+                if let Some(ref mut input) = self.name_input {
+                    let max = input.chars().count();
+                    if self.name_cursor < max {
+                        let byte_idx = input
+                            .char_indices()
+                            .nth(self.name_cursor)
+                            .map_or(input.len(), |(i, _)| i);
+                        let end_idx = input
+                            .char_indices()
+                            .nth(self.name_cursor + 1)
+                            .map_or(input.len(), |(i, _)| i);
+                        input.replace_range(byte_idx..end_idx, "");
+                    }
+                }
+                None
+            }
             KeyCode::Char(c) => {
                 if let Some(ref mut input) = self.name_input {
                     let byte_idx = input

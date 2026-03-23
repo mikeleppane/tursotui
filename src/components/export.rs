@@ -189,6 +189,17 @@ impl ExportPopup {
                 }
                 None
             }
+            (KeyModifiers::NONE, KeyCode::Delete) => {
+                let max = field.chars().count();
+                if self.cursor_pos < max {
+                    let byte_idx = field
+                        .char_indices()
+                        .nth(self.cursor_pos)
+                        .map_or(field.len(), |(idx, _)| idx);
+                    field.remove(byte_idx);
+                }
+                None
+            }
             (KeyModifiers::NONE, KeyCode::Left) => {
                 self.cursor_pos = self.cursor_pos.saturating_sub(1);
                 None

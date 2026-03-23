@@ -121,6 +121,7 @@ pub(crate) fn render_dml_preview(
     let clamped_scroll = scroll.min(max_scroll);
 
     let paragraph = Paragraph::new(lines)
+        .wrap(ratatui::widgets::Wrap { trim: false })
         .scroll((u16::try_from(clamped_scroll).unwrap_or(u16::MAX), 0))
         .style(Style::default().fg(theme.fg));
     frame.render_widget(paragraph, inner);

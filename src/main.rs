@@ -521,6 +521,15 @@ fn route_key_to_component(
 ) -> Option<app::Action> {
     let db = app.active_db_mut();
     if focused == PanelId::Bottom {
+        // Filter bar and cell editor take absolute priority over tab switching
+        if db.bottom_tab == BottomTab::Results {
+            if db.results.filter_bar_active {
+                return db.results.handle_key(key);
+            }
+            if db.data_editor.is_active() && db.data_editor.cell_editor().is_some() {
+                return db.data_editor.handle_key(key);
+            }
+        }
         match key.code {
             KeyCode::Char('1') if key.modifiers == KeyModifiers::NONE => {
                 Some(app::Action::SwitchBottomTab(BottomTab::Results))
@@ -536,10 +545,6 @@ fn route_key_to_component(
             }
             _ => match db.bottom_tab {
                 BottomTab::Results => {
-                    // Filter bar takes absolute priority when typing
-                    if db.results.filter_bar_active {
-                        return db.results.handle_key(key);
-                    }
                     // DataEditor intercepts before ResultsTable when active
                     if db.data_editor.is_active()
                         && let Some(action) = db.data_editor.handle_key(key)

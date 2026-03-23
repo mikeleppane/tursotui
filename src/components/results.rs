@@ -460,16 +460,66 @@ impl Component for ResultsTable {
                 }
                 KeyCode::Backspace => {
                     if let Some(ref mut input) = self.filter_input
-                        && !input.is_empty()
+                        && self.filter_cursor > 0
                     {
-                        input.pop();
-                        self.filter_cursor = input.len();
+                        // Convert char index to byte offset for safe removal
+                        let byte_idx = input
+                            .char_indices()
+                            .nth(self.filter_cursor - 1)
+                            .map_or(0, |(i, _)| i);
+                        let end_idx = input
+                            .char_indices()
+                            .nth(self.filter_cursor)
+                            .map_or(input.len(), |(i, _)| i);
+                        input.replace_range(byte_idx..end_idx, "");
+                        self.filter_cursor -= 1;
+                    }
+                }
+                KeyCode::Delete => {
+                    if let Some(ref mut input) = self.filter_input {
+                        let char_count = input.chars().count();
+                        if self.filter_cursor < char_count {
+                            let byte_idx = input
+                                .char_indices()
+                                .nth(self.filter_cursor)
+                                .map_or(input.len(), |(i, _)| i);
+                            let end_idx = input
+                                .char_indices()
+                                .nth(self.filter_cursor + 1)
+                                .map_or(input.len(), |(i, _)| i);
+                            input.replace_range(byte_idx..end_idx, "");
+                        }
                     }
                 }
                 KeyCode::Char(c) => {
                     if let Some(ref mut input) = self.filter_input {
-                        input.push(c);
-                        self.filter_cursor = input.len();
+                        let byte_idx = input
+                            .char_indices()
+                            .nth(self.filter_cursor)
+                            .map_or(input.len(), |(i, _)| i);
+                        input.insert(byte_idx, c);
+                        self.filter_cursor += 1;
+                    }
+                }
+                KeyCode::Left => {
+                    if self.filter_cursor > 0 {
+                        self.filter_cursor -= 1;
+                    }
+                }
+                KeyCode::Right => {
+                    if let Some(ref input) = self.filter_input {
+                        let char_count = input.chars().count();
+                        if self.filter_cursor < char_count {
+                            self.filter_cursor += 1;
+                        }
+                    }
+                }
+                KeyCode::Home => {
+                    self.filter_cursor = 0;
+                }
+                KeyCode::End => {
+                    if let Some(ref input) = self.filter_input {
+                        self.filter_cursor = input.chars().count();
                     }
                 }
                 _ => {} // consume all other keys while filter is active
@@ -623,14 +673,21 @@ impl Component for ResultsTable {
             let remaining = chunks[1];
 
             let prefix = Span::styled("WHERE ", Style::default().fg(theme.accent).bold());
-            let input_text = Span::raw(filter_text.as_str());
-            let cursor = if self.filter_bar_active {
-                "\u{258E}"
+            if self.filter_bar_active {
+                // Show cursor at actual position
+                let before: String = filter_text.chars().take(self.filter_cursor).collect();
+                let after: String = filter_text.chars().skip(self.filter_cursor).collect();
+                let line = Line::from(vec![
+                    prefix,
+                    Span::raw(before),
+                    Span::raw("\u{258E}"),
+                    Span::raw(after),
+                ]);
+                frame.render_widget(Paragraph::new(line), filter_area);
             } else {
-                ""
-            };
-            let line = Line::from(vec![prefix, input_text, Span::raw(cursor)]);
-            frame.render_widget(Paragraph::new(line), filter_area);
+                let line = Line::from(vec![prefix, Span::raw(filter_text.as_str())]);
+                frame.render_widget(Paragraph::new(line), filter_area);
+            }
             remaining
         } else {
             inner

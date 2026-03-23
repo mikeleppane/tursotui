@@ -259,7 +259,7 @@ impl PragmaDashboard {
         let edit = self.editing.as_mut().expect("called only when editing");
 
         match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Char(ch)) => {
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(ch)) => {
                 edit.buffer.insert(edit.cursor, ch);
                 edit.cursor += ch.len_utf8();
                 None
