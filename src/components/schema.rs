@@ -65,6 +65,8 @@ pub(crate) struct SchemaExplorer {
     filter: Option<String>,
     /// `true` while the user is typing into the filter input bar.
     filter_active: bool,
+    /// Cache of DDL SQL keyed by object name, populated on schema load.
+    ddl_cache: std::collections::HashMap<String, String>,
 }
 
 impl SchemaExplorer {
@@ -76,6 +78,7 @@ impl SchemaExplorer {
             scroll_offset: 0,
             filter: None,
             filter_active: false,
+            ddl_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -156,6 +159,14 @@ impl SchemaExplorer {
         self.scroll_offset = 0;
         self.filter = None;
         self.filter_active = false;
+
+        self.ddl_cache.clear();
+        for e in entries {
+            if let Some(ref sql) = e.sql {
+                self.ddl_cache.insert(e.name.clone(), sql.clone());
+            }
+        }
+
         self.rebuild_visible();
     }
 
@@ -178,6 +189,11 @@ impl SchemaExplorer {
                 }
             }
         }
+    }
+
+    /// Look up cached DDL SQL for a schema object by name.
+    fn get_ddl_sql(&self, name: &str) -> Option<String> {
+        self.ddl_cache.get(name).cloned()
     }
 
     /// Find a mutable reference to a Table node by name across all categories.
@@ -738,6 +754,28 @@ impl Component for SchemaExplorer {
                     }
                     _ => None, // no-op for Category, Index, Trigger, Column
                 }
+            }
+
+            // D: view DDL for the selected schema object.
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('D')) => {
+                if let Some(
+                    TreeNode::Table { name, .. }
+                    | TreeNode::Index { name, .. }
+                    | TreeNode::Trigger { name, .. },
+                ) = self.visible.get(self.selected)
+                {
+                    if let Some(sql) = self.get_ddl_sql(name) {
+                        return Some(Action::ShowDdl {
+                            name: name.clone(),
+                            sql,
+                        });
+                    }
+                    return Some(Action::SetTransient(
+                        "No DDL available for this object".to_string(),
+                        true,
+                    ));
+                }
+                None
             }
 
             // Re-activate filter for editing when filter bar is visible

@@ -16,7 +16,7 @@ use clap::Parser;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::*;
-use ratatui::widgets::{Paragraph, Tabs};
+use ratatui::widgets::{Clear, Paragraph, Tabs};
 
 use app::{AppState, BottomTab, DatabaseContext, PanelId, SubTab};
 use components::Component;
@@ -359,6 +359,37 @@ fn handle_key_event(
                     }
                     _ => {}
                 }
+            }
+            return;
+        }
+        Some(app::Overlay::DdlViewer) => {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    app.active_overlay = None;
+                    app.ddl_viewer = None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if let Some(ref mut viewer) = app.ddl_viewer {
+                        let max = viewer.sql.lines().count().saturating_sub(1);
+                        viewer.scroll = viewer.scroll.saturating_add(1).min(max);
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if let Some(ref mut viewer) = app.ddl_viewer {
+                        viewer.scroll = viewer.scroll.saturating_sub(1);
+                    }
+                }
+                KeyCode::Char('y') => {
+                    if let Some(ref viewer) = app.ddl_viewer {
+                        if let Some(ref mut clip) = global_ui.clipboard {
+                            let _ = clip.set_text(viewer.sql.clone());
+                        }
+                        let action =
+                            app::Action::SetTransient("DDL copied to clipboard".to_string(), false);
+                        app.update(&action);
+                    }
+                }
+                _ => {}
             }
             return;
         }
@@ -1705,6 +1736,35 @@ fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &GlobalUi) {
             submit_enabled,
             &theme,
         );
+    }
+
+    // DDL viewer overlay
+    if active_overlay == Some(app::Overlay::DdlViewer)
+        && let Some(ref viewer) = app.ddl_viewer
+    {
+        let full = frame.area();
+        let popup_w = full.width * 70 / 100;
+        let popup_h = full.height * 80 / 100;
+        let x = (full.width.saturating_sub(popup_w)) / 2;
+        let y = (full.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect::new(x, y, popup_w, popup_h);
+
+        frame.render_widget(Clear, popup_area);
+        let title = format!("DDL \u{2014} {}", viewer.object_name);
+        let block = components::overlay_block(&title, &theme);
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let lines: Vec<Line> = viewer
+            .sql
+            .lines()
+            .map(|line| highlight::highlight_line(line, &theme))
+            .collect();
+        let total_lines = lines.len();
+        let max_scroll = total_lines.saturating_sub(inner.height as usize);
+        let effective_scroll = viewer.scroll.min(max_scroll);
+        let para = Paragraph::new(lines).scroll((effective_scroll as u16, 0));
+        frame.render_widget(para, inner);
     }
 
     // Modal cell editor overlay (renders above content, below help)

@@ -52,6 +52,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  h / Left / Bksp Collapse / parent"));
     lines.push(Line::from("  o               Query table (SELECT *)"));
     lines.push(Line::from("  /               Filter by name"));
+    lines.push(Line::from("  Shift+D         View DDL"));
     lines.push(Line::from(
         "  Esc             Release focus (clears filter first)",
     ));

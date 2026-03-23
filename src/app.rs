@@ -53,6 +53,13 @@ pub(crate) struct TransientMessage {
     pub(crate) is_error: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DdlViewerState {
+    pub(crate) object_name: String,
+    pub(crate) sql: String,
+    pub(crate) scroll: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Overlay {
     Help,
@@ -61,6 +68,7 @@ pub(crate) enum Overlay {
     DmlPreview { submit_enabled: bool },
     FilePicker,
     GoToObject,
+    DdlViewer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +243,10 @@ pub(crate) enum Action {
     ResizeEditor(i16),  // delta in percentage points
     #[allow(dead_code)] // Phase 4: Go to Object
     GoToObject(ObjectRef),
+    ShowDdl {
+        name: String,
+        sql: String,
+    },
 }
 
 /// Per-database workspace.
@@ -386,6 +398,7 @@ pub(crate) struct AppState {
     pub(crate) should_quit: bool,
     pub(crate) active_overlay: Option<Overlay>,
     pub(crate) help_scroll: usize,
+    pub(crate) ddl_viewer: Option<DdlViewerState>,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
 }
 
@@ -408,6 +421,7 @@ impl AppState {
             should_quit: false,
             active_overlay: None,
             help_scroll: 0,
+            ddl_viewer: None,
             history_db,
         }
     }
@@ -539,6 +553,8 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
+                    self.active_overlay = None;
+                    self.ddl_viewer = None;
                     self.active_db = *idx;
                 }
             }
@@ -549,6 +565,8 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
+                    self.active_overlay = None;
+                    self.ddl_viewer = None;
                     self.active_db = (self.active_db + 1) % self.databases.len();
                 }
             }
@@ -559,6 +577,8 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
+                    self.active_overlay = None;
+                    self.ddl_viewer = None;
                     self.active_db =
                         (self.active_db + self.databases.len() - 1) % self.databases.len();
                 }
@@ -571,6 +591,9 @@ impl AppState {
                         is_error: false,
                     });
                 } else {
+                    // Clear any open overlay/DDL viewer before removing the database
+                    self.active_overlay = None;
+                    self.ddl_viewer = None;
                     // Auto-save editor buffer before removal so we target the
                     // correct database (after remove(), active_db points elsewhere).
                     let db = &self.databases[self.active_db];
@@ -634,6 +657,14 @@ impl AppState {
                     }
                 }
                 self.active_overlay = None;
+            }
+            Action::ShowDdl { name, sql } => {
+                self.ddl_viewer = Some(DdlViewerState {
+                    object_name: name.clone(),
+                    sql: sql.clone(),
+                    scroll: 0,
+                });
+                self.active_overlay = Some(Overlay::DdlViewer);
             }
             _ => {}
         }
