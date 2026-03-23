@@ -8,6 +8,36 @@
   Built with Rust, <a href="https://ratatui.rs">ratatui</a>, and vim-inspired navigation.
 </p>
 
+## Demo
+
+<p align="center">
+  <a href="https://youtu.be/bo3zhI8sRZY">
+    <img src="https://img.youtube.com/vi/bo3zhI8sRZY/maxresdefault.jpg" alt="tursotui demo video" width="700">
+  </a>
+  <br>
+  <em>Click the image to watch the demo on YouTube</em>
+</p>
+
+## Screenshots
+
+<p align="center">
+  <img src="images/screenshot1.png" alt="Schema browser, SQL editor, and results table" width="700">
+  <br>
+  <em>Schema browser with row counts, SQL editor with syntax highlighting, and sortable results table</em>
+</p>
+
+<p align="center">
+  <img src="images/screenshot2.png" alt="DML Preview popup showing generated SQL statements" width="700">
+  <br>
+  <em>DML Preview — review generated INSERT, UPDATE, and DELETE statements before committing</em>
+</p>
+
+<p align="center">
+  <img src="images/screenshot3.png" alt="Bookmarks overlay with saved queries and SQL preview" width="700">
+  <br>
+  <em>Saved Bookmarks — name, search, and recall frequently-used queries</em>
+</p>
+
 ## Features
 
 **Multi-Database Tabs** — open multiple databases simultaneously with a tab bar. Switch between them with `Ctrl+PgDn`/`Ctrl+PgUp`, open new databases with `Ctrl+O` file picker, close with `Ctrl+W`. Each database has independent schema, editor, and results state.
