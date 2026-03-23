@@ -12,7 +12,7 @@
 
 **Multi-Database Tabs** — open multiple databases simultaneously with a tab bar. Switch between them with `Ctrl+PgDn`/`Ctrl+PgUp`, open new databases with `Ctrl+O` file picker, close with `Ctrl+W`. Each database has independent schema, editor, and results state.
 
-**Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering. Each entity type has a distinct color for quick visual scanning.
+**Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering, async row counts, and DDL viewing. Each entity type has a distinct color for quick visual scanning.
 
 **SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution.
 
@@ -33,6 +33,12 @@
 **EXPLAIN View** — bytecode table and query plan tree, toggled with a single key.
 
 **Export** — save results as CSV, JSON, or SQL INSERT statements to file or clipboard. Quick TSV copy with a shortcut.
+
+**Saved Bookmarks** — name and save frequently-used queries (`F3`). Database-scoped with search, rename, delete, and one-key recall or execute. Backed by SQLite for persistence across sessions.
+
+**Quick Table Filter** — press `w` on the results panel to type a WHERE clause and instantly filter table data without touching the editor. Two-phase dismiss (defocus then clear).
+
+**DDL Viewer** — press `Shift+D` on any schema object to view its full CREATE statement with syntax highlighting, scrolling, and clipboard copy.
 
 **Query History** — SQLite-backed per-database history with search, recall, re-execute, and auto-prune.
 
@@ -85,6 +91,7 @@ tursotui db1.sqlite db2.sqlite
 | `Ctrl+W` | Close current database tab |
 | `Ctrl+Left` / `Ctrl+Right` | Resize sidebar (narrower / wider) |
 | `Ctrl+Up` / `Ctrl+Down` | Resize editor (shorter / taller) |
+| `F3` | Bookmarks overlay |
 | `Ctrl+Shift+E` | Export results |
 | `Ctrl+Shift+C` | Quick copy results (TSV) |
 
@@ -110,6 +117,7 @@ tursotui db1.sqlite db2.sqlite
 | `Enter` / `Space` / `l` | Expand / collapse |
 | `h` | Collapse / go to parent |
 | `o` | Query table (`SELECT *`) |
+| `Shift+D` | View DDL (CREATE statement) |
 | `/` | Filter by name |
 
 ### Results Table
@@ -121,6 +129,7 @@ tursotui db1.sqlite db2.sqlite
 | `g` / `G` | First / last row |
 | `s` | Cycle sort on column |
 | `<` / `>` | Shrink / grow column |
+| `w` | WHERE filter bar |
 | `y` | Copy cell |
 | `Y` | Copy row |
 
