@@ -13,8 +13,8 @@ use crate::components::results::ResultsTable;
 use crate::components::schema::SchemaExplorer;
 use crate::config::{AppConfig, ThemeMode};
 use crate::db::{
-    ColumnInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind, QueryResult,
-    SchemaEntry,
+    ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind,
+    QueryResult, SchemaEntry,
 };
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
@@ -32,6 +32,8 @@ pub(crate) struct SchemaCache {
     pub(crate) fk_info: HashMap<String, Vec<ForeignKeyInfo>>,
     /// Approximate row counts keyed by lowercase table name.
     pub(crate) row_counts: HashMap<String, u64>,
+    /// Custom types from `PRAGMA list_types` (non-base types only).
+    pub(crate) custom_types: Vec<CustomTypeInfo>,
 }
 
 impl SchemaCache {
@@ -131,6 +133,7 @@ pub(crate) enum ObjectKind {
     View,
     Trigger,
     Column,
+    CustomType,
 }
 
 #[derive(Debug, Clone)]

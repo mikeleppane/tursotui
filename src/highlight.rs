@@ -218,6 +218,11 @@ const SQL_FUNCTIONS: &[&str] = &[
     "JSON_OBJECT",
     "JSON_EXTRACT",
     "JSON_TYPE",
+    "JSON_INSERT",
+    "JSON_REPLACE",
+    "JSON_SET",
+    "JSON_REMOVE",
+    "JSON_PATCH",
     // Turso/libsql-specific functions
     "UUID4",
     "UUID7",
@@ -251,6 +256,13 @@ const SQL_FUNCTIONS: &[&str] = &[
     "PERCENTILE_CONT",
     "PERCENTILE_DISC",
     "GENERATE_SERIES",
+    // Turso additional functions
+    "STDDEV",
+    "TIMEDIFF",
+    "VECTOR_TOP_K",
+    "LIBSQL_VECTOR_IDX",
+    "TABLE_COLUMNS_JSON_ARRAY",
+    "BIN_RECORD_JSON_OBJECT",
 ];
 
 /// Tokenize a single line of SQL into classified tokens.

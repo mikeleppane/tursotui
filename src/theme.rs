@@ -77,6 +77,7 @@ pub(crate) struct Theme {
     pub schema_column: Color,
     pub schema_pk: Color,
     pub schema_type: Color,
+    pub schema_custom_type: Color,
 
     // Results table
     pub row_alt_bg: Color,
@@ -142,6 +143,7 @@ pub(crate) const DARK_THEME: Theme = Theme {
     schema_column: SUBTEXT0,
     schema_pk: YELLOW,
     schema_type: OVERLAY0,
+    schema_custom_type: TEAL,
 
     // Results alternating row
     row_alt_bg: Color::Rgb(36, 36, 54),
@@ -226,6 +228,7 @@ pub(crate) const LIGHT_THEME: Theme = Theme {
     schema_column: LATTE_SUBTEXT0,
     schema_pk: Color::Rgb(223, 142, 29),
     schema_type: LATTE_OVERLAY0,
+    schema_custom_type: Color::Rgb(23, 146, 153), // Latte Teal
 
     // Results alternating row
     row_alt_bg: Color::Rgb(230, 233, 239),

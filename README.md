@@ -82,6 +82,27 @@
 
 **Theming** — Catppuccin Mocha (dark) and Catppuccin Latte (light) themes with rounded borders, toggled at runtime.
 
+## Turso Compatibility
+
+tursotui is **Turso-first** — all features are tested and designed to work within Turso's compatibility surface. It also works with standard SQLite databases.
+
+**Turso-aware highlights:**
+
+- Schema introspection uses Turso-compatible PRAGMAs (`table_info`, `index_list`, etc.)
+- Foreign key metadata parsed from `CREATE TABLE` SQL (works around Turso's missing `PRAGMA foreign_key_list`)
+- Syntax highlighting and autocomplete include Turso-specific functions: UUID (`uuid4()`, `uuid7()`), vector search (`vector_distance_cos()`, `vector_top_k()`), FTS (`fts_match()`, `fts_score()`), time functions, regexp, and more
+- DB Info panel recognizes MVCC journal mode with Turso-specific labeling
+- Data editor uses `PRAGMA defer_foreign_keys` inside transactions for safe FK handling
+
+**Known Turso limitations** (not tursotui bugs — these are upstream gaps):
+
+- No `RIGHT JOIN`, `CROSS JOIN`, or ranking window functions (`ROW_NUMBER`, `RANK`, etc.)
+- No `SAVEPOINT`/`RELEASE`, `VACUUM`, `REINDEX`, `GENERATED` columns, or recursive CTEs
+- Views and Triggers are experimental features requiring enablement flags
+- FTS uses different syntax than SQLite FTS5 (`fts_match()` instead of `MATCH`)
+
+See [COMPAT.md](https://github.com/tursodatabase/turso/blob/main/COMPAT.md) for the full Turso compatibility matrix.
+
 ## Installation
 
 ### From source

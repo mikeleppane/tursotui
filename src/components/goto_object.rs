@@ -18,6 +18,8 @@ const MAX_RESULTS: usize = 50;
 pub(crate) struct ObjectMatch {
     pub(crate) name: String,
     pub(crate) kind: ObjectKind,
+    /// Container or context for this object. Table name for columns,
+    /// base storage type for custom types (e.g. "blob" for uuid).
     pub(crate) parent: Option<String>,
     pub(crate) database_path: String,
     pub(crate) database_label: String,
@@ -349,6 +351,18 @@ fn build_candidates(databases: &[DatabaseContext]) -> Vec<ObjectMatch> {
             });
         }
 
+        // Custom types from `schema_cache.custom_types`
+        for ct in &cache.custom_types {
+            candidates.push(ObjectMatch {
+                name: ct.name.clone(),
+                kind: ObjectKind::CustomType,
+                parent: Some(ct.parent.clone()),
+                database_path: db.path.clone(),
+                database_label: db.label.clone(),
+                score: 0,
+            });
+        }
+
         // Columns from `schema_cache.columns` (NOT from entries)
         for (table_name, columns) in &cache.columns {
             for col in columns {
@@ -477,6 +491,7 @@ fn kind_icon(kind: ObjectKind) -> char {
         ObjectKind::View => 'V',
         ObjectKind::Trigger => '!',
         ObjectKind::Column => '.',
+        ObjectKind::CustomType => 'Y', // tYpe — 'T' taken by Table
     }
 }
 
@@ -488,6 +503,7 @@ fn kind_label(kind: ObjectKind) -> &'static str {
         ObjectKind::View => "view",
         ObjectKind::Trigger => "trigger",
         ObjectKind::Column => "column",
+        ObjectKind::CustomType => "type",
     }
 }
 
@@ -499,6 +515,7 @@ fn kind_color(kind: ObjectKind, theme: &Theme) -> Color {
         ObjectKind::View => theme.schema_view,
         ObjectKind::Trigger => theme.schema_trigger,
         ObjectKind::Column => theme.schema_column,
+        ObjectKind::CustomType => theme.schema_custom_type,
     }
 }
 
@@ -676,5 +693,11 @@ mod tests {
         }];
         score_and_sort(&mut matches, "xyz", "a.db");
         assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn kind_metadata_for_custom_type() {
+        assert_eq!(kind_icon(ObjectKind::CustomType), 'Y');
+        assert_eq!(kind_label(ObjectKind::CustomType), "type");
     }
 }

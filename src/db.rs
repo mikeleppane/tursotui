@@ -219,6 +219,15 @@ pub(crate) struct ColumnInfo {
     pub pk: bool,
 }
 
+/// A custom type from `PRAGMA list_types` (non-base types only).
+#[derive(Debug, Clone)]
+pub(crate) struct CustomTypeInfo {
+    pub name: String,
+    pub parent: String,
+    /// True for Turso's built-in types (uuid, boolean, etc.), false for user-defined.
+    pub builtin: bool,
+}
+
 /// Database metadata from PRAGMAs and file system.
 #[derive(Debug, Clone)]
 pub(crate) struct DbInfo {
@@ -270,6 +279,7 @@ pub(crate) enum QueryMessage {
     TransactionFailed(String),
     #[allow(dead_code)]
     ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
+    CustomTypesLoaded(Vec<CustomTypeInfo>),
     RowCount(String, u64), // (table_name_lowercase, count)
 }
 
@@ -284,7 +294,10 @@ pub(crate) struct DatabaseHandle {
 impl DatabaseHandle {
     /// Open a database at the given path.
     pub async fn open(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let database = turso::Builder::new_local(path).build().await?;
+        let database = turso::Builder::new_local(path)
+            .experimental_custom_types(true)
+            .build()
+            .await?;
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         Ok(Self {
@@ -553,7 +566,7 @@ impl DatabaseHandle {
             let tbl_name: String = row.get_value(2)?.as_text().cloned().unwrap_or_default();
             let sql = row.get_value(3)?.as_text().cloned();
 
-            if name.starts_with("sqlite_") {
+            if name.starts_with("sqlite_") || name.starts_with("__turso_") {
                 continue;
             }
             entries.push(SchemaEntry {
@@ -564,6 +577,92 @@ impl DatabaseHandle {
             });
         }
         Ok(entries)
+    }
+
+    /// Load custom types via `PRAGMA list_types`, filtering out base types.
+    pub fn load_custom_types(&self) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let tx_panic = tx.clone();
+            let handle = tokio::spawn(async move {
+                match Self::run_custom_types_load(&db).await {
+                    Ok(types) => QueryMessage::CustomTypesLoaded(types),
+                    // Silently produce empty list on failure — custom types are optional.
+                    Err(_) => QueryMessage::CustomTypesLoaded(Vec::new()),
+                }
+            });
+            let msg = match handle.await {
+                Ok(msg) => msg,
+                Err(_) => QueryMessage::CustomTypesLoaded(Vec::new()),
+            };
+            let _ = tx_panic.send(msg);
+        });
+    }
+
+    /// Base storage types returned by `PRAGMA list_types` that we filter out.
+    const BASE_TYPES: &[&str] = &["INTEGER", "REAL", "TEXT", "BLOB", "ANY"];
+
+    /// Turso built-in custom types — shipped with the engine, not user-defined.
+    const BUILTIN_CUSTOM_TYPES: &[&str] = &[
+        "bigint",
+        "boolean",
+        "bytea",
+        "date",
+        "inet",
+        "json",
+        "jsonb",
+        "numeric",
+        "smallint",
+        "time",
+        "timestamp",
+        "uuid",
+        "varchar",
+    ];
+
+    async fn run_custom_types_load(
+        db: &turso::Database,
+    ) -> Result<Vec<CustomTypeInfo>, Box<dyn std::error::Error + Send + Sync>> {
+        let conn = db.connect()?;
+        let mut rows = conn.query("PRAGMA list_types", ()).await?;
+
+        let mut types = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let type_name: String = row.get_value(0)?.as_text().cloned().unwrap_or_default();
+            let parent: String = row.get_value(1)?.as_text().cloned().unwrap_or_default();
+
+            // Skip the 5 base types — only keep custom/built-in extended types.
+            // Case-insensitive: PRAGMA output format isn't guaranteed uppercase.
+            if Self::BASE_TYPES
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(&type_name))
+            {
+                continue;
+            }
+
+            let name = Self::extract_type_name(&type_name);
+            if name.is_empty() {
+                continue;
+            }
+
+            let builtin = Self::BUILTIN_CUSTOM_TYPES
+                .iter()
+                .any(|b| b.eq_ignore_ascii_case(&name));
+
+            types.push(CustomTypeInfo {
+                name,
+                parent,
+                builtin,
+            });
+        }
+        Ok(types)
+    }
+
+    /// Extract the type name from a `PRAGMA list_types` type column.
+    /// Strips parenthesized parameters: `"varchar(value text, maxlen integer)"` → `"varchar"`.
+    fn extract_type_name(raw: &str) -> String {
+        raw.find('(').map_or(raw, |i| &raw[..i]).to_owned()
     }
 
     /// Load column info for a specific table.
@@ -1964,5 +2063,54 @@ mod tests {
         assert_eq!(fks[0].to_table, "employees");
         assert_eq!(fks[1].from_column, "project_id");
         assert_eq!(fks[1].to_table, "projects");
+    }
+
+    // ── custom types tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn load_custom_types_returns_base_types_only() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let types = DatabaseHandle::run_custom_types_load(&db).await.unwrap();
+        // Without experimental custom types, only base types are returned
+        // and those are filtered out — result should be empty.
+        assert!(
+            types.is_empty(),
+            "expected no custom types without experimental flag, got: {types:?}"
+        );
+    }
+
+    #[test]
+    fn base_types_are_filtered() {
+        // Verify the BASE_TYPES constant contains the expected entries
+        assert!(DatabaseHandle::BASE_TYPES.contains(&"INTEGER"));
+        assert!(DatabaseHandle::BASE_TYPES.contains(&"REAL"));
+        assert!(DatabaseHandle::BASE_TYPES.contains(&"TEXT"));
+        assert!(DatabaseHandle::BASE_TYPES.contains(&"BLOB"));
+        assert!(DatabaseHandle::BASE_TYPES.contains(&"ANY"));
+        assert_eq!(DatabaseHandle::BASE_TYPES.len(), 5);
+    }
+
+    #[test]
+    fn extract_type_name_strips_parens() {
+        assert_eq!(
+            DatabaseHandle::extract_type_name("varchar(value text, maxlen integer)"),
+            "varchar"
+        );
+        assert_eq!(
+            DatabaseHandle::extract_type_name(
+                "numeric(value any, precision integer, scale integer)"
+            ),
+            "numeric"
+        );
+        assert_eq!(
+            DatabaseHandle::extract_type_name("boolean(value any)"),
+            "boolean"
+        );
+    }
+
+    #[test]
+    fn extract_type_name_no_parens() {
+        assert_eq!(DatabaseHandle::extract_type_name("email"), "email");
+        assert_eq!(DatabaseHandle::extract_type_name("INTEGER"), "INTEGER");
     }
 }

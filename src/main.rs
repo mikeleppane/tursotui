@@ -232,6 +232,13 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
                 .insert(table.clone(), count);
             continue;
         }
+        // Handle CustomTypesLoaded directly (needs db_idx routing)
+        if let db::QueryMessage::CustomTypesLoaded(ref types) = msg {
+            let db = &mut app.databases[db_idx];
+            db.schema_cache.custom_types.clone_from(types);
+            db.schema.set_custom_types(types);
+            continue;
+        }
         let action = map_query_message(msg);
         app.update_for_db(db_idx, &action);
         dispatch_action_to_db(db_idx, &action, app, global_ui);
@@ -278,7 +285,9 @@ fn map_query_message(msg: db::QueryMessage) -> app::Action {
         db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
         db::QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
         db::QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
-        db::QueryMessage::RowCount(..) => unreachable!("handled in drain loop"),
+        db::QueryMessage::RowCount(..) | db::QueryMessage::CustomTypesLoaded(..) => {
+            unreachable!("handled in drain loop")
+        }
     }
 }
 
@@ -809,6 +818,7 @@ fn dispatch_action_to_db(
                 .map(|e| e.name.clone())
                 .collect();
             db.handle.load_all_columns(&table_names);
+            db.handle.load_custom_types();
         }
         app::Action::ColumnsLoaded(table_name, columns) => {
             let db = &mut app.databases[db_idx];

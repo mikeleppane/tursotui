@@ -48,16 +48,21 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 - **`defer_foreign_keys` NOT supported** at the PRAGMA level. Use `PRAGMA defer_foreign_keys = ON` inside transaction SQL strings (our `execute_transaction` does this).
 - **Syntax quirk**: turso uses single-quoted values in PRAGMA SET (`PRAGMA name = 'value'`), not double-quoted.
 - **65+ PRAGMAs work**, including: `foreign_keys`, `journal_mode`, `cache_size`, `page_size`, `table_info`, `index_info`, `integrity_check`, `quick_check`, `user_version`, `busy_timeout`.
-- **Notable unsupported PRAGMAs**: `auto_vacuum`, `mmap_size`, `locking_mode`, `optimize`, `secure_delete`, `recursive_triggers`, `collation_list`, `compile_options`.
+- **`synchronous`** only supports `OFF` and `FULL` (not `NORMAL`).
+- **Journal mode** restricted to WAL and MVCC only — rollback modes (`DELETE`, `TRUNCATE`, `PERSIST`, `MEMORY`) are NOT supported.
+- **Notable unsupported PRAGMAs**: `auto_vacuum`, `mmap_size`, `locking_mode`, `optimize`, `secure_delete`, `recursive_triggers`, `collation_list`, `compile_options`, `threads`.
+- **Turso-specific PRAGMAs**: `capture_data_changes_conn` (CDC), `cipher`/`hexkey` (encryption, experimental), `list_types` (custom type inspection).
 
 #### SQL feature gaps
 
-- **Window functions partial** — default frame definitions work but ranking functions (`RANK()`, `ROW_NUMBER()`, `DENSE_RANK()`) fail with "no such function". `FILTER (WHERE...)` on aggregates is silently ignored.
-- **CTEs partial** — `WITH` works but no `RECURSIVE`, no `MATERIALIZED` hint, only `SELECT` in CTE body.
-- **JOINs** — no `RIGHT JOIN`, no `CROSS JOIN`. `LEFT JOIN` and `NATURAL JOIN` work.
-- **Not supported** — `SAVEPOINT`/`RELEASE`, `GENERATED` columns, `INDEXED BY`, `REINDEX`, `VACUUM`, `MATCH` operator.
+- **Window functions partial** — only aggregate functions (`count`, `sum`, `avg`, `min`, `max`, `total`, `group_concat`) work as window functions. Dedicated window functions (`ROW_NUMBER()`, `RANK()`, `DENSE_RANK()`, `NTILE()`, `LAG()`, `LEAD()`, `FIRST_VALUE()`, `LAST_VALUE()`, `NTH_VALUE()`, `CUME_DIST()`, `PERCENT_RANK()`) are NOT supported. No custom frame specifications (`ROWS BETWEEN`, explicit `RANGE BETWEEN`, `GROUPS BETWEEN`). No `EXCLUDE` clause. `FILTER (WHERE...)` not supported on window functions.
+- **CTEs partial** — `WITH` works but no `RECURSIVE`, no `MATERIALIZED`/`NOT MATERIALIZED` hints, only `SELECT` in CTE body.
+- **JOINs** — `INNER JOIN`, `LEFT OUTER JOIN`, `FULL OUTER JOIN`, `NATURAL JOIN`, `JOIN...USING` work. No `RIGHT JOIN`, no `CROSS JOIN`.
+- **Not supported** — `SAVEPOINT`/`RELEASE`, `GENERATED` columns, `INDEXED BY`, `REINDEX`, `VACUUM`, `MATCH` operator, `CREATE TEMPORARY TABLE`, `CREATE TABLE ... AS SELECT`, `WITHOUT ROWID` tables, custom collations (only `BINARY`/`NOCASE`/`RTRIM`), `!<`/`!>` operators, loading `.so`/`.dll` SQLite extensions.
 - **Binary `%` operator** not supported in expressions.
 - **Subqueries** — scalar subqueries only; tuple comparisons with subqueries don't work.
+- **Views and Triggers** — experimental features requiring explicit enablement via `--experimental-views` / `--experimental-triggers` flags or SDK builder methods. API may change.
+- **FTS syntax differs from SQLite FTS5** — Turso uses Tantivy-based FTS with `CREATE INDEX ... USING fts`, `fts_match()`, `fts_score()`, `fts_highlight()` instead of FTS5's virtual tables, `MATCH`, `bm25()`, `highlight()`.
 
 #### What DOES work well
 
@@ -69,13 +74,19 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 - Full date/time functions: `date`, `time`, `datetime`, `strftime`, `unixepoch`, `julianday`
 - 30+ JSON functions including `json_extract`, `json_each`, operators (`->`, `->>`)
 - Built-in extensions: UUID (`uuid4()`, `uuid7()`), regexp, vector search, FTS (Tantivy-powered), CSV virtual tables, `generate_series`, percentile aggregates
+- Turso-specific: `stddev()` aggregate, `timediff()`, CDC helper functions (`table_columns_json_array()`, `bin_record_json_object()`)
+- Custom types for STRICT tables: built-in `boolean`, `varchar(N)`, `date`, `time`, `timestamp`, `numeric(P,S)`, `uuid`, `inet`, `bytea`, `json`, `jsonb` (experimental, requires enablement)
+- Native vector types: `FLOAT64`, `FLOAT32`, `FLOAT16`, `FLOATB16`, `FLOAT8`, `FLOAT1BIT` with DiskANN indexing via `libsql_vector_idx()`
 
 #### Rust SDK notes
 
 - Crate: `libsql` (our `turso` crate wraps it). `Builder::new_local(path).build().await?` for local files.
+- Other connection modes (future): `Builder::new_remote(url, token)` for cloud, `Builder::new_remote_replica(path, url, token)` for embedded replicas with `sync_interval()` and `read_your_writes(true)`.
+- Crate features: `remote` (HTTP-only, no C compiler), `core` (local SQLite, needs C), `replication` (embedded replicas, needs C), `encryption` (at-rest, needs cmake).
 - `db.connect()?` gives a `Connection`. Each connection is independent — safe to create per-task.
 - Positional params: `libsql::params![val]` with `?1` placeholders. Named: `libsql::named_params!{":key": val}`.
 - `execute_batch()` runs multiple statements in an implicit transaction — all-or-nothing.
+- `EXCLUSIVE` behaves identically to `IMMEDIATE` in WAL mode. Only one active transaction per connection.
 - `de::from_row` can deserialize into serde structs (not used in this project, but available).
 - No concurrent multi-process access to the same database file.
 

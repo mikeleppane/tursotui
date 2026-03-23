@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::app::{Action, Direction, ObjectKind};
-use crate::db::{ColumnInfo, SchemaEntry};
+use crate::db::{ColumnInfo, CustomTypeInfo, SchemaEntry};
 use crate::theme::Theme;
 
 use super::Component;
@@ -15,6 +15,7 @@ enum CategoryKind {
     Views,
     Indexes,
     Triggers,
+    CustomTypes,
 }
 
 /// A node in the schema tree: category header, table/view, index, trigger, or column.
@@ -44,6 +45,10 @@ enum TreeNode {
         table_name: String,
         col: ColumnInfo,
     },
+    CustomType {
+        name: String,
+        parent_type: String,
+    },
 }
 
 /// A tree-view sidebar showing database tables, views, indexes, and triggers
@@ -67,6 +72,8 @@ pub(crate) struct SchemaExplorer {
     filter_active: bool,
     /// Cache of DDL SQL keyed by object name, populated on schema load.
     ddl_cache: std::collections::HashMap<String, String>,
+    /// Lowercase names of custom types for column annotation.
+    custom_type_names: std::collections::HashSet<String>,
     /// Approximate row counts keyed by lowercase table name.
     row_counts: std::collections::HashMap<String, u64>,
 }
@@ -80,6 +87,7 @@ impl SchemaExplorer {
             scroll_offset: 0,
             filter: None,
             filter_active: false,
+            custom_type_names: std::collections::HashSet::new(),
             ddl_cache: std::collections::HashMap::new(),
             row_counts: std::collections::HashMap::new(),
         }
@@ -173,6 +181,47 @@ impl SchemaExplorer {
         self.rebuild_visible();
     }
 
+    /// Replace custom types. Called when `CustomTypesLoaded` arrives.
+    pub(crate) fn set_custom_types(&mut self, types: &[CustomTypeInfo]) {
+        // Update the name set for column annotation.
+        self.custom_type_names = types.iter().map(|t| t.name.to_lowercase()).collect();
+
+        // Remove any existing CustomTypes category.
+        self.categories.retain(|(h, _)| {
+            !matches!(
+                h,
+                TreeNode::Category {
+                    kind: CategoryKind::CustomTypes,
+                    ..
+                }
+            )
+        });
+
+        // Only show user-defined types in the tree category (not Turso built-ins).
+        let user_defined: Vec<TreeNode> = types
+            .iter()
+            .filter(|t| !t.builtin)
+            .map(|t| TreeNode::CustomType {
+                name: t.name.clone(),
+                parent_type: t.parent.clone(),
+            })
+            .collect();
+
+        if user_defined.is_empty() {
+            self.rebuild_visible();
+            return;
+        }
+
+        let header = TreeNode::Category {
+            label: format!("Custom Types ({})", user_defined.len()),
+            kind: CategoryKind::CustomTypes,
+            expanded: false,
+        };
+        let children = user_defined;
+        self.categories.push((header, children));
+        self.rebuild_visible();
+    }
+
     /// Attach columns to a table. Called when `ColumnsLoaded` arrives.
     pub(crate) fn set_columns(&mut self, table_name: &str, columns: Vec<ColumnInfo>) {
         for (_header, children) in &mut self.categories {
@@ -245,6 +294,7 @@ impl SchemaExplorer {
             }
             TreeNode::Index { .. } => Some(CategoryKind::Indexes),
             TreeNode::Trigger { .. } => Some(CategoryKind::Triggers),
+            TreeNode::CustomType { .. } => Some(CategoryKind::CustomTypes),
             TreeNode::Column { table_name, .. } => {
                 // Find which category this table's column belongs to
                 for (header, children) in &self.categories {
@@ -320,7 +370,7 @@ impl SchemaExplorer {
                 self.collapse_table_to_parent(&table_name);
                 None
             }
-            TreeNode::Index { .. } | TreeNode::Trigger { .. } => {
+            TreeNode::Index { .. } | TreeNode::Trigger { .. } | TreeNode::CustomType { .. } => {
                 // Leaf nodes: no-op (use h/Left to navigate to parent)
                 None
             }
@@ -354,7 +404,8 @@ impl SchemaExplorer {
                                 Some(q),
                                 TreeNode::Table { name, .. }
                                 | TreeNode::Index { name, .. }
-                                | TreeNode::Trigger { name, .. },
+                                | TreeNode::Trigger { name, .. }
+                                | TreeNode::CustomType { name, .. },
                             ) => name.to_lowercase().contains(q.as_str()),
                             (None, _) => true,
                             _ => false,
@@ -393,7 +444,8 @@ impl SchemaExplorer {
                         Some(q) => children.iter().any(|child| {
                             let (TreeNode::Table { name, .. }
                             | TreeNode::Index { name, .. }
-                            | TreeNode::Trigger { name, .. }) = child
+                            | TreeNode::Trigger { name, .. }
+                            | TreeNode::CustomType { name, .. }) = child
                             else {
                                 return false;
                             };
@@ -505,6 +557,7 @@ impl SchemaExplorer {
             ObjectKind::View => Some(CategoryKind::Views),
             ObjectKind::Index => Some(CategoryKind::Indexes),
             ObjectKind::Trigger => Some(CategoryKind::Triggers),
+            ObjectKind::CustomType => Some(CategoryKind::CustomTypes),
             ObjectKind::Column => None, // columns are under Tables or Views
         };
 
@@ -612,6 +665,41 @@ impl SchemaExplorer {
                     .iter()
                     .position(|node| matches!(node, TreeNode::Trigger { name: n, .. } if n == name))
                 {
+                    self.selected = pos;
+                    if self.selected < self.scroll_offset {
+                        self.scroll_offset = self.selected;
+                    }
+                    let estimated_visible = 20_usize;
+                    if self.selected >= self.scroll_offset + estimated_visible {
+                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
+                    }
+                    return true;
+                }
+                false
+            }
+            ObjectKind::CustomType => {
+                // Expand CustomTypes category
+                for (header, children) in &mut self.categories {
+                    if let TreeNode::Category {
+                        kind: CategoryKind::CustomTypes,
+                        expanded,
+                        ..
+                    } = header
+                    {
+                        *expanded = true;
+                        let found = children.iter().any(
+                            |c| matches!(c, TreeNode::CustomType { name: n, .. } if n == name),
+                        );
+                        if !found {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+                self.rebuild_visible();
+                if let Some(pos) = self.visible.iter().position(
+                    |node| matches!(node, TreeNode::CustomType { name: n, .. } if n == name),
+                ) {
                     self.selected = pos;
                     if self.selected < self.scroll_offset {
                         self.scroll_offset = self.selected;
@@ -823,7 +911,11 @@ impl Component for SchemaExplorer {
                         self.collapse_table_to_parent(&table_name);
                         None
                     }
-                    Some(TreeNode::Index { .. } | TreeNode::Trigger { .. }) => {
+                    Some(
+                        TreeNode::Index { .. }
+                        | TreeNode::Trigger { .. }
+                        | TreeNode::CustomType { .. },
+                    ) => {
                         // Move to parent category
                         if let Some(kind) = self.selected_parent_category_kind()
                             && let Some(pos) = self.visible.iter().position(
@@ -928,6 +1020,7 @@ impl Component for SchemaExplorer {
                         CategoryKind::Views => theme.schema_view,
                         CategoryKind::Indexes => theme.schema_index,
                         CategoryKind::Triggers => theme.schema_trigger,
+                        CategoryKind::CustomTypes => theme.schema_custom_type,
                     };
 
                     let cw = content_width as usize;
@@ -1041,6 +1134,36 @@ impl Component for SchemaExplorer {
 
                     frame.render_widget(widget, row_area);
                 }
+                TreeNode::CustomType { name, parent_type } => {
+                    let cw = content_width as usize;
+                    let name_part = format!("  {name}");
+                    let parent_part = format!(" : {parent_type}");
+
+                    let widget = if is_selected {
+                        let total = format!("{name_part}{parent_part}");
+                        let display = truncate_str(&total, cw);
+                        Paragraph::new(display).style(theme.selected_style)
+                    } else {
+                        let name_display = truncate_str(&name_part, cw);
+                        let name_width =
+                            unicode_width::UnicodeWidthStr::width(name_display.as_str());
+                        let parent_display = if name_width < cw {
+                            truncate_str(&parent_part, cw - name_width)
+                        } else {
+                            String::new()
+                        };
+                        let spans = vec![
+                            Span::styled(
+                                name_display,
+                                Style::default().fg(theme.schema_custom_type),
+                            ),
+                            Span::styled(parent_display, dim_style),
+                        ];
+                        Paragraph::new(Line::from(spans))
+                    };
+
+                    frame.render_widget(widget, row_area);
+                }
                 TreeNode::Column { col, .. } => {
                     let pk_mark = if col.pk { pk_indicator } else { no_pk };
                     let col_color = if col.pk {
@@ -1051,6 +1174,18 @@ impl Component for SchemaExplorer {
 
                     let name_part = format!("    {pk_mark}{}", col.name);
                     let type_part = format!(" : {}", col.col_type);
+
+                    // Check if column type is a known custom type (strip parens for matching).
+                    let base_type = col
+                        .col_type
+                        .find('(')
+                        .map_or(col.col_type.as_str(), |i| &col.col_type[..i])
+                        .to_lowercase();
+                    let type_color = if self.custom_type_names.contains(&base_type) {
+                        theme.schema_custom_type
+                    } else {
+                        theme.schema_type
+                    };
 
                     let cw = content_width as usize;
                     let widget = if is_selected {
@@ -1068,7 +1203,7 @@ impl Component for SchemaExplorer {
                         };
                         let spans = vec![
                             Span::styled(name_display, Style::default().fg(col_color)),
-                            Span::styled(type_display, Style::default().fg(theme.schema_type)),
+                            Span::styled(type_display, Style::default().fg(type_color)),
                         ];
                         Paragraph::new(Line::from(spans))
                     };
@@ -2426,5 +2561,229 @@ mod tests {
         let found = explorer.reveal_and_select("idx_email", ObjectKind::Index);
         assert!(found);
         assert!(is_category_expanded(&explorer, 1));
+    }
+
+    // --- Custom types tests ---
+
+    fn make_custom_types() -> Vec<CustomTypeInfo> {
+        vec![
+            CustomTypeInfo {
+                name: "email".to_string(),
+                parent: "text".to_string(),
+                builtin: false,
+            },
+            CustomTypeInfo {
+                name: "positive_int".to_string(),
+                parent: "integer".to_string(),
+                builtin: false,
+            },
+            CustomTypeInfo {
+                name: "currency".to_string(),
+                parent: "real".to_string(),
+                builtin: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_set_custom_types_creates_category() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        // Should have 2 categories: Tables + Custom Types
+        assert_eq!(explorer.categories.len(), 2);
+        let (header, children) = &explorer.categories[1];
+        assert!(matches!(
+            header,
+            TreeNode::Category {
+                kind: CategoryKind::CustomTypes,
+                ..
+            }
+        ));
+        assert_eq!(children.len(), 3);
+    }
+
+    #[test]
+    fn test_custom_types_collapsed_by_default() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        // Custom Types category starts collapsed
+        assert!(!is_category_expanded(&explorer, 1));
+    }
+
+    #[test]
+    fn test_custom_types_visible_when_expanded() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        // Expand the Custom Types category
+        if let TreeNode::Category { expanded, .. } = &mut explorer.categories[1].0 {
+            *expanded = true;
+        }
+        explorer.rebuild_visible();
+
+        // Should see: Tables header, users, CustomTypes header, uuid, boolean, date
+        let custom_type_nodes: Vec<_> = explorer
+            .visible
+            .iter()
+            .filter(|n| matches!(n, TreeNode::CustomType { .. }))
+            .collect();
+        assert_eq!(custom_type_nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_custom_types_empty_creates_no_category() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&[]);
+
+        // Should only have Tables category
+        assert_eq!(explorer.categories.len(), 1);
+    }
+
+    #[test]
+    fn test_custom_types_replaced_on_reload() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+        assert_eq!(explorer.categories.len(), 2);
+
+        // Replace with fewer types
+        explorer.set_custom_types(&[CustomTypeInfo {
+            name: "email".to_string(),
+            parent: "text".to_string(),
+            builtin: false,
+        }]);
+        assert_eq!(explorer.categories.len(), 2);
+        assert_eq!(explorer.categories[1].1.len(), 1);
+    }
+
+    #[test]
+    fn test_custom_types_filter_matches() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        // Expand Custom Types and set filter
+        if let TreeNode::Category { expanded, .. } = &mut explorer.categories[1].0 {
+            *expanded = true;
+        }
+        explorer.filter = Some("email".to_string());
+        explorer.rebuild_visible();
+
+        // Only email should be visible under Custom Types
+        let custom_nodes: Vec<_> = explorer
+            .visible
+            .iter()
+            .filter(|n| matches!(n, TreeNode::CustomType { .. }))
+            .collect();
+        assert_eq!(custom_nodes.len(), 1);
+        assert!(matches!(
+            custom_nodes[0],
+            TreeNode::CustomType { name, .. } if name == "email"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_custom_type() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        // Category starts collapsed
+        assert!(!is_category_expanded(&explorer, 1));
+
+        let found = explorer.reveal_and_select("positive_int", ObjectKind::CustomType);
+        assert!(found);
+        // Should have expanded the category
+        assert!(is_category_expanded(&explorer, 1));
+        // Should be selected
+        let selected = &explorer.visible[explorer.selected];
+        assert!(matches!(
+            selected,
+            TreeNode::CustomType { name, parent_type }
+            if name == "positive_int" && parent_type == "integer"
+        ));
+    }
+
+    #[test]
+    fn test_reveal_and_select_custom_type_not_found() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&make_custom_types());
+
+        let found = explorer.reveal_and_select("nonexistent", ObjectKind::CustomType);
+        assert!(!found);
+    }
+
+    #[test]
+    fn test_custom_type_names_populated_for_column_annotation() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_custom_types(&make_custom_types());
+
+        assert!(explorer.custom_type_names.contains("email"));
+        assert!(explorer.custom_type_names.contains("positive_int"));
+        assert!(explorer.custom_type_names.contains("currency"));
+        // Base types should not be present
+        assert!(!explorer.custom_type_names.contains("integer"));
+        assert!(!explorer.custom_type_names.contains("text"));
+    }
+
+    #[test]
+    fn test_custom_type_names_case_insensitive() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_custom_types(&[CustomTypeInfo {
+            name: "UUID".to_string(),
+            parent: "blob".to_string(),
+            builtin: false,
+        }]);
+
+        // Stored lowercase for case-insensitive matching
+        assert!(explorer.custom_type_names.contains("uuid"));
+        assert!(!explorer.custom_type_names.contains("UUID"));
+    }
+
+    #[test]
+    fn test_custom_type_names_cleared_on_empty() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_custom_types(&make_custom_types());
+        assert_eq!(explorer.custom_type_names.len(), 3);
+
+        explorer.set_custom_types(&[]);
+        assert!(explorer.custom_type_names.is_empty());
+    }
+
+    #[test]
+    fn test_builtin_types_annotated_but_not_in_tree() {
+        let mut explorer = SchemaExplorer::new();
+        explorer.set_schema(&[make_schema_entry("table", "users")]);
+        explorer.set_custom_types(&[
+            CustomTypeInfo {
+                name: "uuid".to_string(),
+                parent: "blob".to_string(),
+                builtin: true,
+            },
+            CustomTypeInfo {
+                name: "email".to_string(),
+                parent: "text".to_string(),
+                builtin: false,
+            },
+        ]);
+
+        // Only user-defined type in tree category
+        assert_eq!(explorer.categories.len(), 2);
+        assert_eq!(explorer.categories[1].1.len(), 1);
+        assert!(matches!(
+            &explorer.categories[1].1[0],
+            TreeNode::CustomType { name, .. } if name == "email"
+        ));
+
+        // Both types available for column annotation
+        assert!(explorer.custom_type_names.contains("uuid"));
+        assert!(explorer.custom_type_names.contains("email"));
     }
 }
