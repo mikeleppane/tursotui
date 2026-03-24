@@ -1199,3 +1199,369 @@ pub(crate) fn execute_export(app: &mut AppState, global_ui: &mut GlobalUi) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Action;
+    use std::time::Duration;
+    use tursotui_db::{ColumnDef, ColumnInfo, DbInfo, ForeignKeyInfo, PragmaEntry, SchemaEntry};
+
+    fn dummy_query_result() -> QueryResult {
+        QueryResult {
+            columns: vec![ColumnDef {
+                name: "id".to_string(),
+                type_name: "INTEGER".to_string(),
+            }],
+            rows: vec![],
+            execution_time: Duration::from_millis(1),
+            truncated: false,
+            sql: "SELECT 1".to_string(),
+            rows_affected: 0,
+            query_kind: QueryKind::Select,
+            source_table: None,
+        }
+    }
+
+    // ── map_query_message tests ──────────────────────────────────────
+
+    #[test]
+    fn map_query_message_completed_returns_query_completed() {
+        let qr = dummy_query_result();
+        let action = map_query_message(QueryMessage::Completed(qr));
+        assert!(
+            matches!(action, Action::QueryCompleted(_)),
+            "Completed should map to QueryCompleted"
+        );
+    }
+
+    #[test]
+    fn map_query_message_failed_preserves_error_message() {
+        let action = map_query_message(QueryMessage::Failed("timeout".into()));
+        match action {
+            Action::QueryFailed(msg) => assert_eq!(msg, "timeout"),
+            other => panic!("expected QueryFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_schema_loaded_preserves_entries() {
+        let entries = vec![SchemaEntry {
+            obj_type: "table".into(),
+            name: "users".into(),
+            tbl_name: "users".into(),
+            sql: Some("CREATE TABLE users (id INTEGER)".into()),
+        }];
+        let action = map_query_message(QueryMessage::SchemaLoaded(entries));
+        match action {
+            Action::SchemaLoaded(e) => assert_eq!(e.len(), 1),
+            other => panic!("expected SchemaLoaded, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_schema_failed_becomes_set_transient() {
+        let action = map_query_message(QueryMessage::SchemaFailed("no schema".into()));
+        match action {
+            Action::SetTransient(msg, is_error) => {
+                assert_eq!(msg, "no schema");
+                assert!(is_error, "schema failure should be marked as error");
+            }
+            other => panic!("expected SetTransient, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_transaction_failed_becomes_data_edits_failed() {
+        let action = map_query_message(QueryMessage::TransactionFailed("constraint".into()));
+        match action {
+            Action::DataEditsFailed(msg) => assert_eq!(msg, "constraint"),
+            other => panic!("expected DataEditsFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_columns_loaded_preserves_table_and_columns() {
+        let cols = vec![ColumnInfo {
+            name: "id".into(),
+            col_type: "INTEGER".into(),
+            notnull: false,
+            default_value: None,
+            pk: true,
+        }];
+        let action = map_query_message(QueryMessage::ColumnsLoaded("users".into(), cols));
+        match action {
+            Action::ColumnsLoaded(table, c) => {
+                assert_eq!(table, "users");
+                assert_eq!(c.len(), 1);
+            }
+            other => panic!("expected ColumnsLoaded, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_explain_completed_preserves_data() {
+        let bytecode = vec![vec!["Init".to_string()]];
+        let plan = vec!["SCAN users".to_string()];
+        let action = map_query_message(QueryMessage::ExplainCompleted(
+            bytecode.clone(),
+            plan.clone(),
+        ));
+        match action {
+            Action::ExplainCompleted(bc, pl) => {
+                assert_eq!(bc, bytecode);
+                assert_eq!(pl, plan);
+            }
+            other => panic!("expected ExplainCompleted, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_explain_failed() {
+        let action = map_query_message(QueryMessage::ExplainFailed("syntax error".into()));
+        match action {
+            Action::ExplainFailed(msg) => assert_eq!(msg, "syntax error"),
+            other => panic!("expected ExplainFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_db_info_loaded() {
+        let info = DbInfo {
+            file_path: ":memory:".into(),
+            file_size: None,
+            page_count: 1,
+            page_size: 4096,
+            encoding: "UTF-8".into(),
+            journal_mode: "wal".into(),
+            schema_version: 1,
+            freelist_count: 0,
+            turso_version: "0.6.0",
+            wal_frames: None,
+        };
+        let action = map_query_message(QueryMessage::DbInfoLoaded(info));
+        assert!(matches!(action, Action::DbInfoLoaded(_)));
+    }
+
+    #[test]
+    fn map_query_message_db_info_failed() {
+        let action = map_query_message(QueryMessage::DbInfoFailed("no access".into()));
+        match action {
+            Action::DbInfoFailed(msg) => assert_eq!(msg, "no access"),
+            other => panic!("expected DbInfoFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_pragmas_loaded() {
+        let entries = vec![PragmaEntry {
+            name: "cache_size".into(),
+            value: "-2000".into(),
+            writable: true,
+            note: None,
+        }];
+        let action = map_query_message(QueryMessage::PragmasLoaded(entries));
+        match action {
+            Action::PragmasLoaded(e) => assert_eq!(e.len(), 1),
+            other => panic!("expected PragmasLoaded, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_pragmas_failed() {
+        let action = map_query_message(QueryMessage::PragmasFailed("error".into()));
+        match action {
+            Action::PragmasFailed(msg) => assert_eq!(msg, "error"),
+            other => panic!("expected PragmasFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_pragma_set_preserves_name_and_value() {
+        let action = map_query_message(QueryMessage::PragmaSet("cache_size".into(), "4000".into()));
+        match action {
+            Action::PragmaSet(name, val) => {
+                assert_eq!(name, "cache_size");
+                assert_eq!(val, "4000");
+            }
+            other => panic!("expected PragmaSet, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_pragma_failed_preserves_name_and_error() {
+        let action = map_query_message(QueryMessage::PragmaFailed(
+            "cache_size".into(),
+            "invalid value".into(),
+        ));
+        match action {
+            Action::PragmaFailed(name, err) => {
+                assert_eq!(name, "cache_size");
+                assert_eq!(err, "invalid value");
+            }
+            other => panic!("expected PragmaFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_wal_checkpointed() {
+        let action = map_query_message(QueryMessage::WalCheckpointed("ok".into()));
+        match action {
+            Action::WalCheckpointed(msg) => assert_eq!(msg, "ok"),
+            other => panic!("expected WalCheckpointed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_wal_checkpoint_failed() {
+        let action = map_query_message(QueryMessage::WalCheckpointFailed("busy".into()));
+        match action {
+            Action::WalCheckpointFailed(msg) => assert_eq!(msg, "busy"),
+            other => panic!("expected WalCheckpointFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_integrity_check_completed() {
+        let action = map_query_message(QueryMessage::IntegrityCheckCompleted("ok".into()));
+        match action {
+            Action::IntegrityCheckCompleted(msg) => assert_eq!(msg, "ok"),
+            other => panic!("expected IntegrityCheckCompleted, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_integrity_check_failed() {
+        let action = map_query_message(QueryMessage::IntegrityCheckFailed("corrupt".into()));
+        match action {
+            Action::IntegrityCheckFailed(msg) => assert_eq!(msg, "corrupt"),
+            other => panic!("expected IntegrityCheckFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_query_message_transaction_committed_becomes_data_edits_committed() {
+        let action = map_query_message(QueryMessage::TransactionCommitted);
+        assert!(
+            matches!(action, Action::DataEditsCommitted),
+            "TransactionCommitted should map to DataEditsCommitted"
+        );
+    }
+
+    #[test]
+    fn map_query_message_fk_loaded_preserves_table_and_fks() {
+        let fks = vec![ForeignKeyInfo {
+            from_column: "user_id".into(),
+            to_table: "users".into(),
+            to_column: "id".into(),
+        }];
+        let action = map_query_message(QueryMessage::ForeignKeysLoaded("orders".into(), fks));
+        match action {
+            Action::FKLoaded(table, f) => {
+                assert_eq!(table, "orders");
+                assert_eq!(f.len(), 1);
+            }
+            other => panic!("expected FKLoaded, got: {other:?}"),
+        }
+    }
+
+    // RowCount and CustomTypesLoaded share a match arm that debug_assert!(false)
+    // in debug mode and degrades to SetTransient in release mode.
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn map_query_message_row_count_falls_through_in_release() {
+        let action = map_query_message(QueryMessage::RowCount("t".into(), 42));
+        assert!(
+            matches!(action, Action::SetTransient(_, false)),
+            "RowCount should degrade to non-error SetTransient in release"
+        );
+    }
+
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn map_query_message_custom_types_loaded_falls_through_in_release() {
+        let action = map_query_message(QueryMessage::CustomTypesLoaded(vec![]));
+        assert!(
+            matches!(action, Action::SetTransient(_, false)),
+            "CustomTypesLoaded should degrade to non-error SetTransient in release"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "RowCount/CustomTypesLoaded must be handled in drain loop")]
+    #[cfg(debug_assertions)]
+    fn map_query_message_row_count_panics_in_debug() {
+        let _ = map_query_message(QueryMessage::RowCount("t".into(), 42));
+    }
+
+    #[test]
+    #[should_panic(expected = "RowCount/CustomTypesLoaded must be handled in drain loop")]
+    #[cfg(debug_assertions)]
+    fn map_query_message_custom_types_loaded_panics_in_debug() {
+        let _ = map_query_message(QueryMessage::CustomTypesLoaded(vec![]));
+    }
+
+    // ── map_history_message tests ────────────────────────────────────
+
+    #[test]
+    fn map_history_message_loaded_returns_history_loaded() {
+        let action = map_history_message(history::HistoryMessage::Loaded(vec![]));
+        assert!(matches!(action, Action::HistoryLoaded(_)));
+    }
+
+    #[test]
+    fn map_history_message_load_failed_returns_set_transient() {
+        let action = map_history_message(history::HistoryMessage::LoadFailed("db error".into()));
+        match action {
+            Action::SetTransient(msg, is_error) => {
+                assert_eq!(msg, "db error");
+                assert!(is_error);
+            }
+            other => panic!("expected SetTransient, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_history_message_deleted_returns_reload_requested() {
+        let action = map_history_message(history::HistoryMessage::Deleted(42));
+        assert!(matches!(action, Action::HistoryReloadRequested));
+    }
+
+    #[test]
+    fn map_history_message_bookmarks_loaded() {
+        let action = map_history_message(history::HistoryMessage::BookmarksLoaded(vec![]));
+        assert!(matches!(action, Action::BookmarksLoaded(_)));
+    }
+
+    #[test]
+    fn map_history_message_bookmark_saved_returns_reload() {
+        let action = map_history_message(history::HistoryMessage::BookmarkSaved(1));
+        assert!(matches!(action, Action::BookmarkReloadRequested));
+    }
+
+    #[test]
+    fn map_history_message_bookmark_deleted_returns_reload() {
+        let action = map_history_message(history::HistoryMessage::BookmarkDeleted(1));
+        assert!(matches!(action, Action::BookmarkReloadRequested));
+    }
+
+    #[test]
+    fn map_history_message_bookmark_updated_returns_reload() {
+        let action = map_history_message(history::HistoryMessage::BookmarkUpdated(1));
+        assert!(matches!(action, Action::BookmarkReloadRequested));
+    }
+
+    #[test]
+    fn map_history_message_bookmark_save_failed_returns_transient() {
+        let action =
+            map_history_message(history::HistoryMessage::BookmarkSaveFailed("oops".into()));
+        match action {
+            Action::SetTransient(msg, is_error) => {
+                assert_eq!(msg, "oops");
+                assert!(is_error);
+            }
+            other => panic!("expected SetTransient, got: {other:?}"),
+        }
+    }
+}

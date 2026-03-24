@@ -121,3 +121,79 @@ pub fn value_to_display(val: &turso::Value) -> Option<String> {
         turso::Value::Blob(b) => Some(format!("[BLOB {} B]", b.len())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use turso::Value;
+
+    #[test]
+    fn value_to_display_null_returns_none() {
+        assert_eq!(value_to_display(&Value::Null), None, "NULL should be None");
+    }
+
+    #[test]
+    fn value_to_display_integer() {
+        assert_eq!(
+            value_to_display(&Value::Integer(42)),
+            Some("42".to_string()),
+        );
+    }
+
+    #[test]
+    fn value_to_display_negative_integer() {
+        assert_eq!(
+            value_to_display(&Value::Integer(-1)),
+            Some("-1".to_string()),
+        );
+    }
+
+    #[test]
+    fn value_to_display_integer_boundaries() {
+        assert_eq!(
+            value_to_display(&Value::Integer(i64::MAX)),
+            Some(i64::MAX.to_string()),
+        );
+        assert_eq!(
+            value_to_display(&Value::Integer(i64::MIN)),
+            Some(i64::MIN.to_string()),
+        );
+    }
+
+    #[test]
+    fn value_to_display_real() {
+        assert_eq!(
+            value_to_display(&Value::Real(3.14)),
+            Some("3.14".to_string()),
+        );
+    }
+
+    #[test]
+    fn value_to_display_text() {
+        assert_eq!(
+            value_to_display(&Value::Text("hello".into())),
+            Some("hello".to_string()),
+        );
+    }
+
+    #[test]
+    fn value_to_display_empty_text_is_some_not_none() {
+        assert_eq!(
+            value_to_display(&Value::Text(String::new())),
+            Some(String::new()),
+            "empty text should be Some(\"\"), not None"
+        );
+    }
+
+    #[test]
+    fn value_to_display_blob_shows_byte_count() {
+        let result = value_to_display(&Value::Blob(vec![0, 1, 2]));
+        assert_eq!(result, Some("[BLOB 3 B]".to_string()));
+    }
+
+    #[test]
+    fn value_to_display_empty_blob() {
+        let result = value_to_display(&Value::Blob(vec![]));
+        assert_eq!(result, Some("[BLOB 0 B]".to_string()));
+    }
+}

@@ -45,7 +45,7 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 #### PRAGMA limitations
 
 - **`foreign_key_list` NOT supported** — returns "Not a valid pragma name". FK info must be parsed from CREATE TABLE SQL in `SchemaEntry::sql` using `parse_foreign_keys()` in `db.rs`.
-- **`defer_foreign_keys` NOT supported** at the PRAGMA level. Use `PRAGMA defer_foreign_keys = ON` inside transaction SQL strings (our `execute_transaction` does this).
+- **`defer_foreign_keys` NOT supported** — returns "Not a valid pragma name". Intentionally omitted from turso's pragma whitelist (`parser/src/ast.rs PragmaName` enum). Turso does support `DEFERRABLE INITIALLY DEFERRED` on column constraints and `BEGIN DEFERRED` transactions, but not the connection-level pragma. Our `execute_transaction` in `ops.rs` no longer calls this pragma — FK checks run immediately per-statement, so DML generation must order statements to respect FK dependencies.
 - **Syntax quirk**: turso uses single-quoted values in PRAGMA SET (`PRAGMA name = 'value'`), not double-quoted.
 - **65+ PRAGMAs work**, including: `foreign_keys`, `journal_mode`, `cache_size`, `page_size`, `table_info`, `index_info`, `integrity_check`, `quick_check`, `user_version`, `busy_timeout`.
 - **`synchronous`** only supports `OFF` and `FULL` (not `NORMAL`).
@@ -99,3 +99,17 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 - `serde` + `toml` for config serialization
 - `dirs` for platform config/data directory paths
 - `arboard` for clipboard (default-features = false for SSH-safe fallback)
+
+## Known issues discovered via testing
+
+### `execute_transaction` was failing on turso due to `defer_foreign_keys` (FIXED)
+
+`ops.rs::execute_transaction()` was calling `PRAGMA defer_foreign_keys = ON` before every transaction. Turso returns "Not a valid pragma name", so every data edit transaction failed. Fixed by removing the pragma call. FK checks now run immediately per-statement — DML generation in `data_editor.rs` must order statements to respect FK dependencies (parent inserts before child inserts, child deletes before parent deletes).
+
+### History search does not escape SQL LIKE wildcards
+
+`history.rs::load_entries()` uses `LIKE '%{term}%'` for search filtering. The `%` and `_` characters in search terms are not escaped, so searching for `id_col` also matches `idXcol` (the `_` acts as a single-character wildcard). Low severity but affects search precision.
+
+### `HistoryDb` schema extracted into `create_schema()`
+
+Schema creation is in `HistoryDb::create_schema()`, shared by both `open()` and the test helper `test_history_db()`. No duplication.
