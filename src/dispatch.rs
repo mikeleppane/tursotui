@@ -34,7 +34,14 @@ pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
         QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
         QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
         QueryMessage::RowCount(..) | QueryMessage::CustomTypesLoaded(..) => {
-            unreachable!("handled in drain loop")
+            // These are handled directly in the drain loop (main.rs) and should
+            // never reach here. Panic in debug builds to catch the invariant
+            // violation early; degrade gracefully in release.
+            debug_assert!(
+                false,
+                "RowCount/CustomTypesLoaded must be handled in drain loop"
+            );
+            app::Action::SetTransient("Internal: unexpected message route".to_string(), false)
         }
     }
 }
@@ -50,6 +57,19 @@ pub(crate) fn map_history_message(msg: history::HistoryMessage) -> app::Action {
         history::HistoryMessage::BookmarkSaved(_)
         | history::HistoryMessage::BookmarkDeleted(_)
         | history::HistoryMessage::BookmarkUpdated(_) => app::Action::BookmarkReloadRequested,
+    }
+}
+
+/// Set execution state on a `DatabaseContext` and fire the query.
+///
+/// Shared by `RecallAndExecute`, `RecallAndExecuteBookmark`, and any path
+/// that needs to start a query execution outside of the `ExecuteQuery` action.
+fn begin_execution(db: &mut app::DatabaseContext, sql: &str, source: app::ExecutionSource) {
+    if !sql.trim().is_empty() {
+        db.executing = true;
+        db.last_execution_source = source;
+        db.last_executed_sql = Some(sql.to_owned());
+        db.handle.execute(sql.to_owned(), None);
     }
 }
 
@@ -233,6 +253,7 @@ pub(crate) fn dispatch_action_to_db(
         app::Action::QueryFailed(err) => {
             // Clear any pending deferred editability check — the query failed
             app.databases[db_idx].pending_edit_table = None;
+            app.databases[db_idx].pending_fk_activation = false;
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
                 created_at: std::time::Instant::now(),
@@ -538,17 +559,10 @@ pub(crate) fn dispatch_action_to_db(
         app::Action::HistoryLoaded(entries) => {
             global_ui.history.set_entries(entries.clone());
         }
-        app::Action::RecallAndExecute(sql) => {
-            // Note: duplicates ExecuteQuery state+dispatch logic because we can't
-            // recursively call dispatch_action_to_db. Keep in sync.
+        app::Action::RecallAndExecute(sql) | app::Action::RecallAndExecuteBookmark(sql) => {
             let db = &mut app.databases[db_idx];
             db.editor.set_contents(sql);
-            if !sql.trim().is_empty() {
-                db.executing = true;
-                db.last_execution_source = app::ExecutionSource::FullBuffer;
-                db.last_executed_sql = Some(sql.clone());
-                db.handle.execute(sql.clone(), None);
-            }
+            begin_execution(db, sql, app::ExecutionSource::FullBuffer);
         }
         app::Action::DeleteHistoryEntry(id) => {
             if let Some(ref history_db) = app.history_db {
@@ -617,16 +631,6 @@ pub(crate) fn dispatch_action_to_db(
             if let Some(ref hdb) = app.history_db {
                 let db_path = &app.databases[db_idx].path;
                 hdb.load_bookmarks(Some(db_path));
-            }
-        }
-        app::Action::RecallAndExecuteBookmark(sql) => {
-            let db = &mut app.databases[db_idx];
-            db.editor.set_contents(sql);
-            if !sql.trim().is_empty() {
-                db.executing = true;
-                db.last_execution_source = app::ExecutionSource::FullBuffer;
-                db.last_executed_sql = Some(sql.clone());
-                db.handle.execute(sql.clone(), None);
             }
         }
         app::Action::ToggleTheme => {

@@ -150,14 +150,15 @@ pub fn parse_foreign_keys(create_sql: &str) -> Vec<ForeignKeyInfo> {
         };
         let to_col = inner[..end].trim();
 
-        let table_len = to_table.len();
+        // Consumed bytes = full quoted span, not just the unquoted content length
+        let consumed = target_start.len() - rest.len();
         fks.push(ForeignKeyInfo {
             from_column: unquote(from_col),
             to_table,
             to_column: unquote(to_col),
         });
 
-        search_from = offset + table_len;
+        search_from = offset + consumed;
     }
 
     // Also parse inline column-level FK syntax:
@@ -210,14 +211,14 @@ pub fn parse_foreign_keys(create_sql: &str) -> Vec<ForeignKeyInfo> {
         };
         let to_col = inner[..end].trim();
 
-        let tbl_len = to_table.len();
+        let consumed = after_ref.len() - rest.len();
         fks.push(ForeignKeyInfo {
             from_column: unquote(from_col),
             to_table,
             to_column: unquote(to_col),
         });
 
-        search_from = offset_after + tbl_len;
+        search_from = offset_after + consumed;
     }
 
     fks
@@ -225,17 +226,37 @@ pub fn parse_foreign_keys(create_sql: &str) -> Vec<ForeignKeyInfo> {
 
 /// Extract an identifier (possibly quoted with `"` or `` ` ``) from the start of `s`.
 /// Returns (identifier, `rest_of_string`).
+///
+/// Doubled quotes inside double-quoted identifiers are treated as an escaped
+/// quote character (e.g. `"col""name"` → `col"name`).
 pub fn extract_identifier(s: &str) -> (String, &str) {
     let s = s.trim_start();
-    if let Some(rest) = s.strip_prefix('"') {
-        // Double-quoted identifier
-        if let Some(end) = rest.find('"') {
-            return (s[1..=end].to_string(), &s[2 + end..]);
+    if let Some(inner) = s.strip_prefix('"') {
+        // Double-quoted identifier — handle `""` as escaped quote.
+        // Uses char_indices to correctly handle multi-byte UTF-8 identifiers.
+        let mut name = String::new();
+        let mut chars = inner.char_indices();
+        while let Some((i, c)) = chars.next() {
+            if c == '"' {
+                if let Some((_, next_c)) = chars.clone().next()
+                    && next_c == '"'
+                {
+                    // Doubled quote → literal quote in identifier
+                    name.push('"');
+                    chars.next(); // consume second quote
+                    continue;
+                }
+                // Closing quote — rest starts after this quote byte
+                return (name, &inner[i + 1..]);
+            }
+            name.push(c);
         }
-    } else if let Some(rest) = s.strip_prefix('`')
-        && let Some(end) = rest.find('`')
+        // No closing quote — return what we have
+        return (name, "");
+    } else if let Some(inner) = s.strip_prefix('`')
+        && let Some(end) = inner.find('`')
     {
-        return (s[1..=end].to_string(), &s[2 + end..]);
+        return (inner[..end].to_string(), &inner[end + 1..]);
     }
     // Unquoted: read until non-identifier char
     let end = s
@@ -556,6 +577,50 @@ mod tests {
         assert_eq!(fks[0].from_column, "ref_id");
         assert_eq!(fks[0].to_table, "other table");
         assert_eq!(fks[0].to_column, "pk_col");
+    }
+
+    #[test]
+    fn parse_fk_quoted_table_then_second_fk() {
+        // Regression: the first FK has a quoted table name. The old code advanced
+        // search_from by to_table.len() (unquoted content) instead of the full
+        // quoted span, causing the second FK to be missed or misparsed.
+        let sql = r#"CREATE TABLE t (
+            a INTEGER, b INTEGER,
+            FOREIGN KEY (a) REFERENCES "other table" (id),
+            FOREIGN KEY (b) REFERENCES second (id)
+        )"#;
+        let fks = parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 2);
+        assert_eq!(fks[0].from_column, "a");
+        assert_eq!(fks[0].to_table, "other table");
+        assert_eq!(fks[0].to_column, "id");
+        assert_eq!(fks[1].from_column, "b");
+        assert_eq!(fks[1].to_table, "second");
+        assert_eq!(fks[1].to_column, "id");
+    }
+
+    #[test]
+    fn parse_fk_doubled_quote_in_identifier() {
+        // SQL standard: doubled quotes inside a quoted identifier represent a literal quote.
+        // "col""name" → col"name
+        let sql = r#"CREATE TABLE t (
+            id INTEGER PRIMARY KEY,
+            ref_id INTEGER,
+            FOREIGN KEY (ref_id) REFERENCES "has""quote" (id)
+        )"#;
+        let fks = parse_foreign_keys(sql);
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].from_column, "ref_id");
+        assert_eq!(fks[0].to_table, "has\"quote");
+        assert_eq!(fks[0].to_column, "id");
+    }
+
+    #[test]
+    fn extract_identifier_non_ascii() {
+        // Non-ASCII characters in quoted identifiers must be preserved correctly.
+        let (name, rest) = extract_identifier(r#""café" extra"#);
+        assert_eq!(name, "café");
+        assert_eq!(rest, " extra");
     }
 
     #[test]
