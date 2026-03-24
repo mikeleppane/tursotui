@@ -127,7 +127,6 @@ pub(crate) enum ExecutionSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 4: Go to Object
 pub(crate) enum ObjectKind {
     Table,
     Index,
@@ -138,11 +137,9 @@ pub(crate) enum ObjectKind {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Phase 4: Go to Object
 pub(crate) struct ObjectRef {
     pub(crate) name: String,
     pub(crate) kind: ObjectKind,
-    pub(crate) parent: Option<String>,
     pub(crate) database_path: String,
 }
 
@@ -153,8 +150,6 @@ pub(crate) enum Action {
     /// Intentionally a no-op in `update()` and `dispatch_action_to_db()` (falls to `_ => {}`).
     Consumed,
     SwitchSubTab(SubTab),
-    #[allow(dead_code)] // constructed when click-to-focus lands (later milestone)
-    FocusPanel(PanelId),
     CycleFocus(Direction),
     ToggleSidebar,
     SwitchBottomTab(BottomTab),
@@ -471,7 +466,6 @@ impl AppState {
         let db = &mut self.databases[db_idx];
         match action {
             Action::CycleFocus(dir) => db.cycle_focus(*dir),
-            Action::FocusPanel(panel) => db.focus = *panel,
             Action::SwitchSubTab(tab) => {
                 db.sub_tab = *tab;
                 let panels = db.focusable_panels();
