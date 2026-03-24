@@ -9,8 +9,8 @@ use unicode_width::UnicodeWidthStr;
 use tursotui_db::types::value_to_display;
 
 use crate::app::{Action, Direction};
-use crate::db::{ColumnDef, QueryResult};
 use crate::theme::Theme;
+use tursotui_db::{ColumnDef, QueryResult};
 
 use super::Component;
 use super::data_editor::{EditRenderState, RowMarker};
@@ -1057,7 +1057,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::db::{ColumnDef, QueryKind};
+    use tursotui_db::{ColumnDef, QueryKind};
 
     fn make_column(name: &str) -> ColumnDef {
         ColumnDef {

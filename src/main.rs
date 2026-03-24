@@ -2,7 +2,6 @@ mod app;
 mod autocomplete;
 mod components;
 mod config;
-mod db;
 mod dispatch;
 mod event;
 mod export;
@@ -22,7 +21,7 @@ use tokio::sync::mpsc;
 
 use app::{AppState, DatabaseContext};
 use components::history::QueryHistoryPanel;
-use db::DatabaseHandle;
+use tursotui_db::{DatabaseHandle, QueryMessage};
 
 /// Result of an async database open operation.
 pub(crate) enum GlobalMessage {
@@ -230,7 +229,7 @@ fn run_loop(
 /// Drain all pending async messages and dispatch the resulting actions.
 fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
     // Phase 1: collect all pending messages from ALL databases with their db_idx
-    let mut pending: Vec<(usize, db::QueryMessage)> = Vec::new();
+    let mut pending: Vec<(usize, QueryMessage)> = Vec::new();
     for (db_idx, db) in app.databases.iter_mut().enumerate() {
         while let Some(msg) = db.handle.try_recv() {
             pending.push((db_idx, msg));
@@ -240,7 +239,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
     // Phase 2: process each, routing to the specific database
     for (db_idx, msg) in pending {
         // Handle RowCount directly (needs db_idx routing, no Action needed)
-        if let db::QueryMessage::RowCount(ref table, count) = msg {
+        if let QueryMessage::RowCount(ref table, count) = msg {
             app.databases[db_idx]
                 .schema_cache
                 .row_counts
@@ -248,7 +247,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
             continue;
         }
         // Handle CustomTypesLoaded directly (needs db_idx routing)
-        if let db::QueryMessage::CustomTypesLoaded(ref types) = msg {
+        if let QueryMessage::CustomTypesLoaded(ref types) = msg {
             let db = &mut app.databases[db_idx];
             db.schema_cache.custom_types.clone_from(types);
             db.schema.set_custom_types(types);

@@ -62,7 +62,7 @@ pub(crate) enum HistoryMessage {
 
 /// Persistent query history backed by a local `SQLite` database.
 ///
-/// Follows the same channel-based pattern as [`crate::db::DatabaseHandle`]:
+/// Follows the same channel-based pattern as [`tursotui_db::DatabaseHandle`]:
 /// one `Arc<Database>` shared across spawned tasks, with results flowing
 /// back through an unbounded channel.
 pub(crate) struct HistoryDb {

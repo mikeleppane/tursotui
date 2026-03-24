@@ -4,8 +4,8 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, Direction};
-use crate::db::DbInfo;
 use crate::theme::Theme;
+use tursotui_db::DbInfo;
 
 use super::Component;
 

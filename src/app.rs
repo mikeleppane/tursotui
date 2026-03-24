@@ -13,11 +13,11 @@ use crate::components::record::RecordDetail;
 use crate::components::results::ResultsTable;
 use crate::components::schema::SchemaExplorer;
 use crate::config::{AppConfig, ThemeMode};
-use crate::db::{
+use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
+use tursotui_db::{
     ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind,
     QueryResult, SchemaEntry,
 };
-use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 
 /// In-memory cache of schema metadata for autocomplete.
 /// Populated eagerly after schema loads — all columns for all tables/views.
@@ -223,7 +223,7 @@ pub(crate) enum Action {
     DataEditsFailed(String),
     FollowFK,
     FKNavigateBack,
-    FKLoaded(String, Vec<crate::db::ForeignKeyInfo>),
+    FKLoaded(String, Vec<tursotui_db::ForeignKeyInfo>),
     // Multi-database actions
     SwitchDatabase(usize),
     NextDatabase,

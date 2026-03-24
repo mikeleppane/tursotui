@@ -10,7 +10,7 @@
 
 use tursotui_sql::quoting::{quote_identifier, quote_literal};
 
-use crate::db::ColumnDef;
+use tursotui_db::ColumnDef;
 
 /// Format rows as CSV (RFC 4180 quoting rules, LF line endings).
 ///

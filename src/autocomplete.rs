@@ -573,7 +573,7 @@ fn add_keyword_candidates(
 mod tests {
     use super::*;
     use crate::app::SchemaCache;
-    use crate::db::{ColumnInfo, SchemaEntry};
+    use tursotui_db::{ColumnInfo, SchemaEntry};
 
     fn test_schema() -> SchemaCache {
         SchemaCache {

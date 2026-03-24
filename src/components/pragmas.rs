@@ -4,8 +4,8 @@ use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarStat
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, Direction};
-use crate::db::PragmaEntry;
 use crate::theme::Theme;
+use tursotui_db::PragmaEntry;
 
 use super::Component;
 
@@ -31,7 +31,7 @@ struct InlineEdit {
 /// Delegates to `db::sanitize_pragma_value` (single source of truth),
 /// discarding the normalized value since the UI only needs a pass/fail.
 fn validate_pragma_value(name: &str, value: &str) -> Result<(), String> {
-    crate::db::sanitize_pragma_value(name, value).map(|_| ())
+    tursotui_sql::validation::sanitize_pragma_value(name, value).map(|_| ())
 }
 
 /// PRAGMA Dashboard with scrollable list and inline editing for writable pragmas.

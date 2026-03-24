@@ -512,7 +512,7 @@ impl QueryEditor {
     /// Detect the SQL statement at the cursor position.
     pub(crate) fn statement_at_cursor(&self) -> String {
         let full = self.contents();
-        let statements = crate::db::detect_statements(&full);
+        let statements = tursotui_sql::parser::detect_statements(&full);
         if statements.is_empty() {
             return full;
         }
@@ -1661,8 +1661,8 @@ mod tests {
     // ─── Autocomplete integration tests ──────────────────────────────────
 
     use crate::app::SchemaCache;
-    use crate::db::{ColumnInfo, SchemaEntry};
     use std::collections::HashMap;
+    use tursotui_db::{ColumnInfo, SchemaEntry};
 
     fn test_schema() -> SchemaCache {
         SchemaCache {

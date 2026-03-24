@@ -8,8 +8,8 @@ use tursotui_sql::quoting::{format_value, quote_identifier, quote_literal};
 use super::Component;
 use super::cell_editor::CellEditor;
 use crate::app::Action;
-use crate::db::{ColumnInfo, ForeignKeyInfo, QueryResult, SchemaEntry};
 use crate::theme::Theme;
+use tursotui_db::{ColumnInfo, ForeignKeyInfo, QueryResult, SchemaEntry};
 
 // ---------------------------------------------------------------------------
 // Visual marker types — used by ResultsTable to decorate edited rows/cells
@@ -919,7 +919,7 @@ impl Component for DataEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{ColumnInfo, SchemaEntry};
+    use tursotui_db::{ColumnInfo, SchemaEntry};
 
     // -------------------------------------------------------------------------
     // Helpers
@@ -1471,8 +1471,8 @@ mod tests {
     // -------------------------------------------------------------------------
 
     fn make_empty_result() -> QueryResult {
-        use crate::db::QueryKind;
         use std::time::Duration;
+        use tursotui_db::QueryKind;
         QueryResult {
             columns: vec![],
             rows: vec![],
@@ -1680,8 +1680,8 @@ mod tests {
 
     /// Build a 3-column `DataEditor`: id (PK), name, email.
     fn make_editor_3col() -> DataEditor {
-        use crate::db::QueryKind;
         use std::time::Duration;
+        use tursotui_db::QueryKind;
         let columns = vec![
             ColumnInfo {
                 name: "id".to_string(),
@@ -1905,8 +1905,8 @@ mod tests {
 
     #[test]
     fn test_fk_nav_preserves_edits() {
-        use crate::db::QueryKind;
         use std::time::Duration;
+        use tursotui_db::QueryKind;
 
         let mut de = make_editor_3col();
 

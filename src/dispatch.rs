@@ -2,37 +2,38 @@ use crate::GlobalMessage;
 use crate::GlobalUi;
 use crate::app::{self, AppState, BottomTab, SubTab};
 use crate::components;
-use crate::db::{self, DatabaseHandle};
 use crate::export;
 use crate::history;
 use crate::persistence;
+use tursotui_db::{DatabaseHandle, QueryKind, QueryMessage, QueryResult};
+use tursotui_sql::parser::parse_foreign_keys;
 
 /// Convert a `QueryMessage` from the database worker into an `Action`.
-pub(crate) fn map_query_message(msg: db::QueryMessage) -> app::Action {
+pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
     match msg {
-        db::QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
-        db::QueryMessage::Failed(err) => app::Action::QueryFailed(err),
-        db::QueryMessage::SchemaFailed(err) => app::Action::SetTransient(err, true),
-        db::QueryMessage::TransactionFailed(err) => app::Action::DataEditsFailed(err),
-        db::QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
-        db::QueryMessage::ColumnsLoaded(table, cols) => app::Action::ColumnsLoaded(table, cols),
-        db::QueryMessage::ExplainCompleted(bytecode, plan) => {
+        QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
+        QueryMessage::Failed(err) => app::Action::QueryFailed(err),
+        QueryMessage::SchemaFailed(err) => app::Action::SetTransient(err, true),
+        QueryMessage::TransactionFailed(err) => app::Action::DataEditsFailed(err),
+        QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
+        QueryMessage::ColumnsLoaded(table, cols) => app::Action::ColumnsLoaded(table, cols),
+        QueryMessage::ExplainCompleted(bytecode, plan) => {
             app::Action::ExplainCompleted(bytecode, plan)
         }
-        db::QueryMessage::ExplainFailed(err) => app::Action::ExplainFailed(err),
-        db::QueryMessage::DbInfoLoaded(info) => app::Action::DbInfoLoaded(info),
-        db::QueryMessage::DbInfoFailed(err) => app::Action::DbInfoFailed(err),
-        db::QueryMessage::PragmasLoaded(entries) => app::Action::PragmasLoaded(entries),
-        db::QueryMessage::PragmasFailed(err) => app::Action::PragmasFailed(err),
-        db::QueryMessage::PragmaSet(name, val) => app::Action::PragmaSet(name, val),
-        db::QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
-        db::QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
-        db::QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
-        db::QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
-        db::QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
-        db::QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
-        db::QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
-        db::QueryMessage::RowCount(..) | db::QueryMessage::CustomTypesLoaded(..) => {
+        QueryMessage::ExplainFailed(err) => app::Action::ExplainFailed(err),
+        QueryMessage::DbInfoLoaded(info) => app::Action::DbInfoLoaded(info),
+        QueryMessage::DbInfoFailed(err) => app::Action::DbInfoFailed(err),
+        QueryMessage::PragmasLoaded(entries) => app::Action::PragmasLoaded(entries),
+        QueryMessage::PragmasFailed(err) => app::Action::PragmasFailed(err),
+        QueryMessage::PragmaSet(name, val) => app::Action::PragmaSet(name, val),
+        QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
+        QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
+        QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
+        QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
+        QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
+        QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
+        QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
+        QueryMessage::RowCount(..) | QueryMessage::CustomTypesLoaded(..) => {
             unreachable!("handled in drain loop")
         }
     }
@@ -119,8 +120,8 @@ pub(crate) fn dispatch_action_to_db(
                 db.record_detail.clear();
             }
             // Refresh schema if the query contained DDL
-            let has_ddl = matches!(result.query_kind, db::QueryKind::Ddl)
-                || (matches!(result.query_kind, db::QueryKind::Batch { .. }) && {
+            let has_ddl = matches!(result.query_kind, QueryKind::Ddl)
+                || (matches!(result.query_kind, QueryKind::Batch { .. }) && {
                     let sql_lower = result.sql.to_lowercase();
                     sql_lower.contains("create ")
                         || sql_lower.contains("alter ")
@@ -131,8 +132,8 @@ pub(crate) fn dispatch_action_to_db(
             }
             // Log to query history
             let origin = match result.query_kind {
-                db::QueryKind::Ddl => "ddl",
-                db::QueryKind::Pragma => "pragma",
+                QueryKind::Ddl => "ddl",
+                QueryKind::Pragma => "pragma",
                 _ => "user",
             };
             if let Some(ref history) = app.history_db {
@@ -201,7 +202,7 @@ pub(crate) fn dispatch_action_to_db(
                                 .find(|e| e.name == *table)
                             && let Some(ref sql) = entry.sql
                         {
-                            let fks = db::parse_foreign_keys(sql);
+                            let fks = parse_foreign_keys(sql);
                             app.databases[db_idx]
                                 .schema_cache
                                 .fk_info
@@ -322,14 +323,14 @@ pub(crate) fn dispatch_action_to_db(
                         db.results
                             .current_result()
                             .cloned()
-                            .unwrap_or_else(|| db::QueryResult {
+                            .unwrap_or_else(|| QueryResult {
                                 columns: vec![],
                                 rows: vec![],
                                 execution_time: std::time::Duration::ZERO,
                                 truncated: false,
                                 sql: activating_sql.clone(),
                                 rows_affected: 0,
-                                query_kind: db::QueryKind::Select,
+                                query_kind: QueryKind::Select,
                                 source_table: Some(table_name.clone()),
                             });
                     db.data_editor.activate(
@@ -348,7 +349,7 @@ pub(crate) fn dispatch_action_to_db(
                             .find(|e| &e.name == table_name)
                         && let Some(ref sql) = entry.sql
                     {
-                        let fks = db::parse_foreign_keys(sql);
+                        let fks = parse_foreign_keys(sql);
                         db.schema_cache
                             .fk_info
                             .insert(table_name.clone(), fks.clone());
@@ -965,14 +966,14 @@ pub(crate) fn dispatch_action_to_db(
                 .results
                 .current_result()
                 .cloned()
-                .unwrap_or_else(|| db::QueryResult {
+                .unwrap_or_else(|| QueryResult {
                     columns: vec![],
                     rows: vec![],
                     execution_time: std::time::Duration::ZERO,
                     truncated: false,
                     sql: String::new(),
                     rows_affected: 0,
-                    query_kind: db::QueryKind::Select,
+                    query_kind: QueryKind::Select,
                     source_table: None,
                 });
             db.data_editor

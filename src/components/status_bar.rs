@@ -7,8 +7,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{AppState, BottomTab, PanelId, SubTab};
 use crate::components::data_editor::DataEditorStatus;
-use crate::db::QueryKind;
 use crate::theme::Theme;
+use tursotui_db::QueryKind;
 
 /// Format a `Duration` for human-readable display in the status bar.
 ///

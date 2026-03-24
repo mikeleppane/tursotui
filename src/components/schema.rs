@@ -3,8 +3,8 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::app::{Action, Direction, ObjectKind};
-use crate::db::{ColumnInfo, CustomTypeInfo, SchemaEntry};
 use crate::theme::Theme;
+use tursotui_db::{ColumnInfo, CustomTypeInfo, SchemaEntry};
 
 use super::Component;
 
@@ -1206,7 +1206,7 @@ fn format_count(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{ColumnInfo, SchemaEntry};
+    use tursotui_db::{ColumnInfo, SchemaEntry};
 
     fn make_schema_entry(obj_type: &str, name: &str) -> SchemaEntry {
         SchemaEntry {

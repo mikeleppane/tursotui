@@ -7,8 +7,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use tursotui_sql::quoting::quote_identifier;
 
 use crate::app::{Action, BottomTab, Direction};
-use crate::db::{ColumnInfo, SchemaEntry, parse_foreign_keys};
 use crate::theme::Theme;
+use tursotui_db::{ColumnInfo, SchemaEntry};
+use tursotui_sql::parser::parse_foreign_keys;
 
 use super::Component;
 
@@ -1593,7 +1594,7 @@ mod tests {
 
     // ── build_from_schema tests ──────────────────────────────────────────────
 
-    use crate::db::ColumnInfo;
+    use tursotui_db::ColumnInfo;
 
     fn make_schema_entry(name: &str, sql: Option<&str>) -> SchemaEntry {
         SchemaEntry {
