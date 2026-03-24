@@ -2934,8 +2934,18 @@ dependencies = [
  "tokio",
  "toml",
  "turso",
+ "tursotui-db",
  "tursotui-sql",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "tursotui-db"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "turso",
+ "tursotui-sql",
 ]
 
 [[package]]

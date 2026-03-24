@@ -1,0 +1,123 @@
+//! Struct and enum definitions for database query results, schema, and metadata.
+
+use std::time::Duration;
+
+use tursotui_sql::parser::ForeignKeyInfo;
+use tursotui_sql::query_kind::QueryKind;
+
+/// A single column definition from query results.
+#[derive(Debug, Clone)]
+pub struct ColumnDef {
+    pub name: String,
+    pub type_name: String,
+}
+
+/// Result of a completed query.
+#[derive(Debug, Clone)]
+pub struct QueryResult {
+    pub columns: Vec<ColumnDef>,
+    pub rows: Vec<Vec<turso::Value>>,
+    pub execution_time: Duration,
+    /// True if the result was capped at 10,000 rows.
+    pub truncated: bool,
+    /// The SQL statement that produced this result.
+    pub sql: String,
+    /// Number of rows affected (DML/DDL path); 0 for SELECT/EXPLAIN/PRAGMA.
+    pub rows_affected: u64,
+    /// The detected kind of query.
+    pub query_kind: QueryKind,
+    /// The source table that triggered this query, if known.
+    pub source_table: Option<String>,
+}
+
+/// A raw schema entry from `sqlite_schema`.
+#[derive(Debug, Clone)]
+pub struct SchemaEntry {
+    pub obj_type: String,
+    pub name: String,
+    pub tbl_name: String,
+    pub sql: Option<String>,
+}
+
+/// Column info from PRAGMA `table_info`.
+#[derive(Debug, Clone)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub col_type: String,
+    pub notnull: bool,
+    pub default_value: Option<String>,
+    pub pk: bool,
+}
+
+/// A custom type from `PRAGMA list_types` (non-base types only).
+#[derive(Debug, Clone)]
+pub struct CustomTypeInfo {
+    pub name: String,
+    pub parent: String,
+    /// True for Turso's built-in types (uuid, boolean, etc.), false for user-defined.
+    pub builtin: bool,
+}
+
+/// Database metadata from PRAGMAs and file system.
+#[derive(Debug, Clone)]
+pub struct DbInfo {
+    pub file_path: String,
+    pub file_size: Option<u64>,
+    pub page_count: i64,
+    pub page_size: i64,
+    pub encoding: String,
+    pub journal_mode: String,
+    pub schema_version: i64,
+    pub freelist_count: i64,
+    // data_version not supported by turso/libsql
+    pub turso_version: &'static str,
+    pub wal_frames: Option<u64>,
+}
+
+/// A single PRAGMA entry for the dashboard.
+#[derive(Debug, Clone)]
+pub struct PragmaEntry {
+    pub name: String,
+    pub value: String,
+    pub writable: bool,
+    pub note: Option<String>,
+}
+
+/// Messages sent from query tasks back to the main loop.
+#[derive(Debug)]
+pub enum QueryMessage {
+    Completed(QueryResult),
+    Failed(String),
+    SchemaLoaded(Vec<SchemaEntry>),
+    SchemaFailed(String),
+    ColumnsLoaded(String, Vec<ColumnInfo>),
+    ExplainCompleted(Vec<Vec<String>>, Vec<String>),
+    ExplainFailed(String),
+    DbInfoLoaded(DbInfo),
+    DbInfoFailed(String),
+    PragmasLoaded(Vec<PragmaEntry>),
+    PragmasFailed(String),
+    PragmaSet(String, String),
+    PragmaFailed(String, String), // (pragma_name, error_message)
+    WalCheckpointed(String),
+    WalCheckpointFailed(String),
+    IntegrityCheckCompleted(String),
+    IntegrityCheckFailed(String),
+    TransactionCommitted,
+    TransactionFailed(String),
+    ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
+    CustomTypesLoaded(Vec<CustomTypeInfo>),
+    RowCount(String, u64), // (table_name_lowercase, count)
+}
+
+/// Convert a turso Value to a display-ready `Option<String>`.
+/// Returns None for NULL (callers use None for "no value" semantics).
+pub fn value_to_display(val: &turso::Value) -> Option<String> {
+    match val {
+        turso::Value::Null => None,
+        turso::Value::Integer(n) => Some(n.to_string()),
+        turso::Value::Real(f) => Some(f.to_string()),
+        turso::Value::Text(s) => Some(s.clone()),
+        turso::Value::Blob(b) => Some(format!("[BLOB {} B]", b.len())),
+    }
+}

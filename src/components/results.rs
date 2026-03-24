@@ -6,6 +6,8 @@ use ratatui::widgets::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use tursotui_db::types::value_to_display;
+
 use crate::app::{Action, Direction};
 use crate::db::{ColumnDef, QueryResult};
 use crate::theme::Theme;
@@ -1018,17 +1020,6 @@ fn compare_non_null(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// Convert a `turso::Value` to a display string. Returns `None` for SQL NULL.
-pub(crate) fn value_to_display(val: &turso::Value) -> Option<String> {
-    match val {
-        turso::Value::Null => None,
-        turso::Value::Integer(n) => Some(n.to_string()),
-        turso::Value::Real(f) => Some(f.to_string()),
-        turso::Value::Text(s) => Some(s.clone()),
-        turso::Value::Blob(b) => Some(format!("[BLOB {} B]", b.len())),
-    }
-}
-
 /// Auto-size column widths: `max(header_width, longest_value_in_first_50_rows, MIN)`, capped at MAX.
 /// Uses unicode display widths for correct handling of multi-byte/wide characters.
 fn compute_column_widths(
@@ -1086,60 +1077,6 @@ mod tests {
             query_kind: QueryKind::Select,
             source_table: None,
         }
-    }
-
-    // --- value_to_display tests ---
-
-    #[test]
-    fn test_value_to_display_null() {
-        assert_eq!(value_to_display(&turso::Value::Null), None);
-    }
-
-    #[test]
-    fn test_value_to_display_integer() {
-        assert_eq!(
-            value_to_display(&turso::Value::Integer(42)),
-            Some("42".to_string())
-        );
-        assert_eq!(
-            value_to_display(&turso::Value::Integer(-7)),
-            Some("-7".to_string())
-        );
-    }
-
-    #[test]
-    fn test_value_to_display_real() {
-        assert_eq!(
-            value_to_display(&turso::Value::Real(1.5)),
-            Some("1.5".to_string())
-        );
-    }
-
-    #[test]
-    fn test_value_to_display_text() {
-        assert_eq!(
-            value_to_display(&turso::Value::Text("hello".to_string())),
-            Some("hello".to_string())
-        );
-    }
-
-    #[test]
-    fn test_value_to_display_blob() {
-        assert_eq!(
-            value_to_display(&turso::Value::Blob(vec![1, 2, 3])),
-            Some("[BLOB 3 B]".to_string())
-        );
-        assert_eq!(
-            value_to_display(&turso::Value::Blob(vec![])),
-            Some("[BLOB 0 B]".to_string())
-        );
-    }
-
-    #[test]
-    fn test_text_null_not_styled_as_sql_null() {
-        // A TEXT value "NULL" should be Some("NULL"), not None
-        let val = turso::Value::Text("NULL".to_string());
-        assert_eq!(value_to_display(&val), Some("NULL".to_string()));
     }
 
     // --- set_results tests ---

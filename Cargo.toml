@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/tursotui-sql"]
+members = [".", "crates/tursotui-sql", "crates/tursotui-db"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -54,6 +54,7 @@ repository = "https://github.com/mikeleppane/tursotui"
 [dependencies]
 # Internal crates
 tursotui-sql = { path = "crates/tursotui-sql" }
+tursotui-db = { path = "crates/tursotui-db" }
 
 # Database engine
 turso = { workspace = true }
