@@ -105,7 +105,6 @@ impl GoToObject {
                 Action::GoToObject(ObjectRef {
                     name: m.name.clone(),
                     kind: m.kind,
-                    parent: m.parent.clone(),
                     database_path: m.database_path.clone(),
                 })
             }),

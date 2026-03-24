@@ -228,7 +228,7 @@ fn run_loop(
 
 /// Drain all pending async messages and dispatch the resulting actions.
 fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
-    // Phase 1: collect all pending messages from ALL databases with their db_idx
+    // Step 1: collect all pending messages from ALL databases with their db_idx
     let mut pending: Vec<(usize, QueryMessage)> = Vec::new();
     for (db_idx, db) in app.databases.iter_mut().enumerate() {
         while let Some(msg) = db.handle.try_recv() {
@@ -236,7 +236,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
         }
     }
 
-    // Phase 2: process each, routing to the specific database
+    // Step 2: process each, routing to the specific database
     for (db_idx, msg) in pending {
         // Handle RowCount directly (needs db_idx routing, no Action needed)
         if let QueryMessage::RowCount(ref table, count) = msg {
