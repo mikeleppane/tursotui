@@ -681,14 +681,14 @@ fn dispatch_action_to_db(
                 // Empty where_clause = clear filter, re-run unfiltered
                 format!(
                     "SELECT * FROM {} LIMIT 100",
-                    crate::components::data_editor::quote_identifier(table)
+                    tursotui_sql::quoting::quote_identifier(table)
                 )
             } else {
                 // SAFETY: where_clause is raw user SQL input — intentionally unescaped.
                 // The user is writing SQL directly; escaping would break their intent.
                 format!(
                     "SELECT * FROM {} WHERE {} LIMIT 100",
-                    crate::components::data_editor::quote_identifier(table),
+                    tursotui_sql::quoting::quote_identifier(table),
                     where_clause
                 )
             };
@@ -713,7 +713,7 @@ fn dispatch_action_to_db(
             // Enrich source_table if not provided (Tier 2: parse from SQL)
             let mut enriched = result.clone();
             if enriched.source_table.is_none() {
-                enriched.source_table = components::data_editor::detect_source_table(&enriched.sql);
+                enriched.source_table = tursotui_sql::parser::detect_source_table(&enriched.sql);
             }
             db.results.set_results(&enriched);
             // Mark explain as stale with the executed SQL
@@ -759,7 +759,7 @@ fn dispatch_action_to_db(
             let source_table = if result.source_table.is_some() {
                 result.source_table.clone() // Tier 1: hint from ExecuteQuery
             } else {
-                components::data_editor::detect_source_table(&result.sql) // Tier 2: SQL parse
+                tursotui_sql::parser::detect_source_table(&result.sql) // Tier 2: SQL parse
             };
             if let Some(ref table) = source_table {
                 let entries = &app.databases[db_idx].schema_cache.entries;
@@ -807,7 +807,7 @@ fn dispatch_action_to_db(
                                 .find(|e| e.name == *table)
                             && let Some(ref sql) = entry.sql
                         {
-                            let fks = db::DatabaseHandle::parse_foreign_keys(sql);
+                            let fks = db::parse_foreign_keys(sql);
                             app.databases[db_idx]
                                 .schema_cache
                                 .fk_info
@@ -954,7 +954,7 @@ fn dispatch_action_to_db(
                             .find(|e| &e.name == table_name)
                         && let Some(ref sql) = entry.sql
                     {
-                        let fks = db::DatabaseHandle::parse_foreign_keys(sql);
+                        let fks = db::parse_foreign_keys(sql);
                         db.schema_cache
                             .fk_info
                             .insert(table_name.clone(), fks.clone());
@@ -1607,9 +1607,9 @@ fn dispatch_action_to_db(
             // Generate and dispatch the FK query
             let target_table = fk.to_table.clone();
             let target_col = fk.to_column;
-            let quoted_val = components::data_editor::quote_literal(&cell_val);
-            let quoted_table = components::data_editor::quote_identifier(&target_table);
-            let quoted_col = components::data_editor::quote_identifier(&target_col);
+            let quoted_val = tursotui_sql::quoting::quote_literal(&cell_val);
+            let quoted_table = tursotui_sql::quoting::quote_identifier(&target_table);
+            let quoted_col = tursotui_sql::quoting::quote_identifier(&target_col);
             let sql = format!("SELECT * FROM {quoted_table} WHERE {quoted_col} = {quoted_val}");
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)

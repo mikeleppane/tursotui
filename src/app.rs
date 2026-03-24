@@ -488,7 +488,7 @@ impl AppState {
                 db.last_execution_time = Some(result.execution_time);
                 db.last_row_count = Some(result.rows.len());
                 db.last_truncated = result.truncated;
-                db.last_query_kind = Some(result.query_kind.clone());
+                db.last_query_kind = Some(result.query_kind);
                 db.last_rows_affected = result.rows_affected;
             }
             Action::QueryFailed(_) => {

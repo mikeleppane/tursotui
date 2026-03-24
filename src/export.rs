@@ -8,6 +8,8 @@
     reason = "module wired incrementally -- public API used when export UI lands"
 )]
 
+use tursotui_sql::quoting::{quote_identifier, quote_literal};
+
 use crate::db::ColumnDef;
 
 /// Format rows as CSV (RFC 4180 quoting rules, LF line endings).
@@ -151,13 +153,13 @@ pub(crate) fn format_sql_insert(
 
     // Build the column list once: INSERT INTO "table" ("col1", "col2")
     let mut prefix = String::from("INSERT INTO ");
-    sql_quote_identifier(&mut prefix, table_name);
+    prefix.push_str(&quote_identifier(table_name));
     prefix.push_str(" (");
     for (i, col) in columns.iter().enumerate() {
         if i > 0 {
             prefix.push_str(", ");
         }
-        sql_quote_identifier(&mut prefix, &col.name);
+        prefix.push_str(&quote_identifier(&col.name));
     }
     prefix.push_str(") VALUES (");
 
@@ -173,7 +175,7 @@ pub(crate) fn format_sql_insert(
                     if looks_like_number(val) {
                         out.push_str(val);
                     } else {
-                        sql_quote_string(&mut out, val);
+                        out.push_str(&quote_literal(val));
                     }
                 }
             }
@@ -182,32 +184,6 @@ pub(crate) fn format_sql_insert(
     }
 
     out
-}
-
-/// Append a SQL double-quoted identifier, doubling internal `"`.
-fn sql_quote_identifier(out: &mut String, name: &str) {
-    out.push('"');
-    for ch in name.chars() {
-        if ch == '"' {
-            out.push_str("\"\"");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('"');
-}
-
-/// Append a SQL single-quoted string literal, doubling internal `'`.
-fn sql_quote_string(out: &mut String, value: &str) {
-    out.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            out.push_str("''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
 }
 
 /// Format rows as TSV (tab-separated values).

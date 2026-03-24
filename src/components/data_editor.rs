@@ -3,6 +3,8 @@ use std::collections::{HashMap, HashSet};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 
+use tursotui_sql::quoting::{format_value, quote_identifier, quote_literal};
+
 use super::Component;
 use super::cell_editor::CellEditor;
 use crate::app::Action;
@@ -56,144 +58,6 @@ pub(crate) struct EditRenderState {
 }
 
 // ---------------------------------------------------------------------------
-
-/// Strip SQL line comments (`-- ...`) and block comments (`/* ... */`).
-fn strip_comments(sql: &str) -> String {
-    let mut result = String::with_capacity(sql.len());
-    let chars: Vec<char> = sql.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        // Block comment
-        if i + 1 < len && chars[i] == '/' && chars[i + 1] == '*' {
-            i += 2;
-            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '/') {
-                i += 1;
-            }
-            // skip the closing */
-            if i + 1 < len {
-                i += 2;
-            }
-        // Line comment
-        } else if i + 1 < len && chars[i] == '-' && chars[i + 1] == '-' {
-            i += 2;
-            while i < len && chars[i] != '\n' {
-                i += 1;
-            }
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-
-    result
-}
-
-/// Detect whether a SQL query targets a single table and return that table name.
-///
-/// Returns `Some(table_name)` if the query is a simple single-table SELECT,
-/// or `None` if the query is too complex to edit safely.
-#[allow(dead_code)] // will be called when data editor UI lands in a later task
-pub(crate) fn detect_source_table(sql: &str) -> Option<String> {
-    let stripped = strip_comments(sql);
-    let trimmed = stripped.trim();
-
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let upper = trimmed.to_uppercase();
-
-    // Must start with SELECT (case-insensitive)
-    if !upper.starts_with("SELECT") {
-        return None;
-    }
-
-    // Reject queries with complexity keywords (simple string containment)
-    let reject_keywords = ["JOIN", "UNION", "INTERSECT", "EXCEPT", "GROUP BY", "WITH"];
-    for kw in &reject_keywords {
-        if upper.contains(kw) {
-            return None;
-        }
-    }
-
-    // Find FROM keyword position
-    // We search for FROM as a word boundary approximately — find " FROM " or similar
-    let from_pos = find_from_keyword(trimmed)?;
-
-    let after_from = trimmed[from_pos..].trim();
-
-    // Reject subquery in FROM: FROM (
-    if after_from.starts_with('(') {
-        return None;
-    }
-
-    // Extract the table name (possibly quoted)
-    Some(extract_table_name(after_from))
-}
-
-/// Find the position of the table name (the text after "FROM ") in `sql`.
-/// Returns the byte offset into `sql` of the text immediately after FROM and whitespace.
-fn find_from_keyword(sql: &str) -> Option<usize> {
-    let upper = sql.to_uppercase();
-    let bytes = upper.as_bytes();
-    let len = bytes.len();
-    let from_bytes = b"FROM";
-
-    let mut i = 0;
-    while i + 4 <= len {
-        if &bytes[i..i + 4] == from_bytes {
-            // Check that FROM is preceded by whitespace or start
-            let preceded_ok = i == 0 || bytes[i - 1].is_ascii_whitespace();
-            // Check that FROM is followed by whitespace or end
-            let followed_ok = i + 4 == len || bytes[i + 4].is_ascii_whitespace();
-
-            if preceded_ok && followed_ok {
-                // Skip "FROM" and leading whitespace
-                let mut pos = i + 4;
-                while pos < len && bytes[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
-                return Some(pos);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Extract a single table name from the beginning of `text`.
-/// Handles double-quoted and backtick-quoted names.
-/// Stops at whitespace, `;`, or end of string.
-fn extract_table_name(text: &str) -> String {
-    let mut chars = text.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-
-    if first == '"' || first == '`' {
-        let close = first;
-        let mut name = String::new();
-        for c in chars {
-            if c == close {
-                break;
-            }
-            name.push(c);
-        }
-        name
-    } else {
-        let mut name = String::new();
-        name.push(first);
-        for c in chars {
-            if c.is_ascii_whitespace() || c == ';' {
-                break;
-            }
-            name.push(c);
-        }
-        name
-    }
-}
 
 /// Returns `true` if `table` matches a view in `entries` (case-insensitive).
 #[allow(dead_code)] // will be called when data editor UI lands in a later task
@@ -441,47 +305,6 @@ impl ChangeLog {
 }
 
 // ---------------------------------------------------------------------------
-// SQL helpers
-// ---------------------------------------------------------------------------
-
-/// Wrap `name` in double-quotes, doubling any internal `"`.
-pub(crate) fn quote_identifier(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 2);
-    out.push('"');
-    for c in name.chars() {
-        if c == '"' {
-            out.push('"');
-        }
-        out.push(c);
-    }
-    out.push('"');
-    out
-}
-
-/// Wrap `value` in single-quotes, doubling any internal `'`.
-pub(crate) fn quote_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for c in value.chars() {
-        if c == '\'' {
-            out.push('\'');
-        }
-        out.push(c);
-    }
-    out.push('\'');
-    out
-}
-
-/// Format an `Option<&String>` as a SQL literal: `None` → `NULL`, `Some(v)` →
-/// `quote_literal(v)`.
-fn format_value(opt: Option<&String>) -> String {
-    match opt {
-        None => "NULL".to_string(),
-        Some(v) => quote_literal(v),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // DML generation
 // ---------------------------------------------------------------------------
 
@@ -517,7 +340,7 @@ pub(crate) fn generate_dml(
                             format!(
                                 "{} = {}",
                                 quote_identifier(&col.name),
-                                format_value(val.as_ref())
+                                format_value(val.as_deref())
                             )
                         })
                     })
@@ -544,7 +367,7 @@ pub(crate) fn generate_dml(
                 let val_list: Vec<String> = columns
                     .iter()
                     .enumerate()
-                    .map(|(i, _)| format_value(values.get(i).and_then(Option::as_ref)))
+                    .map(|(i, _)| format_value(values.get(i).and_then(Option::as_deref)))
                     .collect();
 
                 stmts.push(format!(
@@ -1107,164 +930,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // detect_source_table
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_simple_select_is_editable() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM users"),
-            Some("users".to_string())
-        );
-    }
-
-    #[test]
-    fn test_select_with_where_is_editable() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM users WHERE id = 1"),
-            Some("users".to_string())
-        );
-    }
-
-    #[test]
-    fn test_select_with_limit() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM \"users\" LIMIT 100;"),
-            Some("users".to_string())
-        );
-    }
-
-    #[test]
-    fn test_join_is_not_editable() {
-        assert_eq!(detect_source_table("SELECT * FROM users JOIN orders"), None);
-    }
-
-    #[test]
-    fn test_union_is_not_editable() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM users UNION SELECT * FROM admins"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_group_by_is_not_editable() {
-        assert_eq!(
-            detect_source_table("SELECT count(*) FROM users GROUP BY role"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_cte_is_not_editable() {
-        assert_eq!(
-            detect_source_table("WITH cte AS (SELECT * FROM users) SELECT * FROM cte"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_subquery_in_from_is_not_editable() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM (SELECT * FROM users)"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_non_select_is_not_editable() {
-        assert_eq!(detect_source_table("INSERT INTO users VALUES (1)"), None);
-    }
-
-    #[test]
-    fn test_select_with_comments_is_editable() {
-        assert_eq!(
-            detect_source_table("-- comment\nSELECT * FROM users"),
-            Some("users".to_string())
-        );
-    }
-
-    #[test]
-    fn test_block_comment() {
-        assert_eq!(
-            detect_source_table("/* comment */ SELECT * FROM users"),
-            Some("users".to_string())
-        );
-    }
-
-    #[test]
-    fn test_quoted_table_name() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM \"my table\""),
-            Some("my table".to_string())
-        );
-    }
-
-    #[test]
-    fn test_backtick_quoted_table_name() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM `my table`"),
-            Some("my table".to_string())
-        );
-    }
-
-    #[test]
-    fn test_case_insensitive_keywords() {
-        assert_eq!(
-            detect_source_table("select * from Users"),
-            Some("Users".to_string())
-        );
-    }
-
-    /// Per spec: keyword rejection is simple string containment (space-separated "GROUP BY").
-    /// The identifier `my_group_by_stats` uses underscores, so "GROUP BY" (with a space)
-    /// does NOT appear in the query — this table is correctly treated as editable.
-    /// This test documents the boundary: underscore-separated names are not false-negatives.
-    #[test]
-    fn test_keyword_in_identifier_false_negative() {
-        // "GROUP BY" (with space) is NOT in "my_group_by_stats" (underscores) → Some
-        assert_eq!(
-            detect_source_table("SELECT * FROM my_group_by_stats"),
-            Some("my_group_by_stats".to_string())
-        );
-    }
-
-    #[test]
-    fn test_intersect_rejected() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM a INTERSECT SELECT * FROM b"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_except_rejected() {
-        assert_eq!(
-            detect_source_table("SELECT * FROM a EXCEPT SELECT * FROM b"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_with_clause_rejected() {
-        assert_eq!(
-            detect_source_table("WITH t AS (SELECT 1) SELECT * FROM t"),
-            None
-        );
-    }
-
-    #[test]
-    fn test_empty_query() {
-        assert_eq!(detect_source_table(""), None);
-    }
-
-    #[test]
-    fn test_whitespace_only() {
-        assert_eq!(detect_source_table("   "), None);
-    }
-
-    // -------------------------------------------------------------------------
-    // find_pk_columns
+    // find_pk_columns  (detect_source_table tests live in tursotui-sql crate)
     // -------------------------------------------------------------------------
 
     #[test]

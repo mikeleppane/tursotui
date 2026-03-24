@@ -2934,8 +2934,13 @@ dependencies = [
  "tokio",
  "toml",
  "turso",
+ "tursotui-sql",
  "unicode-width 0.2.2",
 ]
+
+[[package]]
+name = "tursotui-sql"
+version = "0.1.0"
 
 [[package]]
 name = "twox-hash"

@@ -1,55 +1,16 @@
-[package]
-name = "tursotui"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
-description = "A keyboard-driven terminal UI for browsing, querying, and administering Turso and SQLite databases"
-repository = "https://github.com/mikeleppane/tursotui"
+[workspace]
+members = [".", "crates/tursotui-sql"]
+resolver = "2"
 
-[dependencies]
-# Database engine
+[workspace.dependencies]
 turso = { version = "0.6.0-pre.5", default-features = false }
-
-# TUI framework (0.30 includes crossterm re-export)
-ratatui = "0.30"
-
-# Async runtime — needed for turso's Builder::build().await
 tokio = { version = "1", features = ["full"] }
-
-# CLI argument parsing
-clap = { version = "4", features = ["derive"] }
-
-# Unicode display-width (transitive via ratatui, pinned for direct use)
 unicode-width = "0.2"
 
-# Clipboard access (copy cell/row)
-arboard = { version = "3", default-features = false }
-
-# JSON detection and pretty-printing in record detail
-serde_json = "1"
-
-# Config file support
-dirs = "6"
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
-
-[profile.dev]
-opt-level = 0
-debug = false
-incremental = true
-
-[profile.release]
-opt-level = 3
-debug = false
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 # Enable pedantic, then selectively allow noisy lints
 pedantic = { level = "warn", priority = -1 }
 
@@ -81,3 +42,57 @@ large_stack_frames = "deny"
 large_types_passed_by_value = "deny"
 redundant_clone = "deny"
 assigning_clones = "deny"
+
+[package]
+name = "tursotui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A keyboard-driven terminal UI for browsing, querying, and administering Turso and SQLite databases"
+repository = "https://github.com/mikeleppane/tursotui"
+
+[dependencies]
+# Internal crates
+tursotui-sql = { path = "crates/tursotui-sql" }
+
+# Database engine
+turso = { workspace = true }
+
+# TUI framework (0.30 includes crossterm re-export)
+ratatui = "0.30"
+
+# Async runtime — needed for turso's Builder::build().await
+tokio = { workspace = true }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Unicode display-width (transitive via ratatui, pinned for direct use)
+unicode-width = { workspace = true }
+
+# Clipboard access (copy cell/row)
+arboard = { version = "3", default-features = false }
+
+# JSON detection and pretty-printing in record detail
+serde_json = "1"
+
+# Config file support
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[lints]
+workspace = true
+
+[profile.dev]
+opt-level = 0
+debug = false
+incremental = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

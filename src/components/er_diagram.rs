@@ -4,9 +4,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use tursotui_sql::quoting::quote_identifier;
+
 use crate::app::{Action, BottomTab, Direction};
-use crate::components::data_editor::quote_identifier;
-use crate::db::{ColumnInfo, DatabaseHandle, SchemaEntry};
+use crate::db::{ColumnInfo, SchemaEntry, parse_foreign_keys};
 use crate::theme::Theme;
 
 use super::Component;
@@ -101,7 +102,7 @@ impl ERDiagram {
     /// `columns` maps table name → column list (from PRAGMA `table_info`).
     ///
     /// FK relationships are parsed from each table's `CREATE TABLE` SQL via
-    /// [`DatabaseHandle::parse_foreign_keys`] (static method — no db query).
+    /// [`parse_foreign_keys`] (from `tursotui-sql` crate — no db query).
     pub(crate) fn build_from_schema(
         &mut self,
         entries: &[SchemaEntry],
@@ -158,7 +159,7 @@ impl ERDiagram {
                 continue;
             };
 
-            let fks = DatabaseHandle::parse_foreign_keys(sql);
+            let fks = parse_foreign_keys(sql);
             for fk in fks {
                 let Some(&to_idx) = name_to_idx.get(fk.to_table.as_str()) else {
                     continue; // FK target table not in schema (e.g., dropped)

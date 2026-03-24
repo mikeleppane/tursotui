@@ -353,39 +353,16 @@ fn insert_cursor(text: &str, cursor_pos: usize) -> String {
     format!("{}_{}", &text[..byte_idx], &text[byte_idx..])
 }
 
-/// Extract a table name from SQL query (simple heuristic: first word after FROM).
-/// Uses ASCII case-insensitive search to avoid byte-length changes from `to_uppercase`.
+/// Best-effort table name extraction for export file naming.
+///
+/// Unlike `detect_source_table` (which rejects complex queries), this always
+/// tries to extract the first table name after FROM — even from JOINs, GROUP BYs,
+/// etc. Falls back to `"table_name"` only when no FROM clause is found.
 pub(crate) fn infer_table_name(sql: &str) -> String {
-    // Find "FROM" case-insensitively using ASCII word-boundary matching.
-    // Avoids to_uppercase() which can change byte lengths for non-ASCII chars.
-    let bytes = sql.as_bytes();
-    let from_pos = (0..bytes.len().saturating_sub(3)).find(|&i| {
-        bytes[i..i + 4].eq_ignore_ascii_case(b"FROM")
-            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
-            && (i + 4 >= bytes.len() || !bytes[i + 4].is_ascii_alphanumeric())
-    });
-    if let Some(from_pos) = from_pos {
-        let after_from = &sql[from_pos + 4..];
-        let trimmed = after_from.trim_start();
-        // Handle quoted identifiers: scan to closing quote
-        if let Some(stripped) = trimmed.strip_prefix('"')
-            && let Some(end) = stripped.find('"')
-        {
-            let name = &stripped[..end];
-            if !name.is_empty() {
-                return name.to_string();
-            }
-        }
-        // Unquoted identifier: alphanumeric + underscore
-        let table: String = trimmed
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if !table.is_empty() {
-            return table;
-        }
-    }
-    "table_name".to_string()
+    tursotui_sql::parser::find_from_keyword(sql)
+        .map(|pos| tursotui_sql::parser::extract_table_name(&sql[pos..]))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "table_name".to_string())
 }
 
 #[cfg(test)]
@@ -413,5 +390,23 @@ mod tests {
     #[test]
     fn infer_quoted_table() {
         assert_eq!(infer_table_name("SELECT * FROM \"my table\""), "my table");
+    }
+
+    #[test]
+    fn infer_join_query_extracts_first_table() {
+        // Best-effort: extracts the first table even from JOINs
+        assert_eq!(
+            infer_table_name("SELECT * FROM users JOIN orders ON users.id = orders.user_id"),
+            "users"
+        );
+    }
+
+    #[test]
+    fn infer_group_by_extracts_table() {
+        // Best-effort: extracts table even from GROUP BY queries
+        assert_eq!(
+            infer_table_name("SELECT count(*) FROM orders GROUP BY status"),
+            "orders"
+        );
     }
 }

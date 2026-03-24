@@ -1,0 +1,11 @@
+[package]
+name = "tursotui-sql"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Intentionally empty — this crate is pure logic with zero runtime deps.
+
+[lints]
+workspace = true

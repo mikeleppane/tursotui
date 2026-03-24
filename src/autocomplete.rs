@@ -10,6 +10,11 @@
 
 use std::collections::HashMap;
 
+use tursotui_sql::keywords::{
+    CLAUSE_KEYWORDS, COLUMN_CONTEXT_KEYWORDS, FILTER_KEYWORDS, JOIN_QUALIFIER_KEYWORDS,
+    SQL_FUNCTIONS, STATEMENT_KEYWORDS, TABLE_CONTEXT_KEYWORDS,
+};
+
 use crate::app::SchemaCache;
 
 /// A single completion candidate.
@@ -55,172 +60,11 @@ pub(crate) enum CompletionContext {
     NoSuggestion,
 }
 
-/// SQL keywords that directly introduce a table name (the next token is a table).
-const TABLE_CONTEXT_KEYWORDS: &[&str] = &["FROM", "JOIN", "INTO", "UPDATE", "TABLE"];
-
-/// Join qualifier keywords — after these the next expected token is `JOIN`, not a table.
-const JOIN_QUALIFIER_KEYWORDS: &[&str] = &["INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "NATURAL"];
-
 /// Combined: any keyword that's part of a table-referencing clause.
 /// Used by alias resolution and `is_in_table_list` to scan backward through FROM/JOIN.
 fn is_table_clause_keyword(word: &str) -> bool {
     TABLE_CONTEXT_KEYWORDS.contains(&word) || JOIN_QUALIFIER_KEYWORDS.contains(&word)
 }
-
-/// SQL keywords that introduce a column/expression context.
-const COLUMN_CONTEXT_KEYWORDS: &[&str] = &[
-    "SELECT", "WHERE", "ON", "SET", "AND", "OR", "HAVING", "ORDER", "GROUP", "BY",
-];
-
-/// SQL keywords offered at statement start.
-const STATEMENT_KEYWORDS: &[&str] = &[
-    "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP", "WITH", "EXPLAIN", "PRAGMA",
-    "BEGIN", "COMMIT", "ROLLBACK", "ATTACH", "DETACH", "VACUUM", "ANALYZE", "REINDEX",
-];
-
-/// SQL clause keywords offered in expression context.
-const CLAUSE_KEYWORDS: &[&str] = &[
-    "SELECT",
-    "FROM",
-    "WHERE",
-    "JOIN",
-    "INNER",
-    "LEFT",
-    "RIGHT",
-    "OUTER",
-    "CROSS",
-    "ON",
-    "AS",
-    "IN",
-    "IS",
-    "NOT",
-    "NULL",
-    "LIKE",
-    "BETWEEN",
-    "EXISTS",
-    "CASE",
-    "WHEN",
-    "THEN",
-    "ELSE",
-    "END",
-    "AND",
-    "OR",
-    "ORDER",
-    "BY",
-    "GROUP",
-    "HAVING",
-    "LIMIT",
-    "OFFSET",
-    "UNION",
-    "INTERSECT",
-    "EXCEPT",
-    "DISTINCT",
-    "ALL",
-    "ASC",
-    "DESC",
-    "INTO",
-    "VALUES",
-    "SET",
-    "DEFAULT",
-];
-
-/// SQL functions offered in expression context.
-const SQL_FUNCTIONS: &[&str] = &[
-    "COUNT",
-    "SUM",
-    "AVG",
-    "MIN",
-    "MAX",
-    "TOTAL",
-    "GROUP_CONCAT",
-    "ABS",
-    "COALESCE",
-    "IFNULL",
-    "IIF",
-    "NULLIF",
-    "TYPEOF",
-    "LENGTH",
-    "LOWER",
-    "UPPER",
-    "TRIM",
-    "LTRIM",
-    "RTRIM",
-    "REPLACE",
-    "SUBSTR",
-    "SUBSTRING",
-    "INSTR",
-    "HEX",
-    "QUOTE",
-    "RANDOM",
-    "ROUND",
-    "CAST",
-    "DATE",
-    "TIME",
-    "DATETIME",
-    "STRFTIME",
-    "JULIANDAY",
-    "JSON",
-    "JSON_EXTRACT",
-    "JSON_ARRAY",
-    "JSON_OBJECT",
-    "JSON_TYPE",
-    "JSON_VALID",
-    "JSON_GROUP_ARRAY",
-    "JSON_GROUP_OBJECT",
-    "JSON_EACH",
-    "JSON_TREE",
-    "JSON_INSERT",
-    "JSON_REPLACE",
-    "JSON_SET",
-    "JSON_REMOVE",
-    "JSON_PATCH",
-    "PRINTF",
-    "UNICODE",
-    "ZEROBLOB",
-    "RANDOMBLOB",
-    "LIKELIHOOD",
-    "LIKELY",
-    "UNLIKELY",
-    // Turso/libsql-specific functions
-    "UUID4",
-    "UUID7",
-    "UUID7_TIMESTAMP_MS",
-    "UUID_STR",
-    "UUID_BLOB",
-    "VECTOR32",
-    "VECTOR64",
-    "VECTOR_DISTANCE_COS",
-    "VECTOR_DISTANCE_L2",
-    "VECTOR_EXTRACT",
-    "VECTOR_CONCAT",
-    "VECTOR_SLICE",
-    "VECTOR_DIMENSION",
-    "VECTOR_TOP_K",
-    "LIBSQL_VECTOR_IDX",
-    "TIME_NOW",
-    "TIME_DATE",
-    "TIME_UNIX",
-    "TIME_ADD",
-    "TIME_SUB",
-    "TIME_FMT_ISO",
-    "TIME_FMT_DATETIME",
-    "TIME_FMT_UNIXEPOCH",
-    "REGEXP_SUBSTR",
-    "REGEXP_CAPTURE",
-    "REGEXP_REPLACE",
-    "FTS_MATCH",
-    "FTS_SCORE",
-    "FTS_HIGHLIGHT",
-    "MEDIAN",
-    "PERCENTILE",
-    "PERCENTILE_CONT",
-    "PERCENTILE_DISC",
-    "GENERATE_SERIES",
-    "STDDEV",
-    "TIMEDIFF",
-    "TABLE_COLUMNS_JSON_ARRAY",
-    "BIN_RECORD_JSON_OBJECT",
-];
 
 // ─── Context Detection ──────────────────────────────────────────────────────
 
@@ -574,36 +418,7 @@ fn is_sql_keyword(word: &str) -> bool {
     TABLE_CONTEXT_KEYWORDS.contains(&word)
         || JOIN_QUALIFIER_KEYWORDS.contains(&word)
         || COLUMN_CONTEXT_KEYWORDS.contains(&word)
-        || matches!(
-            word,
-            "AS" | "ON"
-                | "WHERE"
-                | "HAVING"
-                | "LIMIT"
-                | "OFFSET"
-                | "ORDER"
-                | "GROUP"
-                | "UNION"
-                | "INTERSECT"
-                | "EXCEPT"
-                | "VALUES"
-                | "SET"
-                | "DEFAULT"
-                | "NOT"
-                | "NULL"
-                | "AND"
-                | "OR"
-                | "IN"
-                | "IS"
-                | "LIKE"
-                | "BETWEEN"
-                | "EXISTS"
-                | "CASE"
-                | "WHEN"
-                | "THEN"
-                | "ELSE"
-                | "END"
-        )
+        || FILTER_KEYWORDS.contains(&word)
 }
 
 /// Extract table names referenced in the query (resolved from aliases).
