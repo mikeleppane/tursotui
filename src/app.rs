@@ -718,3 +718,228 @@ impl AppState {
         self.update_for_db(active, action);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    async fn test_app_state() -> AppState {
+        let handle = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
+        let config = AppConfig::default();
+        let db_ctx = DatabaseContext::new(handle, ":memory:".into(), &config);
+        AppState::new(vec![db_ctx], config, None)
+    }
+
+    async fn two_db_app_state() -> AppState {
+        let h1 = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
+        let h2 = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
+        let config = AppConfig::default();
+        let db1 = DatabaseContext::new(h1, "db1.sqlite".into(), &config);
+        let db2 = DatabaseContext::new(h2, "db2.sqlite".into(), &config);
+        AppState::new(vec![db1, db2], config, None)
+    }
+
+    #[tokio::test]
+    async fn update_quit_sets_should_quit() {
+        let mut app = test_app_state().await;
+        assert!(!app.should_quit);
+        app.update(&Action::Quit);
+        assert!(app.should_quit, "Quit action should set should_quit");
+    }
+
+    #[tokio::test]
+    async fn update_show_help_toggles_overlay() {
+        let mut app = test_app_state().await;
+        assert!(app.active_overlay.is_none());
+
+        app.update(&Action::ShowHelp);
+        assert_eq!(app.active_overlay, Some(Overlay::Help));
+
+        app.update(&Action::ShowHelp);
+        assert!(app.active_overlay.is_none(), "ShowHelp again should close");
+    }
+
+    #[tokio::test]
+    async fn update_show_history_toggles_overlay() {
+        let mut app = test_app_state().await;
+        app.update(&Action::ShowHistory);
+        assert_eq!(app.active_overlay, Some(Overlay::History));
+
+        app.update(&Action::ShowHistory);
+        assert!(app.active_overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_set_transient_stores_message() {
+        let mut app = test_app_state().await;
+        app.update(&Action::SetTransient("test msg".into(), false));
+        let tm = app.transient_message.as_ref().unwrap();
+        assert_eq!(tm.text, "test msg");
+        assert!(!tm.is_error);
+    }
+
+    #[tokio::test]
+    async fn update_set_transient_error_flag() {
+        let mut app = test_app_state().await;
+        app.update(&Action::SetTransient("error!".into(), true));
+        assert!(app.transient_message.as_ref().unwrap().is_error);
+    }
+
+    #[tokio::test]
+    async fn update_switch_sub_tab() {
+        let mut app = test_app_state().await;
+        assert_eq!(app.active_db().sub_tab, SubTab::Query);
+        app.update(&Action::SwitchSubTab(SubTab::Admin));
+        assert_eq!(app.active_db().sub_tab, SubTab::Admin);
+    }
+
+    #[tokio::test]
+    async fn update_switch_bottom_tab() {
+        let mut app = test_app_state().await;
+        assert_eq!(app.active_db().bottom_tab, BottomTab::Results);
+        app.update(&Action::SwitchBottomTab(BottomTab::Explain));
+        assert_eq!(app.active_db().bottom_tab, BottomTab::Explain);
+    }
+
+    #[tokio::test]
+    async fn update_toggle_sidebar() {
+        let mut app = test_app_state().await;
+        let initial = app.active_db().sidebar_visible;
+        app.update(&Action::ToggleSidebar);
+        assert_ne!(app.active_db().sidebar_visible, initial);
+    }
+
+    #[tokio::test]
+    async fn update_toggle_theme_changes_theme() {
+        let mut app = test_app_state().await;
+        let original_bg = app.theme.bg;
+        app.update(&Action::ToggleTheme);
+        assert_ne!(
+            original_bg, app.theme.bg,
+            "theme background should change after toggle"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_toggle_theme_round_trips() {
+        let mut app = test_app_state().await;
+        let original_bg = app.theme.bg;
+        app.update(&Action::ToggleTheme);
+        app.update(&Action::ToggleTheme);
+        assert_eq!(
+            original_bg, app.theme.bg,
+            "double toggle should restore original theme"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_switch_database() {
+        let mut app = two_db_app_state().await;
+        assert_eq!(app.active_db, 0);
+        app.update(&Action::SwitchDatabase(1));
+        assert_eq!(app.active_db, 1);
+    }
+
+    #[tokio::test]
+    async fn update_switch_database_out_of_bounds_ignored() {
+        let mut app = two_db_app_state().await;
+        app.update(&Action::SwitchDatabase(99));
+        assert_eq!(app.active_db, 0, "out-of-bounds index should be ignored");
+    }
+
+    #[tokio::test]
+    async fn update_next_database_wraps() {
+        let mut app = two_db_app_state().await;
+        app.active_db = 1;
+        app.update(&Action::NextDatabase);
+        assert_eq!(app.active_db, 0, "should wrap around to first database");
+    }
+
+    #[tokio::test]
+    async fn update_prev_database_wraps() {
+        let mut app = two_db_app_state().await;
+        assert_eq!(app.active_db, 0);
+        app.update(&Action::PrevDatabase);
+        assert_eq!(app.active_db, 1, "should wrap around to last database");
+    }
+
+    #[tokio::test]
+    async fn update_close_active_database_prevents_closing_last() {
+        let mut app = test_app_state().await;
+        assert_eq!(app.databases.len(), 1);
+        app.update(&Action::CloseActiveDatabase);
+        assert_eq!(app.databases.len(), 1, "should not close the last database");
+        assert!(
+            app.transient_message.is_some(),
+            "should set a transient message"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_close_active_database_removes_db() {
+        let mut app = two_db_app_state().await;
+        assert_eq!(app.databases.len(), 2);
+        app.update(&Action::CloseActiveDatabase);
+        assert_eq!(app.databases.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_resize_sidebar_clamps() {
+        let mut app = test_app_state().await;
+        assert_eq!(app.active_db().sidebar_pct, 20);
+
+        // Shrink below minimum (10)
+        app.update(&Action::ResizeSidebar(-50));
+        assert_eq!(app.active_db().sidebar_pct, 10, "should clamp at 10");
+
+        // Grow above maximum (50)
+        app.update(&Action::ResizeSidebar(100));
+        assert_eq!(app.active_db().sidebar_pct, 50, "should clamp at 50");
+    }
+
+    #[tokio::test]
+    async fn update_resize_editor_clamps() {
+        let mut app = test_app_state().await;
+        assert_eq!(app.active_db().editor_pct, 40);
+
+        app.update(&Action::ResizeEditor(-100));
+        assert_eq!(app.active_db().editor_pct, 20, "should clamp at 20");
+
+        app.update(&Action::ResizeEditor(200));
+        assert_eq!(app.active_db().editor_pct, 80, "should clamp at 80");
+    }
+
+    #[tokio::test]
+    async fn update_show_ddl_sets_viewer_and_overlay() {
+        let mut app = test_app_state().await;
+        app.update(&Action::ShowDdl {
+            name: "users".into(),
+            sql: "CREATE TABLE users (id INT)".into(),
+        });
+        assert_eq!(app.active_overlay, Some(Overlay::DdlViewer));
+        let viewer = app.ddl_viewer.as_ref().unwrap();
+        assert_eq!(viewer.object_name, "users");
+        assert_eq!(viewer.sql, "CREATE TABLE users (id INT)");
+        assert_eq!(viewer.scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn update_recall_history_clears_overlay() {
+        let mut app = test_app_state().await;
+        app.active_overlay = Some(Overlay::History);
+        app.update(&Action::RecallHistory("SELECT 1".into()));
+        assert!(app.active_overlay.is_none(), "overlay should be cleared");
+    }
+
+    #[tokio::test]
+    async fn update_show_bookmarks_requires_history_db() {
+        let mut app = test_app_state().await;
+        // history_db is None in test — ShowBookmarks should be a no-op
+        app.update(&Action::ShowBookmarks);
+        assert!(
+            app.active_overlay.is_none(),
+            "bookmarks should not open without history_db"
+        );
+    }
+}

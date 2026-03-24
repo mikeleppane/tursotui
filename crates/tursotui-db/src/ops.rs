@@ -214,7 +214,9 @@ impl DatabaseHandle {
             let tx_panic = tx.clone();
             let handle = tokio::spawn(async move {
                 let conn = db.connect()?;
-                conn.execute("PRAGMA defer_foreign_keys = ON", ()).await?;
+                // Note: PRAGMA defer_foreign_keys is NOT supported by turso/libsql
+                // (returns "Not a valid pragma name"). FK checks run immediately
+                // per-statement, so DML order must respect FK dependencies.
                 conn.execute("BEGIN", ()).await?;
                 for stmt in &statements {
                     if let Err(e) = conn.execute(stmt, ()).await {
@@ -253,5 +255,120 @@ mod tests {
             result.is_none(),
             "ok result should not produce a QueryResult"
         );
+    }
+
+    async fn recv_timeout(handle: &mut DatabaseHandle) -> QueryMessage {
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle.recv())
+            .await
+            .expect("recv timed out after 2s")
+            .expect("channel closed unexpectedly")
+    }
+
+    #[tokio::test]
+    async fn explain_returns_bytecode_and_plan() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)", ())
+            .await
+            .unwrap();
+
+        handle.explain("SELECT * FROM t WHERE id = 1".into());
+        match recv_timeout(&mut handle).await {
+            QueryMessage::ExplainCompleted(bytecode, plan) => {
+                assert!(!bytecode.is_empty(), "EXPLAIN should produce bytecode rows");
+                assert!(
+                    !plan.is_empty(),
+                    "EXPLAIN QUERY PLAN should produce plan lines"
+                );
+            }
+            QueryMessage::ExplainFailed(e) => panic!("explain failed: {e}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn explain_invalid_sql_returns_failed() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        handle.explain("NOT VALID SQL {{{".into());
+        let msg = recv_timeout(&mut handle).await;
+        assert!(
+            matches!(msg, QueryMessage::ExplainFailed(_)),
+            "invalid SQL should return ExplainFailed"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_transaction_commits_all_statements() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", ())
+            .await
+            .unwrap();
+
+        handle.execute_transaction(vec![
+            "INSERT INTO t VALUES (1, 'a')".into(),
+            "INSERT INTO t VALUES (2, 'b')".into(),
+        ]);
+        match recv_timeout(&mut handle).await {
+            QueryMessage::TransactionCommitted => {
+                let mut rows = conn.query("SELECT COUNT(*) FROM t", ()).await.unwrap();
+                let row = rows.next().await.unwrap().unwrap();
+                let count: i64 = row.get(0).unwrap();
+                assert_eq!(count, 2, "both inserts should be committed");
+            }
+            QueryMessage::TransactionFailed(e) => panic!("transaction failed: {e}"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_transaction_rolls_back_on_error() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute("INSERT INTO t VALUES (1, 'existing')", ())
+            .await
+            .unwrap();
+
+        handle.execute_transaction(vec![
+            "INSERT INTO t VALUES (2, 'good')".into(),
+            "INSERT INTO t VALUES (3, NULL)".into(), // NOT NULL violation
+        ]);
+        match recv_timeout(&mut handle).await {
+            QueryMessage::TransactionFailed(_) => {
+                // Verify rollback: only original row should exist
+                let mut rows = conn.query("SELECT COUNT(*) FROM t", ()).await.unwrap();
+                let row = rows.next().await.unwrap().unwrap();
+                let count: i64 = row.get(0).unwrap();
+                assert_eq!(count, 1, "transaction should have rolled back");
+            }
+            QueryMessage::TransactionCommitted => {
+                panic!("transaction with NOT NULL violation should not commit")
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wal_checkpoint_completes_without_panic() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        handle.wal_checkpoint();
+        // In-memory DB may or may not support WAL checkpoint
+        let msg = recv_timeout(&mut handle).await;
+        match msg {
+            QueryMessage::WalCheckpointed(result) => {
+                assert!(!result.is_empty(), "checkpoint result should have content");
+            }
+            QueryMessage::WalCheckpointFailed(e) => {
+                // Acceptable for in-memory DB
+                assert!(!e.is_empty(), "error should have content");
+            }
+            other => panic!("unexpected message type: {other:?}"),
+        }
     }
 }

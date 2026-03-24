@@ -288,4 +288,121 @@ mod tests {
         assert_eq!(DatabaseHandle::extract_type_name("email"), "email");
         assert_eq!(DatabaseHandle::extract_type_name("INTEGER"), "INTEGER");
     }
+
+    // ── Integration tests via DatabaseHandle ─────────────────────────
+
+    async fn recv_timeout(handle: &mut DatabaseHandle) -> QueryMessage {
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle.recv())
+            .await
+            .expect("recv timed out after 2s")
+            .expect("channel closed unexpectedly")
+    }
+
+    #[tokio::test]
+    async fn load_schema_returns_user_tables() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", ())
+            .await
+            .unwrap();
+
+        handle.load_schema();
+        match recv_timeout(&mut handle).await {
+            QueryMessage::SchemaLoaded(entries) => {
+                let user_table = entries.iter().find(|e| e.name == "users");
+                assert!(user_table.is_some(), "users table should appear in schema");
+                assert_eq!(user_table.unwrap().obj_type, "table");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_schema_excludes_internal_tables() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        handle.load_schema();
+        match recv_timeout(&mut handle).await {
+            QueryMessage::SchemaLoaded(entries) => {
+                let internal = entries.iter().find(|e| e.name.starts_with("sqlite_"));
+                assert!(internal.is_none(), "sqlite_ tables should be filtered out");
+                let turso = entries.iter().find(|e| e.name.starts_with("__turso_"));
+                assert!(turso.is_none(), "__turso_ tables should be filtered out");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_columns_returns_column_info() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, price REAL DEFAULT 0.0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        handle.load_columns("items".into());
+        match recv_timeout(&mut handle).await {
+            QueryMessage::ColumnsLoaded(table, cols) => {
+                assert_eq!(table, "items");
+                assert_eq!(cols.len(), 3, "items should have 3 columns");
+                let id_col = cols.iter().find(|c| c.name == "id").unwrap();
+                assert!(id_col.pk, "id should be primary key");
+                let name_col = cols.iter().find(|c| c.name == "name").unwrap();
+                assert!(name_col.notnull, "name should be NOT NULL");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_columns_handles_sql_keyword_table_name() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute(
+            "CREATE TABLE \"select\" (id INTEGER PRIMARY KEY, \"from\" TEXT)",
+            (),
+        )
+        .await
+        .unwrap();
+
+        handle.load_columns("select".into());
+        match recv_timeout(&mut handle).await {
+            QueryMessage::ColumnsLoaded(table, cols) => {
+                assert_eq!(table, "select", "table name should preserve SQL keyword");
+                assert_eq!(cols.len(), 2);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_row_counts_returns_counts_per_table() {
+        let mut handle = DatabaseHandle::open(":memory:").await.unwrap();
+        let conn = handle.connect().unwrap();
+        conn.execute("CREATE TABLE a (id INTEGER PRIMARY KEY)", ())
+            .await
+            .unwrap();
+        conn.execute("CREATE TABLE b (id INTEGER PRIMARY KEY)", ())
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO a VALUES (1)", ()).await.unwrap();
+        conn.execute("INSERT INTO a VALUES (2)", ()).await.unwrap();
+        conn.execute("INSERT INTO b VALUES (1)", ()).await.unwrap();
+
+        handle.load_row_counts(&["a".into(), "b".into()]);
+
+        // Two independent tasks spawned — collect both messages
+        let mut counts = std::collections::HashMap::new();
+        for _ in 0..2 {
+            let msg = recv_timeout(&mut handle).await;
+            if let QueryMessage::RowCount(table, count) = msg {
+                counts.insert(table, count);
+            }
+        }
+        assert_eq!(counts.get("a"), Some(&2), "table a should have 2 rows");
+        assert_eq!(counts.get("b"), Some(&1), "table b should have 1 row");
+    }
 }

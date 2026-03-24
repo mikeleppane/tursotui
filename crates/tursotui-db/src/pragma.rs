@@ -262,3 +262,150 @@ impl DatabaseHandle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::QueryMessage;
+
+    async fn test_handle() -> DatabaseHandle {
+        DatabaseHandle::open(":memory:").await.unwrap()
+    }
+
+    async fn recv_timeout(handle: &mut DatabaseHandle) -> QueryMessage {
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle.recv())
+            .await
+            .expect("recv timed out after 2s")
+            .expect("channel closed unexpectedly")
+    }
+
+    // ── load_pragmas ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn load_pragmas_returns_entries() {
+        let mut handle = test_handle().await;
+        handle.load_pragmas();
+
+        let msg = recv_timeout(&mut handle).await;
+        match msg {
+            QueryMessage::PragmasLoaded(entries) => {
+                assert!(
+                    !entries.is_empty(),
+                    "in-memory DB should report some pragmas"
+                );
+                let cache_size = entries.iter().find(|e| e.name == "cache_size");
+                assert!(cache_size.is_some(), "cache_size pragma should be present");
+                assert!(
+                    cache_size.unwrap().writable,
+                    "cache_size should be writable"
+                );
+            }
+            QueryMessage::PragmasFailed(e) => panic!("load_pragmas failed: {e}"),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_pragmas_includes_readonly_pragmas() {
+        let mut handle = test_handle().await;
+        handle.load_pragmas();
+
+        let msg = recv_timeout(&mut handle).await;
+        match msg {
+            QueryMessage::PragmasLoaded(entries) => {
+                let journal_mode = entries.iter().find(|e| e.name == "journal_mode");
+                assert!(journal_mode.is_some(), "journal_mode should be present");
+                assert!(
+                    !journal_mode.unwrap().writable,
+                    "journal_mode should be read-only"
+                );
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    // ── set_pragma ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn set_pragma_updates_value() {
+        let mut handle = test_handle().await;
+        handle.set_pragma("cache_size".into(), "4000".into());
+
+        let msg = recv_timeout(&mut handle).await;
+        match msg {
+            QueryMessage::PragmaSet(name, value) => {
+                assert_eq!(name, "cache_size");
+                assert!(!value.is_empty(), "confirmed value should not be empty");
+            }
+            QueryMessage::PragmaFailed(name, e) => panic!("set_pragma {name} failed: {e}"),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_pragma_rejects_non_writable_pragma() {
+        let mut handle = test_handle().await;
+        handle.set_pragma("page_size".into(), "4096".into());
+
+        let msg = recv_timeout(&mut handle).await;
+        assert!(
+            matches!(msg, QueryMessage::PragmaFailed(_, _)),
+            "non-writable pragma should be rejected"
+        );
+    }
+
+    // ── load_db_info ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn load_db_info_returns_info() {
+        let mut handle = test_handle().await;
+        // Path is display-only — the DB inspected is always the one from the handle
+        handle.load_db_info(":memory:".into());
+
+        let msg = recv_timeout(&mut handle).await;
+        match msg {
+            QueryMessage::DbInfoLoaded(info) => {
+                assert!(info.page_size > 0, "page size should be positive");
+                assert!(!info.encoding.is_empty(), "encoding should be reported");
+                assert_eq!(info.file_path, ":memory:");
+                assert!(info.file_size.is_none(), "in-memory DB has no file size");
+            }
+            QueryMessage::DbInfoFailed(e) => panic!("load_db_info failed: {e}"),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    // ── pragma_i64 / pragma_string helpers ────────────────────────────
+
+    #[tokio::test]
+    async fn pragma_i64_reads_cache_size() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        let val = DatabaseHandle::pragma_i64(&conn, "cache_size")
+            .await
+            .unwrap();
+        assert_ne!(val, 0, "cache_size should have a non-zero default");
+    }
+
+    #[tokio::test]
+    async fn pragma_string_reads_journal_mode() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        let val = DatabaseHandle::pragma_string(&conn, "journal_mode")
+            .await
+            .unwrap();
+        assert!(!val.is_empty(), "journal_mode should return a string");
+    }
+
+    #[tokio::test]
+    async fn pragma_i64_unsupported_pragma_returns_error() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        // Turso returns "Not a valid pragma name" for unknown pragmas
+        let result = DatabaseHandle::pragma_i64(&conn, "nonexistent_pragma_xyz").await;
+        assert!(
+            result.is_err(),
+            "unsupported pragma name should return an error from turso"
+        );
+    }
+}
