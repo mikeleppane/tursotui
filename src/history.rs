@@ -87,11 +87,22 @@ impl HistoryDb {
             .await
             .map_err(|e| format!("failed to open history db: {e}"))?;
 
-        // Create schema
         let conn = database
             .connect()
             .map_err(|e| format!("failed to connect to history db: {e}"))?;
+        Self::create_schema(&conn).await?;
 
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+        Ok(Self {
+            database: Arc::new(database),
+            result_tx,
+            result_rx,
+        })
+    }
+
+    /// Create the history and bookmarks schema. Idempotent (`IF NOT EXISTS`).
+    async fn create_schema(conn: &turso::Connection) -> Result<(), String> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS query_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,13 +162,7 @@ impl HistoryDb {
         .await
         .map_err(|e| format!("failed to create bookmarks unique index: {e}"))?;
 
-        let (result_tx, result_rx) = mpsc::unbounded_channel();
-
-        Ok(Self {
-            database: Arc::new(database),
-            result_tx,
-            result_rx,
-        })
+        Ok(())
     }
 
     /// Insert a query log entry. Fire-and-forget: errors are silently dropped.
@@ -482,6 +487,12 @@ impl HistoryDb {
     pub(crate) fn try_recv(&mut self) -> Option<HistoryMessage> {
         self.result_rx.try_recv().ok()
     }
+
+    /// Wait for a completed result (async, blocking).
+    #[cfg(test)]
+    async fn recv(&mut self) -> Option<HistoryMessage> {
+        self.result_rx.recv().await
+    }
 }
 
 /// Extract a `BookmarkEntry` from a query result row.
@@ -545,4 +556,242 @@ fn row_to_entry(row: &turso::Row) -> Result<HistoryEntry, String> {
         error_message,
         origin,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create a `HistoryDb` backed by an in-memory database for testing.
+    /// Uses the same `create_schema()` as production `open()` — no schema duplication.
+    async fn test_history_db() -> HistoryDb {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        HistoryDb::create_schema(&conn).await.unwrap();
+
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+        HistoryDb {
+            database: Arc::new(db),
+            result_tx,
+            result_rx,
+        }
+    }
+
+    async fn recv_timeout(db: &mut HistoryDb) -> HistoryMessage {
+        tokio::time::timeout(std::time::Duration::from_secs(2), db.recv())
+            .await
+            .expect("recv timed out after 2s")
+            .expect("channel closed unexpectedly")
+    }
+
+    #[test]
+    fn history_entry_is_error_when_has_error_message() {
+        let entry = HistoryEntry {
+            id: 1,
+            sql: "SELECT 1".into(),
+            database_path: "test.db".into(),
+            timestamp: "2024-01-01".into(),
+            execution_time_ms: Some(5),
+            row_count: Some(1),
+            error_message: Some("fail".into()),
+            origin: "editor".into(),
+        };
+        assert!(entry.is_error());
+    }
+
+    #[test]
+    fn history_entry_is_not_error_when_no_error_message() {
+        let entry = HistoryEntry {
+            id: 1,
+            sql: "SELECT 1".into(),
+            database_path: "test.db".into(),
+            timestamp: "2024-01-01".into(),
+            execution_time_ms: Some(5),
+            row_count: Some(1),
+            error_message: None,
+            origin: "editor".into(),
+        };
+        assert!(!entry.is_error());
+    }
+
+    #[tokio::test]
+    async fn log_and_load_round_trip() {
+        let mut db = test_history_db().await;
+
+        db.log_query(LogEntry {
+            sql: "SELECT 1".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 5,
+            row_count: 1,
+            error_message: None,
+            origin: "editor",
+        });
+
+        // log_query is fire-and-forget — no acknowledgement message.
+        // Wait for the spawned INSERT task to complete before querying.
+        // 100ms is generous; the actual INSERT takes <1ms on in-memory DBs.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        db.request_load(10, None, None, None, false);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert_eq!(entries.len(), 1, "should have 1 history entry");
+                assert_eq!(entries[0].sql, "SELECT 1");
+                assert_eq!(entries[0].database_path, "test.db");
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bookmark_save_load_delete_cycle() {
+        let mut db = test_history_db().await;
+
+        // Save
+        db.save_bookmark(
+            "my query".into(),
+            "SELECT * FROM users".into(),
+            Some("test.db".to_string()),
+        );
+        let save_msg = recv_timeout(&mut db).await;
+        let bookmark_id = match save_msg {
+            HistoryMessage::BookmarkSaved(id) => id,
+            other => panic!("expected BookmarkSaved, got: {other:?}"),
+        };
+
+        // Load
+        db.load_bookmarks(Some("test.db"));
+        match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarksLoaded(bookmarks) => {
+                assert_eq!(bookmarks.len(), 1);
+                assert_eq!(bookmarks[0].name, "my query");
+                assert_eq!(bookmarks[0].sql, "SELECT * FROM users");
+            }
+            other => panic!("expected BookmarksLoaded, got: {other:?}"),
+        }
+
+        // Delete
+        db.delete_bookmark(bookmark_id);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarkDeleted(id) => assert_eq!(id, bookmark_id),
+            other => panic!("expected BookmarkDeleted, got: {other:?}"),
+        }
+
+        // Verify empty
+        db.load_bookmarks(Some("test.db"));
+        match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarksLoaded(bookmarks) => {
+                assert!(
+                    bookmarks.is_empty(),
+                    "bookmarks should be empty after delete"
+                );
+            }
+            other => panic!("expected BookmarksLoaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn load_entries_filters_by_search_term() {
+        let mut db = test_history_db().await;
+
+        db.log_query(LogEntry {
+            sql: "SELECT * FROM users".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 0,
+            row_count: 0,
+            error_message: None,
+            origin: "editor",
+        });
+        db.log_query(LogEntry {
+            sql: "INSERT INTO orders VALUES (1)".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 0,
+            row_count: 0,
+            error_message: None,
+            origin: "editor",
+        });
+
+        // log_query is fire-and-forget — no acknowledgement message.
+        // Wait for the spawned INSERT task to complete before querying.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        db.request_load(10, None, None, Some("users"), false);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert_eq!(entries.len(), 1, "search should filter to 1 result");
+                assert!(entries[0].sql.contains("users"));
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bookmark_update_changes_name() {
+        let mut db = test_history_db().await;
+
+        db.save_bookmark("original".into(), "SELECT 1".into(), None);
+        let bookmark_id = match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarkSaved(id) => id,
+            other => panic!("expected BookmarkSaved, got: {other:?}"),
+        };
+
+        db.update_bookmark(bookmark_id, "renamed".into());
+        match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarkUpdated(id) => assert_eq!(id, bookmark_id),
+            other => panic!("expected BookmarkUpdated, got: {other:?}"),
+        }
+
+        // Verify the name changed
+        db.load_bookmarks(None);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::BookmarksLoaded(bookmarks) => {
+                assert_eq!(bookmarks.len(), 1);
+                assert_eq!(bookmarks[0].name, "renamed");
+            }
+            other => panic!("expected BookmarksLoaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_delete_removes_entry() {
+        let mut db = test_history_db().await;
+
+        db.log_query(LogEntry {
+            sql: "SELECT 1".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 0,
+            row_count: 0,
+            error_message: None,
+            origin: "editor",
+        });
+
+        // log_query is fire-and-forget — wait for spawned INSERT
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Load to get the ID
+        db.request_load(10, None, None, None, false);
+        let entry_id = match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert_eq!(entries.len(), 1);
+                entries[0].id
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        };
+
+        // Delete
+        db.request_delete(entry_id);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Deleted(id) => assert_eq!(id, entry_id),
+            other => panic!("expected Deleted, got: {other:?}"),
+        }
+
+        // Verify empty
+        db.request_load(10, None, None, None, false);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert!(entries.is_empty(), "entry should be deleted");
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        }
+    }
 }
