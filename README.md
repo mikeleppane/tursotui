@@ -8,6 +8,28 @@
   Built with Rust, <a href="https://ratatui.rs">ratatui</a>, and vim-inspired navigation.
 </p>
 
+<p align="center">
+  <a href="https://github.com/mikeleppane/tursotui/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-1.85%2B-orange.svg" alt="Rust: 1.85+"></a>
+  <a href="https://github.com/mikeleppane/tursotui"><img src="https://img.shields.io/badge/turso--first-SQLite--compatible-teal" alt="Turso-first"></a>
+</p>
+
+## Table of Contents
+
+- [Demo](#demo)
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Turso Compatibility](#turso-compatibility)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Keybindings](#keybindings)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+- [Contact](#contact)
+
 ## Demo
 
 <p align="center">
@@ -120,14 +142,14 @@ The binary is at `target/release/tursotui`.
 ## Usage
 
 ```sh
-# Open a SQLite/Turso database file
-tursotui mydb.sqlite
+# Open a Turso/SQLite database file
+tursotui mydb.db
 
 # Open an in-memory database
 tursotui
 
 # Open multiple databases in tabs
-tursotui db1.sqlite db2.sqlite
+tursotui db1.db db2.db
 ```
 
 ## Keybindings
@@ -257,8 +279,159 @@ mode = "dark"    # "dark" or "light"
 
 ## Architecture
 
+tursotui uses a **unidirectional data flow** architecture inspired by Elm/Redux. Components emit `Action`s, `AppState` processes state changes, and results route back through a two-phase dispatch.
+
+### System Overview
+
+```mermaid
+graph TB
+    subgraph Terminal
+        CT[Crossterm Events<br><i>key, mouse, resize</i>]
+    end
+
+    subgraph EventLoop["Event Loop (main.rs)"]
+        DRAIN[Drain async channel]
+        POLL[Poll crossterm — 16ms]
+        ROUTE[Route to focused component]
+        GLOBAL[Global key fallback]
+        RENDER[Render frame]
+    end
+
+    subgraph State["Application State (app.rs)"]
+        AS[AppState]
+        AC[Action enum<br><i>50+ variants</i>]
+        SC[SchemaCache]
+        DC[DatabaseContext<br><i>per-tab state</i>]
+    end
+
+    subgraph Components["Components (Component trait)"]
+        direction LR
+        SE[Schema<br>Explorer]
+        QE[Query<br>Editor]
+        RT[Results<br>Table]
+        DE[Data<br>Editor]
+        EV[Explain<br>View]
+        RD[Record<br>Detail]
+        ER[ER<br>Diagram]
+        AI[Admin<br>Info]
+        PD[Pragma<br>Dashboard]
+    end
+
+    subgraph Overlays
+        direction LR
+        HLP[Help]
+        HST[History]
+        BK[Bookmarks]
+        EXP[Export]
+        DML[DML Preview]
+        FP[File Picker]
+        GTO[Go to Object]
+        DDL[DDL Viewer]
+    end
+
+    subgraph Async["Async I/O (tokio)"]
+        DH[DatabaseHandle<br><i>Arc&lt;Database&gt;</i>]
+        SPAWN["tokio::spawn<br><i>fresh connection per query</i>"]
+        MPSC[mpsc channel]
+    end
+
+    subgraph Persistence
+        CFG[Config<br><i>TOML</i>]
+        HDB[History DB<br><i>SQLite</i>]
+        BUF[Editor Buffer<br><i>auto-save</i>]
+    end
+
+    CT --> POLL
+    DRAIN --> ROUTE
+    POLL --> ROUTE
+    ROUTE --> Components
+    ROUTE --> Overlays
+    Components -->|emit Action| AC
+    Overlays -->|emit Action| AC
+    AC -->|"phase 1: state"| AS
+    AC -->|"phase 2: dispatch"| Components
+    AC -->|"phase 2: I/O"| DH
+    DH --> SPAWN
+    SPAWN --> MPSC
+    MPSC --> DRAIN
+    AS --- SC
+    AS --- DC
+    RENDER --> Components
+    RENDER --> Overlays
+    CFG -.-> AS
+    HDB -.-> HST
+    BUF -.-> QE
+
+    ROUTE -.->|unhandled| GLOBAL
+```
+
+### Event Loop & Data Flow
+
+```mermaid
+sequenceDiagram
+    participant T as Terminal
+    participant EL as Event Loop
+    participant C as Component
+    participant AS as AppState
+    participant DB as DatabaseHandle
+    participant TK as tokio task
+
+    Note over EL: Each frame (~60fps)
+
+    EL->>EL: Drain async results (try_recv)
+    EL->>T: Poll crossterm (16ms timeout)
+    T-->>EL: KeyEvent
+
+    EL->>C: handle_key(event)
+    C-->>EL: Action
+
+    rect rgb(40, 40, 60)
+        Note over EL,AS: Two-phase dispatch
+        EL->>AS: update(action) — state mutations
+        EL->>C: dispatch — route to components & I/O
+    end
+
+    alt Database action (e.g. ExecuteQuery)
+        EL->>DB: execute_query(sql)
+        DB->>TK: tokio::spawn with fresh connection
+        TK-->>EL: QueryResult via mpsc
+        EL->>AS: update(QueryCompleted)
+        EL->>C: dispatch(QueryCompleted)
+    end
+
+    EL->>C: render(frame, area)
+```
+
+### UI Layout
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│  Tab Bar: [db1.sqlite] [db2.sqlite] [:memory:]                  │
+├────────────────┬─────────────────────────────────────────────────┤
+│                │                                                 │
+│  Schema        │  Query Editor                                   │
+│  Explorer      │  ┌─────────────────────────────────────────┐   │
+│                │  │ SELECT * FROM users                      │   │
+│  ▸ Tables (5)  │  │ WHERE active = 1;                        │   │
+│    users       │  └─────────────────────────────────────────┘   │
+│    orders      ├─────────────────────────────────────────────────┤
+│    products    │                                                 │
+│  ▸ Views (2)   │  Results Table / Explain / Detail / ER Diagram  │
+│  ▸ Indexes (3) │  ┌────────┬──────────┬─────────┬────────────┐  │
+│                │  │ id     │ name     │ email   │ active     │  │
+│                │  ├────────┼──────────┼─────────┼────────────┤  │
+│                │  │ 1      │ Alice    │ a@b.com │ 1          │  │
+│                │  │ 2      │ Bob      │ b@c.com │ 1          │  │
+│                │  └────────┴──────────┴─────────┴────────────┘  │
+├────────────────┴─────────────────────────────────────────────────┤
+│  Status: users │ 2 rows │ 4 cols                        F1 Help │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
 - **Unidirectional data flow** — components emit `Action`s, `AppState` processes state changes, results route back to components via two-phase dispatch.
-- **Async queries** — `tokio::spawn` with fresh connections per query, results delivered via `mpsc` channel.
+- **Async queries** — `tokio::spawn` with fresh connections per query, results delivered via `mpsc` channel. No shared connection state between tasks.
 - **Component trait** — each panel implements `handle_key`, `update`, `render` with consistent `panel_block` / `overlay_block` helpers for styled borders.
 - **Catppuccin theme system** — full Mocha (dark) and Latte (light) palettes with semantic color roles for schema types, editor highlighting, and data editing states.
 - **Transactional data editing** — change log with one-entry-per-PK invariant, DML generation, and `PRAGMA defer_foreign_keys` for safe FK handling.
@@ -267,7 +440,7 @@ mode = "dark"    # "dark" or "light"
 ## Tech Stack
 
 | Crate | Purpose |
-|-------|---------|
+| ------- | --------- |
 | [turso](https://crates.io/crates/turso) | Database engine (libSQL/SQLite) |
 | [ratatui](https://crates.io/crates/ratatui) | Terminal UI framework |
 | [tokio](https://crates.io/crates/tokio) | Async runtime |
@@ -275,28 +448,22 @@ mode = "dark"    # "dark" or "light"
 | [arboard](https://crates.io/crates/arboard) | Clipboard access |
 | [unicode-width](https://crates.io/crates/unicode-width) | Display-column width measurement |
 | [serde](https://crates.io/crates/serde) / [toml](https://crates.io/crates/toml) | Configuration serialization |
+| [serde_json](https://crates.io/crates/serde_json) | JSON detection and pretty-printing |
 | [dirs](https://crates.io/crates/dirs) | Platform config/data directories |
 
 ## License
 
 MIT
 
----
-
 ## Acknowledgments
 
 - Built with [Rust](https://www.rust-lang.org/)
 - TUI powered by [ratatui](https://ratatui.rs)
 - Cross-platform terminal handling by [crossterm](https://github.com/crossterm-rs/crossterm)
-
----
+- Theme palette by [Catppuccin](https://github.com/catppuccin/catppuccin)
 
 ## Contact
 
 **Author:** Mikko Leppänen
-**Email:** mleppan23@gmail.com
+**Email:** <mleppan23@gmail.com>
 **GitHub:** [@mikeleppane](https://github.com/mikeleppane)
-
----
-
-<p align="center">Written with ❤️ in Rust & built with Ratatui</p>
