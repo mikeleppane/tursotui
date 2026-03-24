@@ -19,6 +19,55 @@ const WRITABLE_PRAGMAS: &[&str] = &[
     "max_page_count",
 ];
 
+/// Validate and normalize a pragma value to a safe integer string.
+///
+/// Single source of truth for pragma value validation — used by both the UI
+/// layer (`PragmaDashboard`) for fast feedback and the DB layer
+/// (`run_set_pragma_inner`) for defense-in-depth.
+///
+/// Returns the normalized value string on success (trimmed, parsed and
+/// re-formatted as a plain integer).
+pub(crate) fn sanitize_pragma_value(name: &str, value: &str) -> Result<String, String> {
+    match name {
+        // Signed integer pragmas (negative cache_size means KB)
+        "cache_size" | "busy_timeout" => {
+            let n: i64 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("{name} must be an integer"))?;
+            Ok(n.to_string())
+        }
+        // Positive integer pragmas
+        "max_page_count" => {
+            let n: i64 = value
+                .trim()
+                .parse()
+                .map_err(|_| "max_page_count must be a positive integer".to_string())?;
+            if n > 0 {
+                Ok(n.to_string())
+            } else {
+                Err("max_page_count must be a positive integer".to_string())
+            }
+        }
+        // 0/1 boolean pragmas
+        "foreign_keys" | "query_only" => match value.trim() {
+            "0" | "1" => Ok(value.trim().to_string()),
+            _ => Err(format!("{name} must be 0 or 1")),
+        },
+        // Turso only supports OFF (0) and FULL (2) — NORMAL (1) and EXTRA (3)
+        // are not supported and would produce an opaque runtime error.
+        "synchronous" => match value.trim() {
+            "0" | "2" => Ok(value.trim().to_string()),
+            _ => Err("synchronous must be 0 (OFF) or 2 (FULL) on Turso".to_string()),
+        },
+        "temp_store" => match value.trim() {
+            "0" | "1" | "2" => Ok(value.trim().to_string()),
+            _ => Err("temp_store must be 0-2".to_string()),
+        },
+        _ => Err(format!("{name} is not writable")),
+    }
+}
+
 /// A single column definition from query results.
 #[derive(Debug, Clone)]
 pub(crate) struct ColumnDef {
@@ -494,8 +543,9 @@ impl DatabaseHandle {
                     return Err(e.into());
                 }
             }
-            if !has_user_txn {
-                conn.execute("COMMIT", ()).await?;
+            if !has_user_txn && let Err(e) = conn.execute("COMMIT", ()).await {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(e.into());
             }
         }
 
@@ -786,10 +836,15 @@ impl DatabaseHandle {
         db: &turso::Database,
         sql: &str,
     ) -> Result<(Vec<Vec<String>>, Vec<String>), Box<dyn std::error::Error + Send + Sync>> {
+        // Use only the first statement to prevent injecting extra statements
+        // after the EXPLAIN prefix (e.g., "SELECT 1; DROP TABLE x").
+        let statements = detect_statements(sql);
+        let first_stmt = statements.first().ok_or("empty SQL")?;
+
         let conn = db.connect()?;
 
         // Run EXPLAIN <sql> — collects bytecode rows
-        let mut rows = conn.query(&format!("EXPLAIN {sql}"), ()).await?;
+        let mut rows = conn.query(&format!("EXPLAIN {first_stmt}"), ()).await?;
         let col_count = rows.column_count();
         let mut bytecode_rows = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -800,8 +855,10 @@ impl DatabaseHandle {
             bytecode_rows.push(cells);
         }
 
-        // Run EXPLAIN QUERY PLAN <sql> — collects plan lines
-        let mut rows = conn.query(&format!("EXPLAIN QUERY PLAN {sql}"), ()).await?;
+        // Run EXPLAIN QUERY PLAN <first_stmt> — collects plan lines
+        let mut rows = conn
+            .query(&format!("EXPLAIN QUERY PLAN {first_stmt}"), ())
+            .await?;
         let mut plan_lines = Vec::new();
         while let Some(row) = rows.next().await? {
             // EXPLAIN QUERY PLAN returns columns: id, parent, notused, detail
@@ -999,10 +1056,15 @@ impl DatabaseHandle {
             return Err(format!("{name} is not a writable pragma").into());
         }
 
+        // Defense-in-depth: sanitize value to prevent SQL injection.
+        // Uses the shared sanitize_pragma_value() which is also called by
+        // PragmaDashboard for fast UI feedback.
+        let safe_value = sanitize_pragma_value(name, value)?;
+
         let conn = db.connect()?;
 
-        // Set the pragma value
-        conn.execute(&format!("PRAGMA {name} = {value}"), ())
+        // Set the pragma value — safe_value is guaranteed to be a plain integer
+        conn.execute(&format!("PRAGMA {name} = {safe_value}"), ())
             .await?;
 
         // Read back to confirm

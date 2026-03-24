@@ -8,6 +8,10 @@ use crate::theme::Theme;
 
 use super::Component;
 
+/// Approximate panel height used for scroll adjustment in `reveal_and_select`.
+/// Actual height is only available at render time; this is a conservative estimate.
+const ESTIMATED_VISIBLE_ROWS: usize = 20;
+
 /// The kind of top-level grouping category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CategoryKind {
@@ -545,251 +549,159 @@ impl SchemaExplorer {
     ///
     /// For columns with unloaded parent: falls back to selecting the parent table.
     /// Returns `true` if the target (or parent fallback) was found and selected.
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn reveal_and_select(&mut self, name: &str, kind: ObjectKind) -> bool {
         // Clear any active filter
         self.filter = None;
         self.filter_active = false;
 
-        // Map ObjectKind to our internal CategoryKind and node type
-        let target_cat = match kind {
-            ObjectKind::Table => Some(CategoryKind::Tables),
-            ObjectKind::View => Some(CategoryKind::Views),
-            ObjectKind::Index => Some(CategoryKind::Indexes),
-            ObjectKind::Trigger => Some(CategoryKind::Triggers),
-            ObjectKind::CustomType => Some(CategoryKind::CustomTypes),
-            ObjectKind::Column => None, // columns are under Tables or Views
-        };
-
         match kind {
             ObjectKind::Table | ObjectKind::View => {
-                let cat_kind = target_cat.unwrap();
-                // Expand the category
-                for (header, children) in &mut self.categories {
-                    if let TreeNode::Category {
-                        kind: k, expanded, ..
-                    } = header
-                        && *k == cat_kind
-                    {
-                        *expanded = true;
-                        // Find the table/view node
-                        let found = children
-                            .iter()
-                            .any(|c| matches!(c, TreeNode::Table { name: n, .. } if n == name));
-                        if !found {
-                            return false;
-                        }
-                        break;
-                    }
-                }
-                self.rebuild_visible();
-                // Find and select the target in visible
-                if let Some(pos) = self
-                    .visible
-                    .iter()
-                    .position(|node| matches!(node, TreeNode::Table { name: n, .. } if n == name))
-                {
-                    self.selected = pos;
-                    // Ensure it's visible by adjusting scroll
-                    if self.selected < self.scroll_offset {
-                        self.scroll_offset = self.selected;
-                    }
-                    // Also scroll down if selection is below viewport (rough estimate)
-                    let estimated_visible = 20_usize;
-                    if self.selected >= self.scroll_offset + estimated_visible {
-                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
-                    }
-                    return true;
-                }
-                false
-            }
-            ObjectKind::Index => {
-                // Expand Indexes category
-                for (header, children) in &mut self.categories {
-                    if let TreeNode::Category {
-                        kind: CategoryKind::Indexes,
-                        expanded,
-                        ..
-                    } = header
-                    {
-                        *expanded = true;
-                        let found = children
-                            .iter()
-                            .any(|c| matches!(c, TreeNode::Index { name: n, .. } if n == name));
-                        if !found {
-                            return false;
-                        }
-                        break;
-                    }
-                }
-                self.rebuild_visible();
-                if let Some(pos) = self
-                    .visible
-                    .iter()
-                    .position(|node| matches!(node, TreeNode::Index { name: n, .. } if n == name))
-                {
-                    self.selected = pos;
-                    if self.selected < self.scroll_offset {
-                        self.scroll_offset = self.selected;
-                    }
-                    let estimated_visible = 20_usize;
-                    if self.selected >= self.scroll_offset + estimated_visible {
-                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
-                    }
-                    return true;
-                }
-                false
-            }
-            ObjectKind::Trigger => {
-                // Expand Triggers category
-                for (header, children) in &mut self.categories {
-                    if let TreeNode::Category {
-                        kind: CategoryKind::Triggers,
-                        expanded,
-                        ..
-                    } = header
-                    {
-                        *expanded = true;
-                        let found = children
-                            .iter()
-                            .any(|c| matches!(c, TreeNode::Trigger { name: n, .. } if n == name));
-                        if !found {
-                            return false;
-                        }
-                        break;
-                    }
-                }
-                self.rebuild_visible();
-                if let Some(pos) = self
-                    .visible
-                    .iter()
-                    .position(|node| matches!(node, TreeNode::Trigger { name: n, .. } if n == name))
-                {
-                    self.selected = pos;
-                    if self.selected < self.scroll_offset {
-                        self.scroll_offset = self.selected;
-                    }
-                    let estimated_visible = 20_usize;
-                    if self.selected >= self.scroll_offset + estimated_visible {
-                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
-                    }
-                    return true;
-                }
-                false
-            }
-            ObjectKind::CustomType => {
-                // Expand CustomTypes category
-                for (header, children) in &mut self.categories {
-                    if let TreeNode::Category {
-                        kind: CategoryKind::CustomTypes,
-                        expanded,
-                        ..
-                    } = header
-                    {
-                        *expanded = true;
-                        let found = children.iter().any(
-                            |c| matches!(c, TreeNode::CustomType { name: n, .. } if n == name),
-                        );
-                        if !found {
-                            return false;
-                        }
-                        break;
-                    }
-                }
-                self.rebuild_visible();
-                if let Some(pos) = self.visible.iter().position(
-                    |node| matches!(node, TreeNode::CustomType { name: n, .. } if n == name),
-                ) {
-                    self.selected = pos;
-                    if self.selected < self.scroll_offset {
-                        self.scroll_offset = self.selected;
-                    }
-                    let estimated_visible = 20_usize;
-                    if self.selected >= self.scroll_offset + estimated_visible {
-                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
-                    }
-                    return true;
-                }
-                false
-            }
-            ObjectKind::Column => {
-                // Need to find which table contains this column, expand both
-                // the category and the table, then select the column.
-                //
-                // Strategy: iterate all categories looking for a table that
-                // has a column with this name.
-                let mut found_table: Option<String> = None;
-                let mut columns_loaded = false;
-
-                for (_header, children) in &self.categories {
-                    for child in children {
-                        if let TreeNode::Table {
-                            name: tbl_name,
-                            columns,
-                            columns_loaded: loaded,
-                            ..
-                        } = child
-                            && columns.iter().any(|c| c.name == name)
-                        {
-                            found_table = Some(tbl_name.clone());
-                            columns_loaded = *loaded;
-                            break;
-                        }
-                    }
-                    if found_table.is_some() {
-                        break;
-                    }
-                }
-
-                let Some(table_name) = found_table else {
-                    return false;
+                let cat_kind = if kind == ObjectKind::Table {
+                    CategoryKind::Tables
+                } else {
+                    CategoryKind::Views
                 };
-
-                if !columns_loaded {
-                    // Fall back to selecting the parent table
-                    return self.reveal_and_select(&table_name, ObjectKind::Table);
-                }
-
-                // Expand the parent category and table
-                for (header, children) in &mut self.categories {
-                    if let TreeNode::Category { expanded, .. } = header {
-                        for child in children.iter_mut() {
-                            if let TreeNode::Table {
-                                name: n,
-                                expanded: tbl_exp,
-                                ..
-                            } = child
-                                && *n == table_name
-                            {
-                                *expanded = true; // category
-                                *tbl_exp = true; // table
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                self.rebuild_visible();
-
-                // Find the specific column in visible
-                if let Some(pos) = self.visible.iter().position(|node| {
-                    matches!(node, TreeNode::Column { table_name: tn, col, .. }
-                        if tn == &table_name && col.name == name)
-                }) {
-                    self.selected = pos;
-                    if self.selected < self.scroll_offset {
-                        self.scroll_offset = self.selected;
-                    }
-                    let estimated_visible = 20_usize;
-                    if self.selected >= self.scroll_offset + estimated_visible {
-                        self.scroll_offset = self.selected.saturating_sub(estimated_visible) + 1;
-                    }
-                    return true;
-                }
-
-                // Column not visible (shouldn't happen if columns_loaded was true)
-                false
+                self.expand_category_and_select(
+                    cat_kind,
+                    name,
+                    |node, n| matches!(node, TreeNode::Table { name: tn, .. } if tn == n),
+                )
             }
+            ObjectKind::Index => self.expand_category_and_select(
+                CategoryKind::Indexes,
+                name,
+                |node, n| matches!(node, TreeNode::Index { name: tn, .. } if tn == n),
+            ),
+            ObjectKind::Trigger => self.expand_category_and_select(
+                CategoryKind::Triggers,
+                name,
+                |node, n| matches!(node, TreeNode::Trigger { name: tn, .. } if tn == n),
+            ),
+            ObjectKind::CustomType => self.expand_category_and_select(
+                CategoryKind::CustomTypes,
+                name,
+                |node, n| matches!(node, TreeNode::CustomType { name: tn, .. } if tn == n),
+            ),
+            ObjectKind::Column => self.reveal_and_select_column(name),
+        }
+    }
+
+    /// Shared helper: expand a category, rebuild visible, find a node, and scroll to it.
+    fn expand_category_and_select(
+        &mut self,
+        cat_kind: CategoryKind,
+        name: &str,
+        matches_node: impl Fn(&TreeNode, &str) -> bool,
+    ) -> bool {
+        // Expand the category and verify the target exists in children
+        let mut found_in_children = false;
+        for (header, children) in &mut self.categories {
+            if let TreeNode::Category {
+                kind: k, expanded, ..
+            } = header
+                && *k == cat_kind
+            {
+                *expanded = true;
+                found_in_children = children.iter().any(|c| matches_node(c, name));
+                break;
+            }
+        }
+        if !found_in_children {
+            return false;
+        }
+
+        self.rebuild_visible();
+
+        // Find and select the target in visible
+        if let Some(pos) = self
+            .visible
+            .iter()
+            .position(|node| matches_node(node, name))
+        {
+            self.select_and_scroll(pos);
+            return true;
+        }
+        false
+    }
+
+    /// Handle the Column case of `reveal_and_select`: find the parent table,
+    /// expand both the category and table, then select the column.
+    fn reveal_and_select_column(&mut self, name: &str) -> bool {
+        // Find which table contains this column
+        let mut found_table: Option<String> = None;
+        let mut columns_loaded = false;
+
+        for (_header, children) in &self.categories {
+            for child in children {
+                if let TreeNode::Table {
+                    name: tbl_name,
+                    columns,
+                    columns_loaded: loaded,
+                    ..
+                } = child
+                    && columns.iter().any(|c| c.name == name)
+                {
+                    found_table = Some(tbl_name.clone());
+                    columns_loaded = *loaded;
+                    break;
+                }
+            }
+            if found_table.is_some() {
+                break;
+            }
+        }
+
+        let Some(table_name) = found_table else {
+            return false;
+        };
+
+        if !columns_loaded {
+            // Fall back to selecting the parent table
+            return self.reveal_and_select(&table_name, ObjectKind::Table);
+        }
+
+        // Expand the parent category and table
+        'outer: for (header, children) in &mut self.categories {
+            if let TreeNode::Category { expanded, .. } = header {
+                for child in children.iter_mut() {
+                    if let TreeNode::Table {
+                        name: n,
+                        expanded: tbl_exp,
+                        ..
+                    } = child
+                        && *n == table_name
+                    {
+                        *expanded = true; // category
+                        *tbl_exp = true; // table
+                        break 'outer;
+                    }
+                }
+            }
+        }
+
+        self.rebuild_visible();
+
+        // Find the specific column in visible
+        if let Some(pos) = self.visible.iter().position(|node| {
+            matches!(node, TreeNode::Column { table_name: tn, col, .. }
+                if tn == &table_name && col.name == name)
+        }) {
+            self.select_and_scroll(pos);
+            return true;
+        }
+
+        // Column not visible (shouldn't happen if columns_loaded was true)
+        false
+    }
+
+    /// Set the selected index and adjust scroll to keep it visible.
+    fn select_and_scroll(&mut self, pos: usize) {
+        self.selected = pos;
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+        if self.selected >= self.scroll_offset + ESTIMATED_VISIBLE_ROWS {
+            self.scroll_offset = self.selected.saturating_sub(ESTIMATED_VISIBLE_ROWS) + 1;
         }
     }
 }

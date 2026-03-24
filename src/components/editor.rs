@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -130,7 +132,7 @@ pub(crate) struct QueryEditor {
     buffer: Vec<String>,
     cursor: (usize, usize), // (row, col)
     scroll_offset: usize,
-    undo_stack: Vec<Vec<String>>,
+    undo_stack: VecDeque<Vec<String>>,
     redo_stack: Vec<Vec<String>>,
     tab_size: usize,
     selection: Option<Selection>,
@@ -147,7 +149,7 @@ impl QueryEditor {
             buffer: vec![String::new()],
             cursor: (0, 0),
             scroll_offset: 0,
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             tab_size: TAB_SIZE,
             selection: None,
@@ -204,16 +206,16 @@ impl QueryEditor {
     }
 
     fn save_undo(&mut self) {
-        self.undo_stack.push(self.buffer.clone());
+        self.undo_stack.push_back(self.buffer.clone());
         if self.undo_stack.len() > MAX_UNDO {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
         self.redo_stack.clear();
         self.dirty = true;
     }
 
     fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop() {
+        if let Some(prev) = self.undo_stack.pop_back() {
             self.redo_stack.push(self.buffer.clone());
             self.buffer = prev;
             self.selection = None;
@@ -224,7 +226,7 @@ impl QueryEditor {
 
     fn redo(&mut self) {
         if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(self.buffer.clone());
+            self.undo_stack.push_back(self.buffer.clone());
             self.buffer = next;
             self.selection = None;
             self.dirty = true;

@@ -10,6 +10,7 @@ mod history;
 mod persistence;
 mod theme;
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use clap::Parser;
@@ -17,12 +18,19 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph, Tabs};
+use tokio::sync::mpsc;
 
 use app::{AppState, BottomTab, DatabaseContext, PanelId, SubTab};
 use components::Component;
 use components::history::QueryHistoryPanel;
 use db::DatabaseHandle;
 use theme::Theme;
+
+/// Result of an async database open operation.
+enum GlobalMessage {
+    DatabaseOpened(DatabaseHandle, String, bool), // handle, path, is_new_file
+    DatabaseOpenFailed(String, String),           // path, error
+}
 
 /// Terminal UI for Turso and `SQLite` databases.
 #[derive(Parser)]
@@ -44,16 +52,25 @@ struct GlobalUi {
     file_picker: Option<components::file_picker::FilePicker>,
     /// Go to Object popup (global since it searches across all databases).
     goto_object: Option<components::goto_object::GoToObject>,
+    /// Channel for receiving async database-open results.
+    global_rx: mpsc::UnboundedReceiver<GlobalMessage>,
+    global_tx: mpsc::UnboundedSender<GlobalMessage>,
+    /// Paths currently being opened asynchronously (prevents double-open).
+    opening_paths: HashSet<String>,
 }
 
 impl GlobalUi {
     fn new() -> Self {
+        let (global_tx, global_rx) = mpsc::unbounded_channel();
         Self {
             history: QueryHistoryPanel::new(),
             bookmarks: components::bookmarks::BookmarkPanel::new(),
             clipboard: arboard::Clipboard::new().ok(),
             file_picker: None,
             goto_object: None,
+            global_rx,
+            global_tx,
+            opening_paths: HashSet::new(),
         }
     }
 }
@@ -242,6 +259,50 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
         let action = map_query_message(msg);
         app.update_for_db(db_idx, &action);
         dispatch_action_to_db(db_idx, &action, app, global_ui);
+    }
+
+    // Drain global messages (async database opens, etc.)
+    while let Ok(msg) = global_ui.global_rx.try_recv() {
+        match msg {
+            GlobalMessage::DatabaseOpened(handle, path_str, is_new) => {
+                global_ui.opening_paths.remove(&path_str);
+                let new_db = DatabaseContext::new(handle, path_str.clone(), &app.config);
+                app.databases.push(new_db);
+                let new_idx = app.databases.len() - 1;
+                let switch = app::Action::SwitchDatabase(new_idx);
+                app.update(&switch);
+                app.databases[new_idx].handle.load_schema();
+                // Restore saved editor buffer if available
+                if let Some(saved) = persistence::load_buffer(&path_str)
+                    && !saved.is_empty()
+                {
+                    app.databases[new_idx].editor.set_contents(&saved);
+                    app.databases[new_idx].editor.mark_saved();
+                }
+                let msg_text = if is_new {
+                    format!("Created new database: {path_str}")
+                } else {
+                    format!("Opened: {path_str}")
+                };
+                app.transient_message = Some(app::TransientMessage {
+                    text: msg_text,
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+                // Dismiss picker on success
+                app.active_overlay = None;
+                global_ui.file_picker = None;
+            }
+            GlobalMessage::DatabaseOpenFailed(path_str, err) => {
+                global_ui.opening_paths.remove(&path_str);
+                // Keep picker open on failure so user can correct the path
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Failed to open '{path_str}': {err}"),
+                    created_at: std::time::Instant::now(),
+                    is_error: true,
+                });
+            }
+        }
     }
 
     // Drain history messages (collect first to avoid borrow conflicts)
@@ -1360,7 +1421,7 @@ fn dispatch_action_to_db(
             let original: Vec<Option<String>> = row_vals.to_vec();
             db.data_editor.toggle_delete_row(&pk, &original);
         }
-        app::Action::CloneRow(_) => {
+        app::Action::CloneRow => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -1626,52 +1687,37 @@ fn dispatch_action_to_db(
                 // Dismiss picker on success
                 app.active_overlay = None;
                 global_ui.file_picker = None;
+            } else if global_ui.opening_paths.contains(&path_str) {
+                // Already opening this path — ignore duplicate request
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Already opening: {path_str}"),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
             } else {
                 // Check if path doesn't exist yet (SQLite will create it)
                 let is_new = !path.exists();
-                // Open the database (blocking async in current tokio context)
-                match tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(DatabaseHandle::open(&path_str))
-                }) {
-                    Ok(handle) => {
-                        let new_db = DatabaseContext::new(handle, path_str.clone(), &app.config);
-                        app.databases.push(new_db);
-                        let new_idx = app.databases.len() - 1;
-                        // Switch to the new tab
-                        let switch = app::Action::SwitchDatabase(new_idx);
-                        app.update(&switch);
-                        // Trigger schema load
-                        app.databases[new_idx].handle.load_schema();
-                        // Restore saved editor buffer if available
-                        if let Some(saved) = persistence::load_buffer(&path_str)
-                            && !saved.is_empty()
-                        {
-                            app.databases[new_idx].editor.set_contents(&saved);
-                            app.databases[new_idx].editor.mark_saved();
+                global_ui.opening_paths.insert(path_str.clone());
+                // Open the database asynchronously — result arrives via global_rx
+                let tx = global_ui.global_tx.clone();
+                let path_clone = path_str.clone();
+                tokio::spawn(async move {
+                    match DatabaseHandle::open(&path_clone).await {
+                        Ok(handle) => {
+                            let _ =
+                                tx.send(GlobalMessage::DatabaseOpened(handle, path_clone, is_new));
                         }
-                        let msg = if is_new {
-                            format!("Created new database: {path_str}")
-                        } else {
-                            format!("Opened: {path_str}")
-                        };
-                        app.transient_message = Some(app::TransientMessage {
-                            text: msg,
-                            created_at: std::time::Instant::now(),
-                            is_error: false,
-                        });
-                        // Dismiss picker on success
-                        app.active_overlay = None;
-                        global_ui.file_picker = None;
+                        Err(e) => {
+                            let _ = tx
+                                .send(GlobalMessage::DatabaseOpenFailed(path_clone, e.to_string()));
+                        }
                     }
-                    Err(e) => {
-                        // Keep picker open on failure so user can correct the path
-                        app.transient_message = Some(app::TransientMessage {
-                            text: format!("Failed to open '{path_str}': {e}"),
-                            created_at: std::time::Instant::now(),
-                            is_error: true,
-                        });
-                    }
-                }
+                });
+                app.transient_message = Some(app::TransientMessage {
+                    text: format!("Opening {path_str}..."),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
             }
         }
         app::Action::OpenGoToObject => {

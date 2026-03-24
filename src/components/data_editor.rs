@@ -494,6 +494,11 @@ pub(crate) fn generate_dml(
     pk_columns: &[usize],
     changes: &ChangeLog,
 ) -> Vec<String> {
+    // No PK columns means we cannot generate WHERE clauses for UPDATE/DELETE.
+    // Return early — the caller should not activate editing for PK-less tables.
+    if pk_columns.is_empty() {
+        return Vec::new();
+    }
     let table_q = quote_identifier(table);
     let mut stmts = Vec::new();
 
@@ -567,6 +572,10 @@ fn build_where_clause(
     pk_columns: &[usize],
     pk: &[Option<String>],
 ) -> String {
+    debug_assert!(
+        !pk_columns.is_empty(),
+        "build_where_clause called with no PK columns"
+    );
     pk_columns
         .iter()
         .enumerate()
@@ -1043,7 +1052,7 @@ impl Component for DataEditor {
             (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::ToggleDeleteRow),
             (KeyModifiers::NONE, KeyCode::Char('c')) => {
                 // Signal: main.rs will read actual row data and call clone_row()
-                Some(Action::CloneRow(Vec::new()))
+                Some(Action::CloneRow)
             }
             (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::RevertCell),
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('U')) => {

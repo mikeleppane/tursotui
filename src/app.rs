@@ -200,58 +200,39 @@ pub(crate) enum Action {
     ShowExport,
     ExecuteExport,
     CopyAllResults,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // planned: activated via QueryCompleted detection
     DataEditorActivated {
         table: String,
         pk_columns: Vec<usize>,
     },
-    #[allow(dead_code)]
+    #[allow(dead_code)] // planned: deactivation on tab switch
     DataEditorDeactivated,
-    #[allow(dead_code)]
     StartCellEdit,
-    #[allow(dead_code)]
     ConfirmCellEdit(Option<String>),
-    #[allow(dead_code)]
     CancelCellEdit,
-    #[allow(dead_code)]
     AddRow,
-    #[allow(dead_code)]
     ToggleDeleteRow,
-    #[allow(dead_code)]
-    CloneRow(Vec<Option<String>>),
-    #[allow(dead_code)]
+    CloneRow,
     RevertCell,
-    #[allow(dead_code)]
     RevertRow,
-    #[allow(dead_code)]
     RevertAll,
-    #[allow(dead_code)]
     ShowDmlPreview(bool),
-    #[allow(dead_code)]
     SubmitDataEdits,
-    #[allow(dead_code)]
     DataEditsCommitted,
-    #[allow(dead_code)]
     DataEditsFailed(String),
-    #[allow(dead_code)]
     FollowFK,
-    #[allow(dead_code)]
     FKNavigateBack,
-    #[allow(dead_code)]
     FKLoaded(String, Vec<crate::db::ForeignKeyInfo>),
     // Multi-database actions
-    #[allow(dead_code)] // constructed by file picker (Phase 3)
     SwitchDatabase(usize),
     NextDatabase,
     PrevDatabase,
     CloseActiveDatabase,
-    #[allow(dead_code)] // constructed by file picker (Phase 3)
     OpenDatabase(std::path::PathBuf),
     OpenFilePicker,
     OpenGoToObject,
     ResizeSidebar(i16), // delta in percentage points
     ResizeEditor(i16),  // delta in percentage points
-    #[allow(dead_code)] // Phase 4: Go to Object
     GoToObject(ObjectRef),
     ShowDdl {
         name: String,

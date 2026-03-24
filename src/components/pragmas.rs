@@ -28,37 +28,10 @@ struct InlineEdit {
 }
 
 /// Validate a proposed value for a writable pragma.
-/// Returns `Ok(())` if valid, `Err(message)` if invalid.
-/// NOTE: The pragma names here must stay in sync with `db::WRITABLE_PRAGMAS`.
+/// Delegates to `db::sanitize_pragma_value` (single source of truth),
+/// discarding the normalized value since the UI only needs a pass/fail.
 fn validate_pragma_value(name: &str, value: &str) -> Result<(), String> {
-    match name {
-        "cache_size" | "busy_timeout" => value
-            .parse::<i64>()
-            .map(|_| ())
-            .map_err(|_| format!("{name} must be a number")),
-        "synchronous" => {
-            if ["0", "1", "2", "3"].contains(&value) {
-                Ok(())
-            } else {
-                Err("synchronous must be 0-3".to_string())
-            }
-        }
-        "temp_store" => {
-            if ["0", "1", "2"].contains(&value) {
-                Ok(())
-            } else {
-                Err("temp_store must be 0-2".to_string())
-            }
-        }
-        "foreign_keys" => {
-            if ["0", "1"].contains(&value) {
-                Ok(())
-            } else {
-                Err("foreign_keys must be 0 or 1".to_string())
-            }
-        }
-        _ => Err(format!("{name} is not writable")),
-    }
+    crate::db::sanitize_pragma_value(name, value).map(|_| ())
 }
 
 /// PRAGMA Dashboard with scrollable list and inline editing for writable pragmas.
