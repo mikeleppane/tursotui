@@ -1,0 +1,29 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    reviewers:
+      - mikeleppane
+    commit-message:
+      prefix: "build(deps)"
+    open-pull-requests-limit: 10
+    groups:
+      rust-minor:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    reviewers:
+      - mikeleppane
+    commit-message:
+      prefix: "ci(deps)"
+    open-pull-requests-limit: 5
