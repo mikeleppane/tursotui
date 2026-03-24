@@ -1,11 +1,13 @@
 [package]
 name = "tursotui-db"
-version = "0.1.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Database abstraction layer for tursotui"
 
 [dependencies]
-tursotui-sql = { path = "../tursotui-sql" }
+tursotui-sql = { path = "../tursotui-sql", version = "0.1.0" }
 turso = { workspace = true }
 tokio = { version = "1", features = ["rt", "sync", "macros", "fs"] }
 

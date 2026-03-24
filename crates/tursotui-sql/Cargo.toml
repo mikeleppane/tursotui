@@ -1,8 +1,10 @@
 [package]
 name = "tursotui-sql"
-version = "0.1.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SQL parsing utilities for tursotui"
 
 [dependencies]
 # Intentionally empty — this crate is pure logic with zero runtime deps.
