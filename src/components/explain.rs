@@ -366,6 +366,12 @@ impl Component for ExplainView {
         }
     }
 
+    fn update(&mut self, action: &Action) {
+        if let Action::ExplainCompleted(bytecode, plan) = action {
+            self.set_results(bytecode.clone(), plan.clone());
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let title = self.title_text();
         let block = super::panel_block(&title, focused, theme);

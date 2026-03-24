@@ -959,6 +959,17 @@ impl Component for QueryEditor {
         }
     }
 
+    fn update(&mut self, action: &Action) {
+        match action {
+            Action::PopulateEditor(sql)
+            | Action::RecallHistory(sql)
+            | Action::RecallBookmark(sql) => {
+                self.set_contents(sql);
+            }
+            _ => {}
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let block = super::panel_block("SQL Editor", focused, theme);
 

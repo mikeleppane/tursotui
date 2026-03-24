@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::components::Component;
 use crate::components::data_editor::DataEditor;
 use crate::components::db_info::DbInfoPanel;
 use crate::components::editor::QueryEditor;
@@ -355,6 +356,20 @@ impl DatabaseContext {
             pending_edit_table: None,
             pending_fk_activation: false,
         }
+    }
+
+    /// Broadcast an action to all per-database components.
+    /// Each component ignores actions it doesn't care about (default `update()` is no-op).
+    pub(crate) fn broadcast_update(&mut self, action: &Action) {
+        self.schema.update(action);
+        self.editor.update(action);
+        self.results.update(action);
+        self.explain.update(action);
+        self.record_detail.update(action);
+        self.db_info.update(action);
+        self.pragmas.update(action);
+        self.data_editor.update(action);
+        self.er_diagram.update(action);
     }
 
     /// Returns the ordered list of focusable panels for the current sub-tab.

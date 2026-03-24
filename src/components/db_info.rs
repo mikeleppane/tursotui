@@ -325,6 +325,12 @@ impl Component for DbInfoPanel {
         }
     }
 
+    fn update(&mut self, action: &Action) {
+        if let Action::DbInfoLoaded(info) = action {
+            self.set_info(info.clone());
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let block = super::panel_block("Database Info", focused, theme);
 

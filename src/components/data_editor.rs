@@ -896,6 +896,21 @@ impl Component for DataEditor {
         }
     }
 
+    fn update(&mut self, action: &Action) {
+        match action {
+            Action::ConfirmCellEdit(value) => {
+                self.confirm_edit(value.clone());
+            }
+            Action::CancelCellEdit => {
+                self.cancel_edit();
+            }
+            Action::AddRow => {
+                self.add_row();
+            }
+            _ => {}
+        }
+    }
+
     fn render(&mut self, _frame: &mut Frame, _area: Rect, _focused: bool, _theme: &Theme) {
         // No-op — DataEditor injects state into ResultsTable, not direct rendering
     }

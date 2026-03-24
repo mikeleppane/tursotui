@@ -484,6 +484,12 @@ impl Component for PragmaDashboard {
         }
     }
 
+    fn update(&mut self, action: &Action) {
+        if let Action::PragmasLoaded(entries) = action {
+            self.set_pragmas(entries.clone());
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let block = super::panel_block("PRAGMA Dashboard", focused, theme);
 
