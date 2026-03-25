@@ -116,7 +116,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     // --- Bottom Panel ---
     lines.push(Line::from(Span::styled("Bottom Panel", header_style)));
     lines.push(Line::from(
-        "  1 / 2 / 3 / 4   Switch Results / Explain / Detail / ER",
+        "  1-5             Switch Results / Explain / Detail / ER / Profile",
     ));
     lines.push(Line::from(""));
 
@@ -163,6 +163,18 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  j/k or Up/Down  Scroll fields"));
     lines.push(Line::from("  g / G           Jump to first / last"));
     lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(""));
+
+    // --- Profile View ---
+    lines.push(Line::from(Span::styled("Profile View", header_style)));
+    lines.push(Line::from("  Enter           Generate profile"));
+    lines.push(Line::from("  r               Refresh profile"));
+    lines.push(Line::from("  j/k or Up/Down  Navigate columns"));
+    lines.push(Line::from("  g / G           Jump to first / last column"));
+    lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(
+        "  (completeness: \u{25cf}=0% null, \u{25d0}=<50% null, \u{25cb}=\u{2265}50% null, \u{2205}=all null)",
+    ));
     lines.push(Line::from(""));
 
     // --- Database Info (Admin Tab) ---

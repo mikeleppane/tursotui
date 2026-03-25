@@ -13,6 +13,7 @@ pub(crate) mod goto_object;
 pub(crate) mod help;
 pub(crate) mod history;
 pub(crate) mod pragmas;
+pub(crate) mod profile;
 pub(crate) mod record;
 pub(crate) mod results;
 pub(crate) mod schema;

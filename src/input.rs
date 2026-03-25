@@ -277,6 +277,9 @@ fn route_key_to_component(
             KeyCode::Char('4') if key.modifiers == KeyModifiers::NONE => {
                 Some(app::Action::SwitchBottomTab(BottomTab::ERDiagram))
             }
+            KeyCode::Char('5') if key.modifiers == KeyModifiers::NONE => {
+                Some(app::Action::SwitchBottomTab(BottomTab::Profile))
+            }
             _ => match db.bottom_tab {
                 BottomTab::Results => {
                     // DataEditor intercepts before ResultsTable when active
@@ -290,6 +293,7 @@ fn route_key_to_component(
                 BottomTab::Explain => db.explain.handle_key(key),
                 BottomTab::Detail => db.record_detail.handle_key(key),
                 BottomTab::ERDiagram => db.er_diagram.handle_key(key),
+                BottomTab::Profile => db.profile.handle_key(key),
             },
         }
     } else {

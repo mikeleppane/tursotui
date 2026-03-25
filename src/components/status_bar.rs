@@ -63,6 +63,7 @@ fn panel_label(sub_tab: SubTab, focus: PanelId, bottom_tab: BottomTab) -> &'stat
             BottomTab::Explain => "Explain",
             BottomTab::Detail => "Detail",
             BottomTab::ERDiagram => "ER Diagram",
+            BottomTab::Profile => "Profile",
         },
         (SubTab::Admin, PanelId::DbInfo) => "Database Info",
         (SubTab::Admin, PanelId::Pragmas) => "Pragmas",

@@ -4,6 +4,7 @@
 pub mod handle;
 pub mod ops;
 pub mod pragma;
+pub mod profile;
 pub mod query;
 pub mod schema;
 pub mod types;
@@ -11,8 +12,8 @@ pub mod types;
 // Re-export primary types
 pub use handle::DatabaseHandle;
 pub use types::{
-    ColumnDef, ColumnInfo, CustomTypeInfo, DbInfo, IndexDetail, PragmaEntry, QueryMessage,
-    QueryParams, QueryResult, SchemaEntry,
+    ColumnDef, ColumnInfo, ColumnProfile, CustomTypeInfo, DbInfo, IndexDetail, PragmaEntry,
+    ProfileData, QueryMessage, QueryParams, QueryResult, SchemaEntry,
 };
 
 // Re-export from tursotui-sql

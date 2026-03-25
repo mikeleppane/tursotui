@@ -9,6 +9,7 @@ use crate::components::er_diagram::ERDiagram;
 use crate::components::explain::ExplainView;
 use crate::components::export::ExportPopup;
 use crate::components::pragmas::PragmaDashboard;
+use crate::components::profile::ProfileView;
 use crate::components::record::RecordDetail;
 use crate::components::results::ResultsTable;
 use crate::components::schema::SchemaExplorer;
@@ -92,6 +93,7 @@ pub(crate) enum BottomTab {
     Explain,
     Detail,
     ERDiagram,
+    Profile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,6 +264,10 @@ pub(crate) enum Action {
     BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
     BookmarkReloadRequested,
     IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
+    RequestProfile,
+    ProfileCompleted(tursotui_db::ProfileData),
+    ProfileFailed(String),
+    StddevProbeResult(bool),
 }
 
 /// Per-database workspace.
@@ -299,6 +305,8 @@ pub(crate) struct DatabaseContext {
     pub(crate) pragmas: PragmaDashboard,
     pub(crate) data_editor: DataEditor,
     pub(crate) er_diagram: ERDiagram,
+    pub(crate) profile: ProfileView,
+    pub(crate) supports_stddev: bool,
     pub(crate) export_popup: Option<ExportPopup>,
     // Layout percentages (adjustable at runtime)
     pub(crate) sidebar_pct: u16,
@@ -358,6 +366,8 @@ impl DatabaseContext {
             pragmas: PragmaDashboard::new(),
             data_editor: DataEditor::new(),
             er_diagram: ERDiagram::new(),
+            profile: ProfileView::new(),
+            supports_stddev: false,
             export_popup: None,
             sidebar_pct: 20,
             editor_pct: 40,
@@ -378,6 +388,7 @@ impl DatabaseContext {
         self.pragmas.update(action);
         self.data_editor.update(action);
         self.er_diagram.update(action);
+        self.profile.update(action);
     }
 
     /// Returns the ordered list of focusable panels for the current sub-tab.

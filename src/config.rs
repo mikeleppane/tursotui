@@ -167,6 +167,24 @@ impl Default for PerformanceConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProfileConfig {
+    #[serde(default = "default_sample_threshold")]
+    pub(crate) sample_threshold: u64,
+}
+
+fn default_sample_threshold() -> u64 {
+    10_000
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self {
+            sample_threshold: default_sample_threshold(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
     #[serde(default)]
@@ -179,6 +197,8 @@ pub(crate) struct AppConfig {
     pub(crate) history: HistoryConfig,
     #[serde(default)]
     pub(crate) performance: PerformanceConfig,
+    #[serde(default)]
+    pub(crate) profile: ProfileConfig,
 }
 
 #[cfg(test)]

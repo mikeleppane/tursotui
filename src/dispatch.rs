@@ -39,6 +39,9 @@ pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
         QueryMessage::IndexDetailsLoaded(table, indexes) => {
             app::Action::IndexDetailsLoaded(table, indexes)
         }
+        QueryMessage::ProfileCompleted(data) => app::Action::ProfileCompleted(data),
+        QueryMessage::ProfileFailed(err) => app::Action::ProfileFailed(err),
+        QueryMessage::StddevProbeResult(supported) => app::Action::StddevProbeResult(supported),
         QueryMessage::RowCount(..) | QueryMessage::CustomTypesLoaded(..) => {
             // These are handled directly in the drain loop (main.rs) and should
             // never reach here. Panic in debug builds to catch the invariant
@@ -224,6 +227,19 @@ pub(crate) fn dispatch_action_to_db(
             db.results.set_indexed_columns(leading_cols);
             // Mark explain as stale with the executed SQL
             db.explain.mark_stale(result.sql.clone());
+            // Invalidate profile on DML (INSERT/UPDATE/DELETE) or if row count changed
+            let is_dml = matches!(
+                result.query_kind,
+                QueryKind::Insert | QueryKind::Update | QueryKind::Delete
+            );
+            if is_dml {
+                db.profile.mark_stale();
+            } else if let Some(ref table) = enriched.source_table {
+                let new_count = enriched.rows.len() as u64;
+                if db.profile.should_invalidate(table, new_count) {
+                    db.profile.mark_stale();
+                }
+            }
             // Populate record detail with the first row
             if let Some((cols, vals)) = db.results.row_data(0) {
                 db.record_detail.set_row(cols, vals);
@@ -425,6 +441,8 @@ pub(crate) fn dispatch_action_to_db(
                         .map(|e| e.name.clone())
                         .collect();
                     db.handle.load_row_counts(&table_names);
+                    // Probe stddev() availability for profiling
+                    db.handle.probe_stddev();
                 }
             }
             // Check if this completes a deferred editability check
@@ -996,6 +1014,8 @@ pub(crate) fn dispatch_action_to_db(
             let db = &mut app.databases[db_idx];
             // AppState::update() already cleared the overlay.
             db.data_editor.revert_all_edits();
+            // Mark profile as stale since data has changed
+            db.profile.mark_stale();
             // Re-execute activating query to refresh results
             let activating_sql = db.data_editor.activating_query().to_string();
             let source_table = db.data_editor.source_table().map(str::to_string);
@@ -1016,6 +1036,55 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: true,
             });
             // Changes remain staged — user can inspect and retry
+        }
+        app::Action::RequestProfile => {
+            let db = &mut app.databases[db_idx];
+            // Determine which table to profile from the last query result
+            let source_table = db
+                .results
+                .current_result()
+                .and_then(|r| r.source_table.clone());
+            if let Some(ref table) = source_table
+                && let Some(cols) = db.schema_cache.get_columns(table).cloned()
+            {
+                let total_rows = db
+                    .schema_cache
+                    .row_counts
+                    .get(&table.to_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                let threshold = app.config.profile.sample_threshold;
+                let supports_stddev = db.supports_stddev;
+                db.profile.set_loading();
+                db.handle.profile_table(
+                    table.clone(),
+                    cols,
+                    total_rows,
+                    threshold,
+                    supports_stddev,
+                );
+            } else {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "No table selected for profiling".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+            }
+        }
+        app::Action::ProfileCompleted(data) => {
+            let db = &mut app.databases[db_idx];
+            db.profile.set_data(data.clone());
+        }
+        app::Action::ProfileFailed(err) => {
+            app.databases[db_idx].profile.mark_stale();
+            app.transient_message = Some(app::TransientMessage {
+                text: format!("Profile failed: {err}"),
+                created_at: std::time::Instant::now(),
+                is_error: true,
+            });
+        }
+        app::Action::StddevProbeResult(supported) => {
+            app.databases[db_idx].supports_stddev = *supported;
         }
         app::Action::FKLoaded(table, fks) => {
             // AppState::update() already stored the FK info in schema_cache.fk_info.

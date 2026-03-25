@@ -394,17 +394,29 @@ pub(crate) fn render_bottom_panel(
         BottomTab::Explain => 1,
         BottomTab::Detail => 2,
         BottomTab::ERDiagram => 3,
+        BottomTab::Profile => 4,
     };
-    let bottom_tabs = Tabs::new(vec![" 1:Results ", " 2:Explain ", " 3:Detail ", " 4:ER "])
-        .select(tab_index)
-        .style(Style::default().fg(theme.dim).bg(theme.surface0))
-        .highlight_style(
-            Style::default()
-                .fg(theme.accent)
-                .bg(theme.surface0)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
-        .divider(Span::styled("\u{2502}", Style::default().fg(theme.border)));
+    let profile_label = if db.profile.is_stale() {
+        " 5:Profile* "
+    } else {
+        " 5:Profile "
+    };
+    let bottom_tabs = Tabs::new(vec![
+        " 1:Results ",
+        " 2:Explain ",
+        " 3:Detail ",
+        " 4:ER ",
+        profile_label,
+    ])
+    .select(tab_index)
+    .style(Style::default().fg(theme.dim).bg(theme.surface0))
+    .highlight_style(
+        Style::default()
+            .fg(theme.accent)
+            .bg(theme.surface0)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+    )
+    .divider(Span::styled("\u{2502}", Style::default().fg(theme.border)));
     frame.render_widget(bottom_tabs, bottom_tabs_area);
 
     // Inject edit state into ResultsTable before rendering
@@ -432,6 +444,10 @@ pub(crate) fn render_bottom_panel(
         }
         BottomTab::ERDiagram => {
             db.er_diagram
+                .render(frame, bottom_content_area, is_focused, theme);
+        }
+        BottomTab::Profile => {
+            db.profile
                 .render(frame, bottom_content_area, is_focused, theme);
         }
     }
