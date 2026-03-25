@@ -286,6 +286,13 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
         frame.render_widget(para, inner);
     }
 
+    // Schema diff overlay
+    if active_overlay == Some(crate::app::Overlay::SchemaDiff)
+        && let Some(ref mut diff_state) = app.schema_diff_state
+    {
+        components::schema_diff::render(frame, diff_state, &theme);
+    }
+
     // Modal cell editor overlay (renders above content, below help)
     if let Some(editor) = app.databases[active_idx].data_editor.cell_editor()
         && editor.modal

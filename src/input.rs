@@ -150,6 +150,16 @@ pub(crate) fn handle_key_event(
             }
             return;
         }
+        Some(app::Overlay::SchemaDiff) => {
+            if let Some(ref mut diff_state) = app.schema_diff_state
+                && let Some(action) = crate::components::schema_diff::handle_key(diff_state, key)
+            {
+                app.update(&action);
+                app.databases[active_idx].broadcast_update(&action);
+                dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+            }
+            return;
+        }
         Some(app::Overlay::GoToObject) => {
             if let Some(ref mut goto) = global_ui.goto_object {
                 let active_db_path = app.databases[active_idx].path.clone();

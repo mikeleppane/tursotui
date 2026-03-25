@@ -17,6 +17,7 @@ pub(crate) mod profile;
 pub(crate) mod record;
 pub(crate) mod results;
 pub(crate) mod schema;
+pub(crate) mod schema_diff;
 pub(crate) mod status_bar;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};

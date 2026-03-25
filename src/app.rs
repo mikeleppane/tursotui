@@ -13,6 +13,7 @@ use crate::components::profile::ProfileView;
 use crate::components::record::RecordDetail;
 use crate::components::results::ResultsTable;
 use crate::components::schema::SchemaExplorer;
+use crate::components::schema_diff;
 use crate::config::{AppConfig, ThemeMode};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 use tursotui_db::{
@@ -79,6 +80,7 @@ pub(crate) enum Overlay {
     DdlViewer,
     Bookmarks,
     ERDiagram,
+    SchemaDiff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,6 +270,9 @@ pub(crate) enum Action {
     ProfileCompleted(tursotui_db::ProfileData),
     ProfileFailed(String),
     StddevProbeResult(bool),
+    ShowSchemaDiff,
+    CloseSchemaDiff,
+    CopyText(String),
 }
 
 /// Per-database workspace.
@@ -448,6 +453,7 @@ pub(crate) struct AppState {
     pub(crate) help_scroll: usize,
     pub(crate) ddl_viewer: Option<DdlViewerState>,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
+    pub(crate) schema_diff_state: Option<schema_diff::SchemaDiffState>,
 }
 
 /// Serialize `QueryParams` to a compact JSON string for history storage.
@@ -505,6 +511,7 @@ impl AppState {
             help_scroll: 0,
             ddl_viewer: None,
             history_db,
+            schema_diff_state: None,
         }
     }
 
@@ -792,6 +799,35 @@ impl AppState {
                     scroll: 0,
                 });
                 self.active_overlay = Some(Overlay::DdlViewer);
+            }
+            Action::ShowSchemaDiff => {
+                if self.databases.len() < 2 {
+                    self.transient_message = Some(TransientMessage {
+                        text: "Open 2+ databases to compare schemas".to_string(),
+                        created_at: Instant::now(),
+                        is_error: false,
+                    });
+                } else {
+                    let target_idx = (self.active_db + 1) % self.databases.len();
+                    let source_db = &self.databases[self.active_db];
+                    let target_db = &self.databases[target_idx];
+                    let diffs = schema_diff::compute_schema_diff(
+                        &source_db.schema_cache.entries,
+                        &target_db.schema_cache.entries,
+                        &source_db.schema_cache.columns,
+                        &target_db.schema_cache.columns,
+                    );
+                    self.schema_diff_state = Some(schema_diff::SchemaDiffState::new(
+                        diffs,
+                        source_db.label.clone(),
+                        target_db.label.clone(),
+                    ));
+                    self.active_overlay = Some(Overlay::SchemaDiff);
+                }
+            }
+            Action::CloseSchemaDiff => {
+                self.active_overlay = None;
+                self.schema_diff_state = None;
             }
             _ => {}
         }

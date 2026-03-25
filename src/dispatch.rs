@@ -859,6 +859,29 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
+        app::Action::CopyText(text) => {
+            match global_ui
+                .clipboard
+                .as_mut()
+                .ok_or(arboard::Error::ContentNotAvailable)
+                .and_then(|cb| cb.set_text(text))
+            {
+                Ok(()) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: "Copied to clipboard".to_string(),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+                Err(e) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!("Clipboard unavailable: {e}"),
+                        created_at: std::time::Instant::now(),
+                        is_error: true,
+                    });
+                }
+            }
+        }
         // ConfirmCellEdit, CancelCellEdit, AddRow handled by data_editor.update() via broadcast
         // Data editor cell edit actions (requiring cross-component coordination)
         app::Action::StartCellEdit => {

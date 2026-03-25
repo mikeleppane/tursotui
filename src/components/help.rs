@@ -201,6 +201,22 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  g / G           Jump to first / last"));
     lines.push(Line::from(""));
 
+    // --- Schema Diff ---
+    lines.push(Line::from(Span::styled("Schema Diff", header_style)));
+    lines.push(Line::from(
+        "  F7              Compare schemas (2+ databases)",
+    ));
+    lines.push(Line::from("  j/k or Up/Down  Navigate objects"));
+    lines.push(Line::from("  Enter           Expand/collapse column diffs"));
+    lines.push(Line::from("  g / G           Jump to first / last"));
+    lines.push(Line::from("  i               Toggle identical objects"));
+    lines.push(Line::from("  y               Copy DDL to clipboard"));
+    lines.push(Line::from(
+        "  m               Copy migration SQL to clipboard",
+    ));
+    lines.push(Line::from("  Esc             Close overlay"));
+    lines.push(Line::from(""));
+
     // --- Multi-Database ---
     lines.push(Line::from(Span::styled("Multi-Database", header_style)));
     lines.push(Line::from("  Ctrl+PgDn       Switch to next database tab"));

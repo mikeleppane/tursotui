@@ -96,6 +96,8 @@
 
 **Data Profiling** — press `5` to open the Profile tab, then `Enter` to generate. Two-column layout: left shows columns with colored completeness indicators (`●` green = no nulls, `◐` yellow = <50% nulls, `○` red = ≥50% nulls, `∅` dim = all null), right shows per-column statistics including null count, distinct count, uniqueness ratio, min/max, and for numeric columns: avg, sum, stddev (Turso). Text columns show length statistics. Top-5 value frequency with bar chart visualization (hidden for high-cardinality columns with >50 distinct values). Automatic sampling for tables over 10,000 rows (configurable via `[profile] sample_threshold` in config). Profile auto-invalidates on DML operations — stale indicator (`*`) appears on the tab. Press `r` to refresh, `Ctrl+Up/Down` to scroll stats.
 
+**Schema Diffing** — press `F7` to compare schemas between two open databases. Visual diff overlay shows added (+), removed (-), modified (~), and identical (=) objects with color-coded status icons. Expand modified tables to see column-level diffs including type changes. Copy DDL or auto-generated migration SQL (ALTER TABLE for added columns, 12-step rebuild guidance for type changes) to clipboard. Toggle visibility of identical objects with `i`.
+
 **Slow Query Tracking** — execution time in the status bar is color-coded against a configurable threshold (`[performance] slow_query_ms` in config, default 500ms): yellow for slow, red for very slow. Query history overlay adds `s` to filter slow queries only and `S` to sort by execution time descending. Slow entries are marked with a `⏱` icon.
 
 **Export** — save results as CSV, JSON, or SQL INSERT statements to file or clipboard. Quick TSV copy with a shortcut.
