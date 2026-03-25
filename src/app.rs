@@ -159,7 +159,12 @@ pub(crate) enum Action {
     ShowHelp,
     Quit,
     ClearEditor,
-    ExecuteQuery(String, ExecutionSource, Option<String>), // third = source_table hint
+    ExecuteQuery {
+        sql: String,
+        source: ExecutionSource,
+        source_table: Option<String>,
+        params: Option<tursotui_db::QueryParams>,
+    },
     QueryCompleted(QueryResult),
     QueryFailed(String),
     SchemaLoaded(Vec<SchemaEntry>),
@@ -277,6 +282,10 @@ pub(crate) struct DatabaseContext {
     pub(crate) last_rows_affected: u64,
     pub(crate) last_execution_source: ExecutionSource,
     pub(crate) last_executed_sql: Option<String>,
+    /// JSON-serialized parameters from the last `ExecuteQuery` action.
+    /// Stored here so the `QueryCompleted` / `QueryFailed` handlers can include
+    /// params in the history log entry without needing to re-derive them.
+    pub(crate) last_executed_params_json: Option<String>,
     /// True when the last query was from the WHERE filter bar.
     pub(crate) last_filter_query: bool,
     pub(crate) schema_cache: SchemaCache,
@@ -334,6 +343,7 @@ impl DatabaseContext {
             last_rows_affected: 0,
             last_execution_source: ExecutionSource::FullBuffer,
             last_executed_sql: None,
+            last_executed_params_json: None,
             last_filter_query: false,
             schema_cache: SchemaCache::default(),
             schema: SchemaExplorer::new(),
@@ -429,6 +439,40 @@ pub(crate) struct AppState {
     pub(crate) history_db: Option<crate::history::HistoryDb>,
 }
 
+/// Serialize `QueryParams` to a compact JSON string for history storage.
+///
+/// Positional params become `["42", null, "hello"]` (values as strings).
+/// Named params become `{":name": "Alice", ":age": "30"}`.
+/// Returns an error if JSON serialization fails (should never happen in practice).
+/// Convert a single `turso::Value` to a `serde_json::Value` for history serialization.
+fn turso_value_to_json(v: &turso::Value) -> serde_json::Value {
+    match v {
+        turso::Value::Null => serde_json::Value::Null,
+        turso::Value::Integer(n) => serde_json::Value::String(n.to_string()),
+        turso::Value::Real(f) => serde_json::Value::String(f.to_string()),
+        turso::Value::Text(s) => serde_json::Value::String(s.clone()),
+        turso::Value::Blob(b) => serde_json::Value::String(format!("[BLOB {} B]", b.len())),
+    }
+}
+
+pub(crate) fn params_to_json(params: &tursotui_db::QueryParams) -> Result<String, String> {
+    use tursotui_db::QueryParams;
+
+    match params {
+        QueryParams::Positional(vals) => {
+            let arr: Vec<serde_json::Value> = vals.iter().map(turso_value_to_json).collect();
+            serde_json::to_string(&arr).map_err(|e| e.to_string())
+        }
+        QueryParams::Named(pairs) => {
+            let mut map = serde_json::Map::new();
+            for (name, val) in pairs {
+                map.insert(name.clone(), turso_value_to_json(val));
+            }
+            serde_json::to_string(&serde_json::Value::Object(map)).map_err(|e| e.to_string())
+        }
+    }
+}
+
 impl AppState {
     pub(crate) fn new(
         databases: Vec<DatabaseContext>,
@@ -488,11 +532,18 @@ impl AppState {
             Action::PopulateEditor(_) => {
                 db.focus = PanelId::Editor;
             }
-            Action::ExecuteQuery(sql, source, _source_table) => {
+            Action::ExecuteQuery {
+                sql,
+                source,
+                source_table: _,
+                params,
+            } => {
                 if !sql.trim().is_empty() {
                     db.executing = true;
                     db.last_execution_source = *source;
                     db.last_executed_sql = Some(sql.clone());
+                    db.last_executed_params_json =
+                        params.as_ref().and_then(|p| params_to_json(p).ok());
                 }
             }
             Action::QueryCompleted(result) => {

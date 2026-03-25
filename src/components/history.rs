@@ -667,6 +667,7 @@ mod tests {
             row_count: Some(5),
             error_message: None,
             origin: origin.to_string(),
+            params_json: None,
         }
     }
 

@@ -5,6 +5,15 @@ use std::time::Duration;
 use tursotui_sql::parser::ForeignKeyInfo;
 use tursotui_sql::query_kind::QueryKind;
 
+/// Bound parameter values for parameterized query execution.
+#[derive(Debug, Clone)]
+pub enum QueryParams {
+    /// Positional parameters bound to `?1`, `?2`, … placeholders.
+    Positional(Vec<turso::Value>),
+    /// Named parameters bound to `:name`, `@name`, or `$name` placeholders.
+    Named(Vec<(String, turso::Value)>),
+}
+
 /// A single column definition from query results.
 #[derive(Debug, Clone)]
 pub struct ColumnDef {

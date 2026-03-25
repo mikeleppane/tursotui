@@ -274,20 +274,14 @@ pub(crate) async fn load_index_details(
     // Escape single quotes in identifiers for PRAGMA syntax (Turso uses single-quoted values).
     let safe_table = table_name.replace('\'', "''");
     let mut list_rows = conn
-        .query(
-            &format!("PRAGMA index_list('{safe_table}')"),
-            (),
-        )
+        .query(&format!("PRAGMA index_list('{safe_table}')"), ())
         .await?;
     while let Some(row) = list_rows.next().await? {
         let idx_name: String = row.get(1)?;
         let unique: i64 = row.get(2)?;
         let safe_idx = idx_name.replace('\'', "''");
         let mut info_rows = conn
-            .query(
-                &format!("PRAGMA index_info('{safe_idx}')"),
-                (),
-            )
+            .query(&format!("PRAGMA index_info('{safe_idx}')"), ())
             .await?;
         let mut columns = Vec::new();
         while let Some(info_row) = info_rows.next().await? {

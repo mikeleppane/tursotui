@@ -12,7 +12,7 @@ pub mod types;
 pub use handle::DatabaseHandle;
 pub use types::{
     ColumnDef, ColumnInfo, CustomTypeInfo, DbInfo, IndexDetail, PragmaEntry, QueryMessage,
-    QueryResult, SchemaEntry,
+    QueryParams, QueryResult, SchemaEntry,
 };
 
 // Re-export from tursotui-sql

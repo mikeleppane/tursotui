@@ -795,7 +795,8 @@ fn build_header_row<'a>(
             let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_idx);
             let is_fk = edit_state.is_some_and(|s| s.fk_columns.contains(&abs_idx));
             let is_indexed = indexed_columns.contains(&col.name);
-            let header_text = build_header_text(&col.name, is_sorted, is_fk, is_indexed, sort_state);
+            let header_text =
+                build_header_text(&col.name, is_sorted, is_fk, is_indexed, sort_state);
             Cell::from(header_text).style(style)
         })
         .collect();

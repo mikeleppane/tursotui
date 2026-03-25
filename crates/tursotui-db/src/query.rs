@@ -7,14 +7,17 @@ use tursotui_sql::parser::detect_statements;
 use tursotui_sql::query_kind::{QueryKind, detect_query_kind, is_transaction_control};
 
 use crate::handle::DatabaseHandle;
-use crate::types::{ColumnDef, QueryMessage, QueryResult, value_to_display};
+use crate::types::{ColumnDef, QueryMessage, QueryParams, QueryResult, value_to_display};
 
 /// Maximum number of rows returned by a single query before truncation.
 pub const MAX_ROWS: usize = 10_000;
 
 impl DatabaseHandle {
     /// Execute a SQL query in the background. Results arrive via `try_recv()`.
-    pub fn execute(&self, sql: String, source_table: Option<String>) {
+    ///
+    /// `params` binds positional or named parameters to a single-statement query.
+    /// For multi-statement batches, `params` is not applicable and is ignored.
+    pub fn execute(&self, sql: String, source_table: Option<String>, params: Option<QueryParams>) {
         let db = Arc::clone(&self.database);
         let tx = self.result_tx.clone();
 
@@ -26,9 +29,10 @@ impl DatabaseHandle {
                 let statements = detect_statements(&sql);
 
                 let result = if statements.len() > 1 {
+                    // Params are not applicable to multi-statement batches.
                     Self::run_batch(&db, &statements).await
                 } else {
-                    Self::run_query(&db, &sql).await
+                    Self::run_query(&db, &sql, params).await
                 };
 
                 let elapsed = start.elapsed();
@@ -53,16 +57,29 @@ impl DatabaseHandle {
     pub(crate) async fn run_query(
         db: &turso::Database,
         sql: &str,
+        params: Option<QueryParams>,
     ) -> Result<QueryResult, Box<dyn std::error::Error + Send + Sync>> {
         let conn = db.connect()?;
         let kind = detect_query_kind(sql);
+
+        // Convert QueryParams to turso's Params type.
+        let turso_params = match params {
+            None => turso::params::Params::None,
+            Some(QueryParams::Positional(vals)) => turso::params::Params::Positional(vals),
+            Some(QueryParams::Named(pairs)) => turso::params::Params::Named(
+                pairs
+                    .into_iter()
+                    .map(|(k, v)| (std::borrow::Cow::Owned(k), v))
+                    .collect(),
+            ),
+        };
 
         if matches!(
             kind,
             QueryKind::Select | QueryKind::Explain | QueryKind::Pragma | QueryKind::Other
         ) {
             // Row-returning path
-            let mut rows_result = conn.query(sql, ()).await?;
+            let mut rows_result = conn.query(sql, turso_params).await?;
 
             let columns: Vec<ColumnDef> = rows_result
                 .columns()
@@ -104,7 +121,7 @@ impl DatabaseHandle {
             QueryKind::Insert | QueryKind::Update | QueryKind::Delete | QueryKind::Ddl
         ) {
             // DML/DDL path -- returns affected count, no rows
-            let affected = conn.execute(sql, ()).await?;
+            let affected = conn.execute(sql, turso_params).await?;
             Ok(QueryResult {
                 columns: Vec::new(),
                 rows: Vec::new(),
@@ -147,7 +164,7 @@ impl DatabaseHandle {
             )
         } else if has_trailing_select {
             // Single SELECT -- shouldn't be called as batch, but handle gracefully
-            return Self::run_query(db, statements[0]).await;
+            return Self::run_query(db, statements[0], None).await;
         } else {
             (statements, None)
         };
@@ -173,7 +190,7 @@ impl DatabaseHandle {
 
         // Execute trailing SELECT if present
         if let Some(select_sql) = trailing_select {
-            let mut qr = Self::run_query(db, select_sql).await?;
+            let mut qr = Self::run_query(db, select_sql, None).await?;
             qr.query_kind = QueryKind::Batch {
                 statement_count: total_count,
                 has_trailing_select: true,

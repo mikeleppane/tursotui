@@ -128,6 +128,7 @@ struct Selection {
     anchor: (usize, usize), // (row, col)
 }
 
+#[allow(clippy::struct_excessive_bools)] // independent boolean states, not a state machine
 pub(crate) struct QueryEditor {
     buffer: Vec<String>,
     cursor: (usize, usize), // (row, col)
@@ -141,6 +142,69 @@ pub(crate) struct QueryEditor {
     pub(crate) autocomplete_popup: Option<AutocompletePopup>,
     autocomplete_enabled: bool,
     autocomplete_min_chars: usize,
+    // Parameter bar state.
+    // Invariant: param_bar_focused → param_bar_active (focused implies visible).
+    // Maintained by: sync_params() clears both; handle_param_bar_key only clears focused.
+    param_fields: Vec<(String, Option<String>)>, // (placeholder_name, value: None=NULL)
+    param_focused_idx: usize,
+    param_bar_active: bool,
+    param_bar_focused: bool, // true = keyboard input goes to param bar, not editor text area
+}
+
+/// Convert a string value to the most appropriate `turso::Value` type.
+/// Tries integer first, then real, falls back to text.
+fn string_to_value(s: &str) -> tursotui_db::Value {
+    if s.is_empty() {
+        return tursotui_db::Value::Text(String::new());
+    }
+    if let Ok(n) = s.parse::<i64>() {
+        return tursotui_db::Value::Integer(n);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return tursotui_db::Value::Real(f);
+    }
+    tursotui_db::Value::Text(s.to_string())
+}
+
+/// Convert parameter bar fields to `QueryParams` for database execution.
+/// Returns `None` if no parameters are present or if positional and named
+/// params are mixed (which `SQLite` does not support).
+fn build_query_params(fields: &[(String, Option<String>)]) -> Option<tursotui_db::QueryParams> {
+    if fields.is_empty() {
+        return None;
+    }
+
+    let has_positional = fields.iter().any(|(name, _)| name.starts_with('?'));
+    let has_named = fields
+        .iter()
+        .any(|(name, _)| name.starts_with(':') || name.starts_with('$') || name.starts_with('@'));
+
+    // SQLite doesn't support mixing positional and named params — return None
+    // so the query executes without bindings (the DB will report the real error).
+    if has_positional && has_named {
+        return None;
+    }
+
+    let is_positional = has_positional;
+
+    let values: Vec<tursotui_db::Value> = fields
+        .iter()
+        .map(|(_, v)| match v {
+            None => tursotui_db::Value::Null,
+            Some(s) => string_to_value(s),
+        })
+        .collect();
+
+    if is_positional {
+        Some(tursotui_db::QueryParams::Positional(values))
+    } else {
+        let named: Vec<(String, tursotui_db::Value)> = fields
+            .iter()
+            .zip(values)
+            .map(|((name, _), val)| (name.clone(), val))
+            .collect();
+        Some(tursotui_db::QueryParams::Named(named))
+    }
 }
 
 impl QueryEditor {
@@ -158,6 +222,10 @@ impl QueryEditor {
             autocomplete_popup: None,
             autocomplete_enabled: true,
             autocomplete_min_chars: 1,
+            param_fields: Vec::new(),
+            param_focused_idx: 0,
+            param_bar_active: false,
+            param_bar_focused: false,
         }
     }
 
@@ -181,6 +249,7 @@ impl QueryEditor {
         }
         self.cursor = (0, 0);
         self.scroll_offset = 0;
+        self.sync_params();
     }
 
     pub(crate) fn clear(&mut self) {
@@ -190,6 +259,7 @@ impl QueryEditor {
         self.scroll_offset = 0;
         self.selection = None;
         self.dirty = false;
+        self.sync_params();
     }
 
     pub(crate) fn is_dirty(&self) -> bool {
@@ -221,6 +291,7 @@ impl QueryEditor {
             self.selection = None;
             self.dirty = true;
             self.clamp_cursor();
+            self.sync_params();
         }
     }
 
@@ -231,6 +302,7 @@ impl QueryEditor {
             self.selection = None;
             self.dirty = true;
             self.clamp_cursor();
+            self.sync_params();
         }
     }
 
@@ -253,6 +325,7 @@ impl QueryEditor {
         let byte_idx = char_to_byte(&self.buffer[row], col);
         self.buffer[row].insert(byte_idx, ch);
         self.cursor.1 += 1;
+        self.sync_params();
     }
 
     fn insert_newline(&mut self) {
@@ -262,6 +335,7 @@ impl QueryEditor {
         let remainder = self.buffer[row].split_off(byte_idx);
         self.buffer.insert(row + 1, remainder);
         self.cursor = (row + 1, 0);
+        self.sync_params();
     }
 
     fn backspace(&mut self) {
@@ -271,12 +345,14 @@ impl QueryEditor {
             let byte_idx = char_to_byte(&self.buffer[row], col - 1);
             self.buffer[row].remove(byte_idx);
             self.cursor.1 -= 1;
+            self.sync_params();
         } else if row > 0 {
             self.save_undo();
             let current_line = self.buffer.remove(row);
             let prev_char_len = char_len(&self.buffer[row - 1]);
             self.buffer[row - 1].push_str(&current_line);
             self.cursor = (row - 1, prev_char_len);
+            self.sync_params();
         }
     }
 
@@ -287,10 +363,12 @@ impl QueryEditor {
             self.save_undo();
             let byte_idx = char_to_byte(&self.buffer[row], col);
             self.buffer[row].remove(byte_idx);
+            self.sync_params();
         } else if row + 1 < self.buffer.len() {
             self.save_undo();
             let next_line = self.buffer.remove(row + 1);
             self.buffer[row].push_str(&next_line);
+            self.sync_params();
         }
     }
 
@@ -301,6 +379,7 @@ impl QueryEditor {
         let spaces = " ".repeat(self.tab_size);
         self.buffer[row].insert_str(byte_idx, &spaces);
         self.cursor.1 += self.tab_size;
+        self.sync_params();
     }
 
     /// Remove up to `tab_size` leading spaces from the current line (Shift+Tab dedent).
@@ -314,6 +393,7 @@ impl QueryEditor {
             self.buffer[row] = self.buffer[row][byte_offset..].to_string();
             // Adjust cursor: move left by removed amount, but don't go below 0
             self.cursor.1 = self.cursor.1.saturating_sub(remove_count);
+            self.sync_params();
         }
     }
 
@@ -436,6 +516,7 @@ impl QueryEditor {
         }
         self.cursor = (sr, sc);
         self.clear_selection();
+        self.sync_params();
         true
     }
 
@@ -652,6 +733,7 @@ impl QueryEditor {
         let end_byte = char_to_byte(&self.buffer[row], col);
         self.buffer[row].replace_range(start_byte..end_byte, &text);
         self.cursor.1 = start_col + text.chars().count();
+        self.sync_params();
 
         Some(text)
     }
@@ -674,6 +756,188 @@ impl QueryEditor {
     /// Returns the current scroll offset.
     pub(crate) fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+
+    // ─── Parameter bar ──────────────────────────────────────────────────
+
+    /// Extract unique parameter placeholders from current editor content.
+    /// Returns placeholders in order of first appearance, deduplicated.
+    pub(crate) fn extract_params(&self) -> Vec<String> {
+        use crate::highlight::{TokenKind, tokenize};
+        let tokens = tokenize(&self.contents());
+        let mut seen = std::collections::HashSet::new();
+        let mut params = Vec::new();
+        for token in &tokens {
+            if token.kind == TokenKind::Parameter && seen.insert(token.text.clone()) {
+                params.push(token.text.clone());
+            }
+        }
+        params
+    }
+
+    /// Synchronize parameter bar fields with current editor content.
+    /// Preserves values for parameters that still exist, removes stale ones,
+    /// adds new ones with None (NULL).
+    fn sync_params(&mut self) {
+        // Short-circuit: skip full retokenization if no parameter chars exist in the buffer.
+        // This avoids the cost of tokenize() + HashSet + Vec rebuild on every keystroke
+        // for the common case where the query has no parameters at all.
+        let has_param_chars = self
+            .buffer
+            .iter()
+            .any(|line| line.contains('?') || line.contains(':') || line.contains('$') || line.contains('@'));
+        if !has_param_chars {
+            if self.param_bar_active {
+                self.param_fields.clear();
+                self.param_bar_active = false;
+                self.param_bar_focused = false;
+                self.param_focused_idx = 0;
+            }
+            return;
+        }
+        let current_params = self.extract_params();
+        if current_params.is_empty() {
+            self.param_fields.clear();
+            self.param_bar_active = false;
+            self.param_bar_focused = false;
+            self.param_focused_idx = 0;
+            return;
+        }
+        // Build new fields, preserving existing values
+        let old_values: std::collections::HashMap<String, Option<String>> =
+            self.param_fields.iter().cloned().collect();
+        self.param_fields = current_params
+            .into_iter()
+            .map(|name| {
+                let value = old_values.get(&name).cloned().flatten();
+                (name, value)
+            })
+            .collect();
+        // Clamp focused index
+        if self.param_focused_idx >= self.param_fields.len() {
+            self.param_focused_idx = 0;
+        }
+        // Auto-show bar when params exist
+        if !self.param_fields.is_empty() {
+            self.param_bar_active = true;
+        }
+    }
+
+    #[allow(dead_code)] // used in tests; called from dispatch/layout when param persistence is wired
+    pub(crate) fn param_bar_active(&self) -> bool {
+        self.param_bar_active
+    }
+
+    #[allow(dead_code)] // used in tests; called from dispatch/layout when param persistence is wired
+    pub(crate) fn param_fields(&self) -> &[(String, Option<String>)] {
+        &self.param_fields
+    }
+
+    #[allow(dead_code)] // used in tests; called from dispatch/layout when param persistence is wired
+    pub(crate) fn param_focused_idx(&self) -> usize {
+        self.param_focused_idx
+    }
+
+    #[allow(dead_code)] // used by tests
+    pub(crate) fn param_bar_focused(&self) -> bool {
+        self.param_bar_focused
+    }
+
+    /// Handle keyboard input when the parameter bar has focus.
+    /// Always returns `Action::Consumed` — the param bar absorbs all keys.
+    fn handle_param_bar_key(&mut self, key: KeyEvent) -> Action {
+        match (key.modifiers, key.code) {
+            // Tab → next field (wraps)
+            (KeyModifiers::NONE, KeyCode::Tab) => {
+                if !self.param_fields.is_empty() {
+                    self.param_focused_idx = (self.param_focused_idx + 1) % self.param_fields.len();
+                }
+            }
+            // Shift+Tab → prev field (wraps)
+            (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+                if !self.param_fields.is_empty() {
+                    self.param_focused_idx = if self.param_focused_idx == 0 {
+                        self.param_fields.len() - 1
+                    } else {
+                        self.param_focused_idx - 1
+                    };
+                }
+            }
+            // Ctrl+N → set current field to NULL
+            (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                if let Some(field) = self.param_fields.get_mut(self.param_focused_idx) {
+                    field.1 = None;
+                }
+            }
+            // Esc → return focus to editor text area
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                self.param_bar_focused = false;
+            }
+            // Backspace → delete last char (keeps as empty string, not NULL)
+            (KeyModifiers::NONE, KeyCode::Backspace) => {
+                if let Some(field) = self.param_fields.get_mut(self.param_focused_idx)
+                    && let Some(ref mut v) = field.1
+                {
+                    v.pop();
+                }
+            }
+            // Printable chars → append to value (NULL → string on first keystroke)
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
+                if let Some(field) = self.param_fields.get_mut(self.param_focused_idx) {
+                    match &mut field.1 {
+                        Some(v) => v.push(c),
+                        None => field.1 = Some(c.to_string()),
+                    }
+                }
+            }
+            // Everything else → no-op
+            _ => {}
+        }
+        Action::Consumed
+    }
+
+    /// Render the parameter bar showing current parameter values.
+    fn render_param_bar(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        if !self.param_bar_active || self.param_fields.is_empty() {
+            return;
+        }
+
+        // Build spans for each parameter field
+        let mut spans = Vec::new();
+        for (i, (name, value)) in self.param_fields.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw("  ")); // separator between fields
+            }
+            // Parameter name
+            spans.push(Span::styled(format!("{name}: "), theme.sql_parameter));
+            // Value display: only highlight the focused field when both the panel has focus
+            // AND the param bar itself has keyboard focus.
+            let is_focused = focused && self.param_bar_focused && i == self.param_focused_idx;
+            match value {
+                None => {
+                    let style = if is_focused {
+                        Style::default().fg(theme.dim).bg(theme.surface1)
+                    } else {
+                        Style::default().fg(theme.dim)
+                    };
+                    spans.push(Span::styled("NULL", style));
+                }
+                Some(v) => {
+                    let display = if v.is_empty() { "\"\"" } else { v.as_str() };
+                    let style = if is_focused {
+                        Style::default().fg(theme.fg).bg(theme.surface1)
+                    } else {
+                        Style::default().fg(theme.fg)
+                    };
+                    spans.push(Span::styled(display.to_string(), style));
+                }
+            }
+        }
+
+        let line = Line::from(spans);
+        let block = super::panel_block("Parameters", focused, theme);
+        let paragraph = Paragraph::new(line).block(block);
+        frame.render_widget(paragraph, area);
     }
 }
 
@@ -733,6 +997,35 @@ impl Component for QueryEditor {
             return None;
         }
 
+        // Parameter bar has keyboard focus — route most keys there,
+        // but let execution keys (F5, Ctrl+Enter) fall through to the
+        // normal handler so the user can execute directly from the param bar.
+        // Focus stays in the param bar after execution so the user can
+        // quickly tweak values and re-execute without Tab-ing back in.
+        if self.param_bar_focused {
+            let is_execute_key = matches!(
+                (key.modifiers, key.code),
+                (_, KeyCode::F(5)) | (KeyModifiers::CONTROL, KeyCode::Enter)
+            );
+            if !is_execute_key {
+                return Some(self.handle_param_bar_key(key));
+            }
+            // Fall through to execution handling — param_bar_focused stays true
+        }
+
+        // When param bar is active and Tab is pressed, focus the param bar
+        // regardless of autocomplete state. This takes priority over completion
+        // acceptance — the user can always Esc to dismiss autocomplete first
+        // if they want Tab to accept a completion instead.
+        if matches!((key.modifiers, key.code), (KeyModifiers::NONE, KeyCode::Tab))
+            && self.param_bar_active
+            && !self.param_fields.is_empty()
+        {
+            self.dismiss_autocomplete();
+            self.param_bar_focused = true;
+            return Some(Action::Consumed);
+        }
+
         // Autocomplete popup intercepts keys when active
         if self.autocomplete_popup.is_some() {
             match (key.modifiers, key.code) {
@@ -752,7 +1045,8 @@ impl Component for QueryEditor {
                     if let Some(text) = self.accept_completion() {
                         return Some(Action::AcceptCompletion(text));
                     }
-                    return None;
+                    // No completion to accept — dismiss and fall through.
+                    self.dismiss_autocomplete();
                 }
                 (KeyModifiers::NONE, KeyCode::Esc) => {
                     self.dismiss_autocomplete();
@@ -778,13 +1072,23 @@ impl Component for QueryEditor {
             // Execute selection or statement at cursor: Ctrl+Shift+Enter
             (m, KeyCode::Enter) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
                 let (text, source) = self.text_to_execute();
-                Some(Action::ExecuteQuery(text, source, None))
+                Some(Action::ExecuteQuery {
+                    sql: text,
+                    source,
+                    source_table: None,
+                    params: build_query_params(&self.param_fields),
+                })
             }
 
             // Execute full buffer: F5 or Ctrl+Enter
-            (_, KeyCode::F(5)) | (KeyModifiers::CONTROL, KeyCode::Enter) => Some(
-                Action::ExecuteQuery(self.contents(), ExecutionSource::FullBuffer, None),
-            ),
+            (_, KeyCode::F(5)) | (KeyModifiers::CONTROL, KeyCode::Enter) => {
+                Some(Action::ExecuteQuery {
+                    sql: self.contents(),
+                    source: ExecutionSource::FullBuffer,
+                    source_table: None,
+                    params: build_query_params(&self.param_fields),
+                })
+            }
 
             // Release focus
             (KeyModifiers::NONE, KeyCode::Esc) => {
@@ -932,7 +1236,7 @@ impl Component for QueryEditor {
                 Some(Action::Consumed)
             }
 
-            // Tab → indent, Shift+Tab → dedent
+            // Tab → indent (param bar focus is handled earlier, before autocomplete)
             (KeyModifiers::NONE, KeyCode::Tab) => {
                 if self.selection.is_some() {
                     self.delete_selection();
@@ -971,10 +1275,25 @@ impl Component for QueryEditor {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let block = super::panel_block("SQL Editor", focused, theme);
+        // Split area to accommodate the parameter bar when active and space permits.
+        // Require at least 6 rows total (3 for editor minimum + 3 for param bar).
+        let (editor_area, param_area) =
+            if self.param_bar_active && !self.param_fields.is_empty() && area.height >= 6 {
+                let chunks = Layout::default()
+                    .direction(ratatui::layout::Direction::Vertical)
+                    .constraints([Constraint::Min(3), Constraint::Length(3)])
+                    .split(area);
+                (chunks[0], Some(chunks[1]))
+            } else {
+                (area, None)
+            };
 
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        // When param bar has keyboard focus, the editor text area is visually unfocused
+        let editor_focused = focused && !self.param_bar_focused;
+        let block = super::panel_block("SQL Editor", editor_focused, theme);
+
+        let inner = block.inner(editor_area);
+        frame.render_widget(block, editor_area);
 
         if inner.height == 0 || inner.width == 0 {
             return;
@@ -1054,8 +1373,8 @@ impl Component for QueryEditor {
             buf_line += 1;
         }
 
-        // Set terminal cursor position when focused
-        if focused {
+        // Set terminal cursor position when focused (but not when param bar has keyboard focus)
+        if editor_focused {
             let (row, col) = self.cursor;
             if row >= self.scroll_offset {
                 let mut cursor_screen_row: usize = 0;
@@ -1072,6 +1391,11 @@ impl Component for QueryEditor {
                     frame.set_cursor_position((cursor_x.min(max_x), cursor_y));
                 }
             }
+        }
+
+        // Render the parameter bar in the reserved space below the editor.
+        if let Some(param_area) = param_area {
+            self.render_param_bar(frame, param_area, focused, theme);
         }
     }
 }
@@ -1347,9 +1671,15 @@ mod tests {
         let mut editor = QueryEditor::new();
         editor.set_contents("SELECT 1");
         let action = editor.handle_key(press(KeyCode::F(5)));
-        assert!(
-            matches!(action, Some(Action::ExecuteQuery(ref s, ExecutionSource::FullBuffer, None)) if s == "SELECT 1")
-        );
+        assert!(matches!(
+            action,
+            Some(Action::ExecuteQuery {
+                ref sql,
+                source: ExecutionSource::FullBuffer,
+                source_table: None,
+                params: None,
+            }) if sql == "SELECT 1"
+        ));
     }
 
     #[test]
@@ -1935,6 +2265,80 @@ mod tests {
         assert_eq!(editor.contents(), "SELECT * FROM users");
     }
 
+    // ─── Parameter bar tests ──────────────────────────────────────────────
+
+    #[test]
+    fn extract_params_positional_and_named() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM t WHERE id = ?1 AND name = :name AND id > ?1");
+        let params = editor.extract_params();
+        assert_eq!(params, vec!["?1", ":name"]); // deduplicated, order preserved
+    }
+
+    #[test]
+    fn sync_params_preserves_existing_values() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM t WHERE id = ?1");
+        // Set a value
+        editor.param_fields = vec![("?1".to_string(), Some("42".to_string()))];
+        // Modify SQL to add another param
+        editor.set_contents("SELECT * FROM t WHERE id = ?1 AND name = ?2");
+        // ?1 should preserve its value, ?2 should be None
+        assert_eq!(editor.param_fields.len(), 2);
+        assert_eq!(
+            editor.param_fields[0],
+            ("?1".to_string(), Some("42".to_string()))
+        );
+        assert_eq!(editor.param_fields[1], ("?2".to_string(), None));
+    }
+
+    #[test]
+    fn sync_params_clears_when_no_params() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM t WHERE id = ?1");
+        assert!(editor.param_bar_active());
+        editor.set_contents("SELECT * FROM t");
+        assert!(!editor.param_bar_active());
+        assert!(editor.param_fields().is_empty());
+    }
+
+    #[test]
+    fn extract_params_no_params_returns_empty() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM t");
+        assert!(editor.extract_params().is_empty());
+    }
+
+    #[test]
+    fn param_bar_active_after_set_contents_with_params() {
+        let mut editor = QueryEditor::new();
+        assert!(!editor.param_bar_active());
+        editor.set_contents("SELECT * FROM t WHERE id = :id");
+        assert!(editor.param_bar_active());
+        assert_eq!(editor.param_fields().len(), 1);
+        assert_eq!(editor.param_fields()[0].0, ":id");
+        assert_eq!(editor.param_fields()[0].1, None);
+    }
+
+    #[test]
+    fn param_focused_idx_clamped_after_param_removal() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT ?1, ?2, ?3 FROM t");
+        editor.param_focused_idx = 2;
+        // Remove params by clearing
+        editor.set_contents("SELECT ?1 FROM t");
+        // index was 2 but only 1 param now — should clamp to 0
+        assert_eq!(editor.param_focused_idx(), 0);
+    }
+
+    #[test]
+    fn param_bar_active_accessors() {
+        let editor = QueryEditor::new();
+        assert!(!editor.param_bar_active());
+        assert!(editor.param_fields().is_empty());
+        assert_eq!(editor.param_focused_idx(), 0);
+    }
+
     #[test]
     fn popup_enter_accepts_via_handle_key() {
         let schema = test_schema();
@@ -2175,5 +2579,99 @@ mod tests {
         assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
         assert_eq!(editor.contents(), "SELECT * FROM users");
         assert!(editor.autocomplete_popup.is_none());
+    }
+
+    // ─── build_query_params / string_to_value tests ───────────────────────
+
+    #[test]
+    fn param_value_conversion_null_vs_empty() {
+        let fields = vec![
+            ("?1".to_string(), None),
+            ("?2".to_string(), Some(String::new())),
+            ("?3".to_string(), Some("42".to_string())),
+            ("?4".to_string(), Some("1.5".to_string())),
+            ("?5".to_string(), Some("hello".to_string())),
+        ];
+        let params = build_query_params(&fields).unwrap();
+        match params {
+            tursotui_db::QueryParams::Positional(vals) => {
+                assert_eq!(vals.len(), 5);
+                assert!(matches!(vals[0], tursotui_db::Value::Null));
+                assert!(matches!(&vals[1], tursotui_db::Value::Text(s) if s.is_empty()));
+                assert!(matches!(vals[2], tursotui_db::Value::Integer(42)));
+                if let tursotui_db::Value::Real(f) = vals[3] {
+                    assert!((f - 1.5_f64).abs() < f64::EPSILON);
+                } else {
+                    panic!("expected Real for 1.5");
+                }
+                assert!(matches!(&vals[4], tursotui_db::Value::Text(s) if s == "hello"));
+            }
+            tursotui_db::QueryParams::Named(_) => panic!("expected positional params"),
+        }
+    }
+
+    #[test]
+    fn build_query_params_named() {
+        let fields = vec![
+            (":name".to_string(), Some("alice".to_string())),
+            (":age".to_string(), Some("30".to_string())),
+        ];
+        let params = build_query_params(&fields).unwrap();
+        match params {
+            tursotui_db::QueryParams::Named(pairs) => {
+                assert_eq!(pairs.len(), 2);
+                assert_eq!(pairs[0].0, ":name");
+                assert!(matches!(&pairs[0].1, tursotui_db::Value::Text(s) if s == "alice"));
+                assert!(matches!(pairs[1].1, tursotui_db::Value::Integer(30)));
+            }
+            tursotui_db::QueryParams::Positional(_) => panic!("expected named params"),
+        }
+    }
+
+    #[test]
+    fn build_query_params_empty_returns_none() {
+        let fields: Vec<(String, Option<String>)> = vec![];
+        assert!(build_query_params(&fields).is_none());
+    }
+
+    #[test]
+    fn build_query_params_mixed_positional_named_returns_none() {
+        let fields = vec![
+            ("?1".to_string(), Some("42".to_string())),
+            (":name".to_string(), Some("alice".to_string())),
+        ];
+        // Mixed positional + named is not supported by SQLite — returns None
+        assert!(build_query_params(&fields).is_none());
+    }
+
+    #[test]
+    fn f5_with_param_fields_includes_params() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT * FROM t WHERE id = ?1");
+        // Set a value for the param
+        editor.param_fields[0].1 = Some("99".to_string());
+
+        let action = editor.handle_key(press(KeyCode::F(5)));
+        match action {
+            Some(Action::ExecuteQuery {
+                params: Some(tursotui_db::QueryParams::Positional(vals)),
+                ..
+            }) => {
+                assert_eq!(vals.len(), 1);
+                assert!(matches!(vals[0], tursotui_db::Value::Integer(99)));
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn f5_without_param_fields_has_no_params() {
+        let mut editor = QueryEditor::new();
+        editor.set_contents("SELECT 1");
+        let action = editor.handle_key(press(KeyCode::F(5)));
+        assert!(matches!(
+            action,
+            Some(Action::ExecuteQuery { params: None, .. })
+        ));
     }
 }

@@ -46,6 +46,24 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     ));
     lines.push(Line::from(""));
 
+    // --- Parameter Bar ---
+    lines.push(Line::from(Span::styled(
+        "Parameter Bar (when ?1, :name etc. detected)",
+        header_style,
+    )));
+    lines.push(Line::from(
+        "  Tab             Focus param bar / next field (overrides indent)",
+    ));
+    lines.push(Line::from("  Shift+Tab       Previous field"));
+    lines.push(Line::from("  Ctrl+N          Set field to NULL"));
+    lines.push(Line::from(
+        "  Esc             Return focus to editor",
+    ));
+    lines.push(Line::from(
+        "  (values auto-coerce: 42 → integer, 3.14 → real, else text)",
+    ));
+    lines.push(Line::from(""));
+
     // --- Schema Explorer ---
     lines.push(Line::from(Span::styled("Schema Explorer", header_style)));
     lines.push(Line::from("  j/k or Up/Down  Navigate tree"));
@@ -70,9 +88,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  Y               Copy row to clipboard"));
     lines.push(Line::from("  w               WHERE filter"));
     lines.push(Line::from("  Esc             Release focus"));
-    lines.push(Line::from(
-        "  (· after column name = leading index column)",
-    ));
+    lines.push(Line::from("  (· after column name = leading index column)"));
     lines.push(Line::from(""));
 
     // --- Data Editor ---

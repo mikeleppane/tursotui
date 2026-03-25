@@ -112,7 +112,7 @@ fn begin_execution(db: &mut app::DatabaseContext, sql: &str, source: app::Execut
         db.executing = true;
         db.last_execution_source = source;
         db.last_executed_sql = Some(sql.to_owned());
-        db.handle.execute(sql.to_owned(), None);
+        db.handle.execute(sql.to_owned(), None, None);
     }
 }
 
@@ -127,11 +127,18 @@ pub(crate) fn dispatch_action_to_db(
     global_ui: &mut GlobalUi,
 ) {
     match action {
-        app::Action::ExecuteQuery(sql, _source, source_table) => {
+        app::Action::ExecuteQuery {
+            sql,
+            source: _,
+            source_table,
+            params,
+        } => {
             if !sql.trim().is_empty() {
-                app.databases[db_idx]
-                    .handle
-                    .execute(sql.clone(), source_table.clone());
+                app.databases[db_idx].handle.execute(
+                    sql.clone(),
+                    source_table.clone(),
+                    params.clone(),
+                );
             }
         }
         app::Action::ExecuteFilteredQuery {
@@ -156,21 +163,20 @@ pub(crate) fn dispatch_action_to_db(
             };
             db.last_executed_sql = Some(sql.clone());
             db.last_filter_query = true;
-            db.handle.execute(sql, Some(table.clone()));
+            db.handle.execute(sql, Some(table.clone()), None);
             db.executing = true;
             // Show a hint if the filter column is not indexed and the table is large.
             if !where_clause.is_empty()
                 && let Some(col_name) = extract_filter_column(where_clause)
             {
-                let is_indexed =
-                    get_table_indexes(&db.schema_cache.index_details, table)
-                        .is_some_and(|indexes| {
-                            indexes.iter().any(|idx| {
-                                idx.columns
-                                    .first()
-                                    .is_some_and(|c| c.eq_ignore_ascii_case(&col_name))
-                            })
-                        });
+                let is_indexed = get_table_indexes(&db.schema_cache.index_details, table)
+                    .is_some_and(|indexes| {
+                        indexes.iter().any(|idx| {
+                            idx.columns
+                                .first()
+                                .is_some_and(|c| c.eq_ignore_ascii_case(&col_name))
+                        })
+                    });
                 let row_count = db
                     .schema_cache
                     .row_counts
@@ -249,6 +255,7 @@ pub(crate) fn dispatch_action_to_db(
                     row_count: result.rows.len(),
                     error_message: None,
                     origin,
+                    params_json: app.databases[db_idx].last_executed_params_json.clone(),
                 });
             }
             // Editability detection: determine if result targets a single editable table.
@@ -363,6 +370,7 @@ pub(crate) fn dispatch_action_to_db(
                     row_count: 0,
                     error_message: Some(err.clone()),
                     origin: "user",
+                    params_json: app.databases[db_idx].last_executed_params_json.clone(),
                 });
             }
         }
@@ -982,7 +990,7 @@ pub(crate) fn dispatch_action_to_db(
             let activating_sql = db.data_editor.activating_query().to_string();
             let source_table = db.data_editor.source_table().map(str::to_string);
             if !activating_sql.is_empty() {
-                db.handle.execute(activating_sql, source_table);
+                db.handle.execute(activating_sql, source_table, None);
             }
             app.transient_message = Some(app::TransientMessage {
                 text: "Changes committed successfully".to_string(),
@@ -1082,11 +1090,12 @@ pub(crate) fn dispatch_action_to_db(
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)
             app.databases[db_idx].pending_fk_activation = true;
-            let execute_action = app::Action::ExecuteQuery(
+            let execute_action = app::Action::ExecuteQuery {
                 sql,
-                app::ExecutionSource::FullBuffer,
-                Some(target_table),
-            );
+                source: app::ExecutionSource::FullBuffer,
+                source_table: Some(target_table),
+                params: None,
+            };
             app.update(&execute_action);
             dispatch_action_to_db(db_idx, &execute_action, app, global_ui);
         }
@@ -1602,8 +1611,7 @@ mod tests {
             unique: false,
             columns: vec![],
         };
-        let action =
-            map_query_message(QueryMessage::IndexDetailsLoaded("t".into(), vec![detail]));
+        let action = map_query_message(QueryMessage::IndexDetailsLoaded("t".into(), vec![detail]));
         assert!(
             matches!(action, Action::IndexDetailsLoaded(ref table, ref indexes)
                 if table == "t" && indexes.len() == 1),
@@ -1686,10 +1694,7 @@ mod tests {
 
     #[test]
     fn extract_filter_column_greater_than() {
-        assert_eq!(
-            extract_filter_column("id > 5"),
-            Some("id".to_string())
-        );
+        assert_eq!(extract_filter_column("id > 5"), Some("id".to_string()));
     }
 
     #[test]
@@ -1710,10 +1715,7 @@ mod tests {
 
     #[test]
     fn extract_filter_column_strips_backticks() {
-        assert_eq!(
-            extract_filter_column("`col` = 1"),
-            Some("col".to_string())
-        );
+        assert_eq!(extract_filter_column("`col` = 1"), Some("col".to_string()));
     }
 
     #[test]

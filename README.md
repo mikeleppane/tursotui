@@ -72,7 +72,9 @@
 
 **Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering, async row counts, and DDL viewing. Each entity type has a distinct color for quick visual scanning.
 
-**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution.
+**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution. Supports parameterized queries with bound parameters.
+
+**Parameterized Queries** — when the editor detects SQL parameters (`?1`, `:name`, `$name`), a parameter bar appears below the editor. Tab between fields, type values, use `Ctrl+N` for NULL. Parameters are bound safely via the database driver — no string interpolation. Values persist across restarts and are logged in query history.
 
 **Schema-Aware Autocomplete** — context-sensitive completions for table names, columns, SQL keywords, and qualified references with alias resolution.
 
