@@ -58,6 +58,16 @@ pub struct CustomTypeInfo {
     pub builtin: bool,
 }
 
+/// Index metadata from PRAGMA `index_list` + `index_info`.
+#[derive(Debug, Clone)]
+pub struct IndexDetail {
+    pub name: String,
+    pub table_name: String,
+    pub unique: bool,
+    /// Columns in index order (first = leftmost key).
+    pub columns: Vec<String>,
+}
+
 /// Database metadata from PRAGMAs and file system.
 #[derive(Debug, Clone)]
 pub struct DbInfo {
@@ -108,6 +118,7 @@ pub enum QueryMessage {
     ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
     CustomTypesLoaded(Vec<CustomTypeInfo>),
     RowCount(String, u64), // (table_name_lowercase, count)
+    IndexDetailsLoaded(String, Vec<IndexDetail>), // (table_name, indexes)
 }
 
 /// Convert a turso Value to a display-ready `Option<String>`.

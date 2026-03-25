@@ -76,7 +76,9 @@
 
 **Schema-Aware Autocomplete** — context-sensitive completions for table names, columns, SQL keywords, and qualified references with alias resolution.
 
-**Results Table** — sortable, resizable columns with alternating row colors, cell/row clipboard copy, JSON pretty-printing, and configurable NULL display.
+**Results Table** — sortable, resizable columns with alternating row colors, cell/row clipboard copy, JSON pretty-printing, and configurable NULL display. Indexed columns are marked with a `·` indicator in the header for quick identification of indexed vs. non-indexed columns.
+
+**Index Awareness** — columns that are the leading key of a database index are marked with `·` in the results header. When filtering on a non-indexed column (via the `w` WHERE filter) on a table with >1,000 rows, a brief hint warns that the query may be slow.
 
 **Inline Data Editor** — edit table data directly in the results view. Add, modify, and delete rows with full change tracking. Preview generated DML (INSERT/UPDATE/DELETE) before committing. Transactional submission with automatic rollback on failure.
 

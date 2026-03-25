@@ -655,6 +655,7 @@ mod tests {
             fk_info: HashMap::new(),
             row_counts: HashMap::new(),
             custom_types: Vec::new(),
+            index_details: HashMap::new(),
         }
     }
 

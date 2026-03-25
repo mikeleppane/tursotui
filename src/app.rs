@@ -15,8 +15,8 @@ use crate::components::schema::SchemaExplorer;
 use crate::config::{AppConfig, ThemeMode};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 use tursotui_db::{
-    ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind,
-    QueryResult, SchemaEntry,
+    ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, IndexDetail, PragmaEntry,
+    QueryKind, QueryResult, SchemaEntry,
 };
 
 /// In-memory cache of schema metadata for autocomplete.
@@ -35,6 +35,8 @@ pub(crate) struct SchemaCache {
     pub(crate) row_counts: HashMap<String, u64>,
     /// Custom types from `PRAGMA list_types` (non-base types only).
     pub(crate) custom_types: Vec<CustomTypeInfo>,
+    /// Index metadata keyed by table name.
+    pub(crate) index_details: HashMap<String, Vec<IndexDetail>>,
 }
 
 impl SchemaCache {
@@ -254,6 +256,7 @@ pub(crate) enum Action {
     DeleteBookmark(i64),
     BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
     BookmarkReloadRequested,
+    IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
 }
 
 /// Per-database workspace.
@@ -508,6 +511,26 @@ impl AppState {
             }
             Action::FKLoaded(table, fks) => {
                 db.schema_cache.fk_info.insert(table.clone(), fks.clone());
+            }
+            Action::IndexDetailsLoaded(table, indexes) => {
+                db.schema_cache
+                    .index_details
+                    .insert(table.clone(), indexes.clone());
+                // Refresh results table indicators if it's displaying this table.
+                // Closes the first-query timing gap: IndexDetailsLoaded often arrives
+                // after QueryCompleted, so indicators would be missing on initial display.
+                let displaying_table = db
+                    .results
+                    .current_result()
+                    .and_then(|r| r.source_table.as_deref())
+                    .map(str::to_lowercase);
+                if displaying_table.as_deref() == Some(&table.to_lowercase()) {
+                    let leading_cols: std::collections::HashSet<String> = indexes
+                        .iter()
+                        .filter_map(|idx| idx.columns.first().cloned())
+                        .collect();
+                    db.results.set_indexed_columns(leading_cols);
+                }
             }
             // Actions that only mutate global state — handled below
             _ => {}
