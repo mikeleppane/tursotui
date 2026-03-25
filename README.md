@@ -92,7 +92,9 @@
 
 **Go to Object** — fuzzy search across all open databases (`Ctrl+P`). Instantly navigate to any table, view, index, trigger, or column with ranked results.
 
-**EXPLAIN View** — bytecode table and query plan tree, toggled with a single key.
+**Enhanced EXPLAIN View** — bytecode table and query plan tree, toggled with a single key. Query plan lines are color-coded by scan type (red for full table scans, yellow for temp B-trees, green for index seeks). Warnings section highlights performance issues and suggests CREATE INDEX statements based on WHERE/ORDER BY columns. Press Enter on a suggestion to send it to the editor, or `y` to copy to clipboard.
+
+**Slow Query Tracking** — execution time in the status bar is color-coded against a configurable threshold (`[performance] slow_query_ms` in config, default 500ms): yellow for slow, red for very slow. Query history overlay adds `s` to filter slow queries only and `S` to sort by execution time descending. Slow entries are marked with a `⏱` icon.
 
 **Export** — save results as CSV, JSON, or SQL INSERT statements to file or clipboard. Quick TSV copy with a shortcut.
 
@@ -102,7 +104,7 @@
 
 **DDL Viewer** — press `Shift+D` on any schema object to view its full CREATE statement with syntax highlighting, scrolling, and clipboard copy.
 
-**Query History** — SQLite-backed per-database history with search, recall, re-execute, and auto-prune.
+**Query History** — SQLite-backed per-database history with search, recall, re-execute, auto-prune, slow-query filtering, and execution time sorting.
 
 **Admin Tab** — database info (file stats, WAL status, journal mode), PRAGMA dashboard with inline editing, WAL checkpoint, and integrity checks.
 

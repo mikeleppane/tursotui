@@ -513,7 +513,17 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_pragmas();
             }
         }
-        // ExplainCompleted handled by explain.update() via broadcast
+        app::Action::ExplainCompleted(bytecode, plan) => {
+            let db = &mut app.databases[db_idx];
+            let sql = db.explain.last_query_ref().unwrap_or_default().to_owned();
+            db.explain.set_results(
+                bytecode.clone(),
+                plan.clone(),
+                &sql,
+                &db.schema_cache.row_counts,
+                &db.schema_cache.index_details,
+            );
+        }
         app::Action::ExplainFailed(err) => {
             app.databases[db_idx].explain.set_loading_failed();
             app.transient_message = Some(app::TransientMessage {

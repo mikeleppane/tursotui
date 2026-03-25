@@ -56,9 +56,7 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     ));
     lines.push(Line::from("  Shift+Tab       Previous field"));
     lines.push(Line::from("  Ctrl+N          Set field to NULL"));
-    lines.push(Line::from(
-        "  Esc             Return focus to editor",
-    ));
+    lines.push(Line::from("  Esc             Return focus to editor"));
     lines.push(Line::from(
         "  (values auto-coerce: 42 → integer, 3.14 → real, else text)",
     ));
@@ -146,10 +144,18 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     // --- EXPLAIN View ---
     lines.push(Line::from(Span::styled("EXPLAIN View", header_style)));
     lines.push(Line::from("  Tab             Toggle Bytecode / Query Plan"));
-    lines.push(Line::from("  Enter           Generate EXPLAIN"));
+    lines.push(Line::from(
+        "  Enter           Generate EXPLAIN / send suggestion to editor",
+    ));
+    lines.push(Line::from(
+        "  y               Copy index suggestion to clipboard",
+    ));
     lines.push(Line::from("  j/k or Up/Down  Scroll rows"));
     lines.push(Line::from("  g / G           Jump to first / last"));
     lines.push(Line::from("  Esc             Release focus"));
+    lines.push(Line::from(
+        "  (plan lines color-coded: red=full scan, yellow=temp/subquery, green=index)",
+    ));
     lines.push(Line::from(""));
 
     // --- Record Detail ---

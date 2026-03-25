@@ -782,10 +782,9 @@ impl QueryEditor {
         // Short-circuit: skip full retokenization if no parameter chars exist in the buffer.
         // This avoids the cost of tokenize() + HashSet + Vec rebuild on every keystroke
         // for the common case where the query has no parameters at all.
-        let has_param_chars = self
-            .buffer
-            .iter()
-            .any(|line| line.contains('?') || line.contains(':') || line.contains('$') || line.contains('@'));
+        let has_param_chars = self.buffer.iter().any(|line| {
+            line.contains('?') || line.contains(':') || line.contains('$') || line.contains('@')
+        });
         if !has_param_chars {
             if self.param_bar_active {
                 self.param_fields.clear();
@@ -1017,8 +1016,10 @@ impl Component for QueryEditor {
         // regardless of autocomplete state. This takes priority over completion
         // acceptance — the user can always Esc to dismiss autocomplete first
         // if they want Tab to accept a completion instead.
-        if matches!((key.modifiers, key.code), (KeyModifiers::NONE, KeyCode::Tab))
-            && self.param_bar_active
+        if matches!(
+            (key.modifiers, key.code),
+            (KeyModifiers::NONE, KeyCode::Tab)
+        ) && self.param_bar_active
             && !self.param_fields.is_empty()
         {
             self.dismiss_autocomplete();

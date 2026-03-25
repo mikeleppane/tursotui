@@ -90,6 +90,22 @@ fn truncate_to_width(s: &str, max_width: usize) -> &str {
 /// Transient message TTL.
 pub(crate) const TRANSIENT_TTL: Duration = Duration::from_secs(3);
 
+/// Classify execution time relative to the slow-query threshold.
+///
+/// Returns a color for the execution time display:
+/// - `> 5× threshold`: error (red) — severely slow
+/// - `> threshold`: warning (yellow) — slow
+/// - otherwise: dim — normal
+fn time_color(ms: u64, slow_threshold: u64, theme: &Theme) -> Color {
+    if ms > slow_threshold.saturating_mul(5) {
+        theme.error
+    } else if ms > slow_threshold {
+        theme.warning
+    } else {
+        theme.dim
+    }
+}
+
 /// Render the status bar at the bottom of the screen.
 ///
 /// This is a render function, not a `Component` — it does not handle keys.
@@ -133,19 +149,28 @@ pub(crate) fn render(
         format!(" {label}")
     };
 
-    let center = if db.executing {
-        match db.last_execution_source {
-            crate::app::ExecutionSource::FullBuffer => "Executing...",
-            crate::app::ExecutionSource::Selection => "Executing selection...",
-            crate::app::ExecutionSource::StatementAtCursor => "Executing statement...",
-        }
-        .to_string()
+    let slow_ms = app.config.performance.slow_query_ms;
+
+    let (center, center_color) = if db.executing {
+        (
+            match db.last_execution_source {
+                crate::app::ExecutionSource::FullBuffer => "Executing...",
+                crate::app::ExecutionSource::Selection => "Executing selection...",
+                crate::app::ExecutionSource::StatementAtCursor => "Executing statement...",
+            }
+            .to_string(),
+            None,
+        )
     } else if let Some(ref kind) = db.last_query_kind {
         let time = db
             .last_execution_time
             .map(format_duration)
             .unwrap_or_default();
-        match kind {
+        let tc = db.last_execution_time.map(|d| {
+            let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+            time_color(ms, slow_ms, theme)
+        });
+        let text = match kind {
             QueryKind::Select => {
                 let count = db.last_row_count.unwrap_or(0);
                 if db.last_truncated {
@@ -200,9 +225,10 @@ pub(crate) fn render(
                 }
             }
             QueryKind::Other => format!("Query executed ({time})"),
-        }
+        };
+        (text, tc)
     } else {
-        String::new()
+        (String::new(), None)
     };
 
     // Append WHERE filter indicator to center when a filter is active
@@ -249,7 +275,15 @@ pub(crate) fn render(
     let bar = compose_status_line(&left, &center, &right, width);
 
     // Always render as styled Line — accent the panel label on the left
-    let styled_line = build_styled_status(bar, label, de_status, &edit_plain, theme);
+    let styled_line = build_styled_status(
+        bar,
+        label,
+        &center,
+        center_color,
+        de_status,
+        &edit_plain,
+        theme,
+    );
     let status = Paragraph::new(styled_line).style(theme.status_bar_style);
     frame.render_widget(status, area);
 }
@@ -296,6 +330,8 @@ fn build_edit_status_plain(de: &DataEditorStatus) -> String {
 fn build_styled_status(
     bar: String,
     panel_label: &str,
+    center_text: &str,
+    center_color: Option<Color>,
     de: &DataEditorStatus,
     edit_plain: &str,
     theme: &Theme,
@@ -333,7 +369,7 @@ fn build_styled_status(
 
         let mut spans: Vec<Span<'static>> = label_prefix;
         if !before_edit.is_empty() {
-            spans.push(Span::raw(before_edit));
+            push_with_center_color(&mut spans, &before_edit, center_text, center_color);
         }
 
         // FK breadcrumbs
@@ -368,12 +404,41 @@ fn build_styled_status(
 
         Line::from(spans)
     } else {
-        // No edit info — just accent the panel label
+        // No edit info — accent panel label + optionally color center text
         let mut spans = label_prefix;
         if !rest_after_label.is_empty() {
-            spans.push(Span::raw(rest_after_label));
+            push_with_center_color(&mut spans, &rest_after_label, center_text, center_color);
         }
         Line::from(spans)
+    }
+}
+
+/// Push `text` onto `spans`, optionally styling the `center_text` substring
+/// with `center_color` (for slow-query highlighting in the status bar).
+fn push_with_center_color(
+    spans: &mut Vec<Span<'static>>,
+    text: &str,
+    center_text: &str,
+    center_color: Option<Color>,
+) {
+    if let Some(color) = center_color
+        && !center_text.is_empty()
+        && let Some(start) = text.find(center_text)
+    {
+        let before = &text[..start];
+        let after = &text[start + center_text.len()..];
+        if !before.is_empty() {
+            spans.push(Span::raw(before.to_owned()));
+        }
+        spans.push(Span::styled(
+            center_text.to_owned(),
+            Style::default().fg(color),
+        ));
+        if !after.is_empty() {
+            spans.push(Span::raw(after.to_owned()));
+        }
+    } else {
+        spans.push(Span::raw(text.to_owned()));
     }
 }
 

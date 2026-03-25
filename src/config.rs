@@ -149,6 +149,24 @@ impl Default for HistoryConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PerformanceConfig {
+    #[serde(default = "default_slow_query_ms")]
+    pub(crate) slow_query_ms: u64,
+}
+
+fn default_slow_query_ms() -> u64 {
+    500
+}
+
+impl Default for PerformanceConfig {
+    fn default() -> Self {
+        Self {
+            slow_query_ms: default_slow_query_ms(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
     #[serde(default)]
@@ -159,6 +177,8 @@ pub(crate) struct AppConfig {
     pub(crate) results: ResultsConfig,
     #[serde(default)]
     pub(crate) history: HistoryConfig,
+    #[serde(default)]
+    pub(crate) performance: PerformanceConfig,
 }
 
 #[cfg(test)]
@@ -193,6 +213,12 @@ mod tests {
         assert_eq!(config.editor.tab_size, 2);
         assert!(config.editor.autocomplete);
         assert_eq!(config.editor.autocomplete_min_chars, 1);
+    }
+
+    #[test]
+    fn config_without_performance_section_uses_defaults() {
+        let config: AppConfig = toml::from_str("[theme]\nmode = \"dark\"\n").unwrap();
+        assert_eq!(config.performance.slow_query_ms, 500);
     }
 
     #[test]

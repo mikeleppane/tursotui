@@ -152,6 +152,9 @@ fn run_loop(
     app: &mut AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut global_ui = GlobalUi::new();
+    global_ui
+        .history
+        .set_slow_threshold(app.config.performance.slow_query_ms);
 
     // Restore saved editor buffer for all databases
     for db in &mut app.databases {
