@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::handle::DatabaseHandle;
-use crate::types::{ColumnInfo, CustomTypeInfo, QueryMessage, SchemaEntry};
+use crate::types::{ColumnInfo, CustomTypeInfo, IndexDetail, QueryMessage, SchemaEntry};
 
 /// Base storage types returned by `PRAGMA list_types` that we filter out.
 const BASE_TYPES: &[&str] = tursotui_sql::keywords::BASE_TYPES;
@@ -236,6 +236,66 @@ impl DatabaseHandle {
         }
         Ok(columns)
     }
+
+    /// Load index metadata for a specific table.
+    pub fn load_indexes(&self, table_name: String) {
+        let db = Arc::clone(&self.database);
+        let tx = self.result_tx.clone();
+
+        tokio::spawn(async move {
+            let tx_panic = tx.clone();
+            let handle = tokio::spawn(async move {
+                let result = load_index_details(&db, &table_name).await;
+                match result {
+                    Ok(indexes) => QueryMessage::IndexDetailsLoaded(table_name, indexes),
+                    Err(e) => QueryMessage::Failed(format!(
+                        "Failed to load indexes for {table_name}: {e}"
+                    )),
+                }
+            });
+            let msg = match handle.await {
+                Ok(msg) => msg,
+                Err(_) => {
+                    QueryMessage::Failed("Internal error: index load task panicked".to_string())
+                }
+            };
+            let _ = tx_panic.send(msg);
+        });
+    }
+}
+
+/// Load index details for a single table via PRAGMA `index_list` + `index_info`.
+pub(crate) async fn load_index_details(
+    db: &turso::Database,
+    table_name: &str,
+) -> Result<Vec<IndexDetail>, Box<dyn std::error::Error + Send + Sync>> {
+    let conn = db.connect()?;
+    let mut indexes = Vec::new();
+    // Escape single quotes in identifiers for PRAGMA syntax (Turso uses single-quoted values).
+    let safe_table = table_name.replace('\'', "''");
+    let mut list_rows = conn
+        .query(&format!("PRAGMA index_list('{safe_table}')"), ())
+        .await?;
+    while let Some(row) = list_rows.next().await? {
+        let idx_name: String = row.get(1)?;
+        let unique: i64 = row.get(2)?;
+        let safe_idx = idx_name.replace('\'', "''");
+        let mut info_rows = conn
+            .query(&format!("PRAGMA index_info('{safe_idx}')"), ())
+            .await?;
+        let mut columns = Vec::new();
+        while let Some(info_row) = info_rows.next().await? {
+            let col_name: String = info_row.get(2)?;
+            columns.push(col_name);
+        }
+        indexes.push(IndexDetail {
+            name: idx_name,
+            table_name: table_name.to_string(),
+            unique: unique != 0,
+            columns,
+        });
+    }
+    Ok(indexes)
 }
 
 #[cfg(test)]
@@ -404,5 +464,31 @@ mod tests {
         }
         assert_eq!(counts.get("a"), Some(&2), "table a should have 2 rows");
         assert_eq!(counts.get("b"), Some(&1), "table b should have 1 row");
+    }
+
+    #[tokio::test]
+    async fn load_indexes_returns_index_details() {
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute(
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, email TEXT)",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute("CREATE INDEX idx_t_name ON t(name)", ())
+            .await
+            .unwrap();
+        conn.execute("CREATE UNIQUE INDEX idx_t_email ON t(email)", ())
+            .await
+            .unwrap();
+        let indexes = load_index_details(&db, "t").await.unwrap();
+        assert_eq!(indexes.len(), 2);
+        let name_idx = indexes.iter().find(|i| i.name == "idx_t_name").unwrap();
+        assert!(!name_idx.unique);
+        assert_eq!(name_idx.columns, vec!["name"]);
+        let email_idx = indexes.iter().find(|i| i.name == "idx_t_email").unwrap();
+        assert!(email_idx.unique);
+        assert_eq!(email_idx.columns, vec!["email"]);
     }
 }

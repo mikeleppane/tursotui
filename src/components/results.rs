@@ -4,6 +4,7 @@ use ratatui::widgets::{
     Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
     TableState,
 };
+use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
 use tursotui_db::types::value_to_display;
@@ -61,6 +62,8 @@ pub(crate) struct ResultsTable {
     pub(crate) filter_bar_active: bool,
     /// Cursor position within filter text.
     filter_cursor: usize,
+    /// Columns that are the leading key of at least one index on the current source table.
+    indexed_columns: HashSet<String>,
 }
 
 impl ResultsTable {
@@ -83,6 +86,7 @@ impl ResultsTable {
             filter_input: None,
             filter_bar_active: false,
             filter_cursor: 0,
+            indexed_columns: HashSet::new(),
         }
     }
 
@@ -169,6 +173,11 @@ impl ResultsTable {
     /// Inject edit render state before each draw call.
     pub(crate) fn set_edit_state(&mut self, state: Option<EditRenderState>) {
         self.edit_state = state;
+    }
+
+    /// Update the set of columns that are the leading key of at least one index.
+    pub(crate) fn set_indexed_columns(&mut self, cols: HashSet<String>) {
+        self.indexed_columns = cols;
     }
 
     /// Restore the table cursor to `(row, col)` after a navigation state reset.
@@ -622,6 +631,7 @@ impl Component for ResultsTable {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         // When edit mode is active, pending inserts count as additional rows.
         let pending_count = self
@@ -728,6 +738,7 @@ impl Component for ResultsTable {
             sort_state,
             &self.null_display,
             self.edit_state.as_ref(),
+            &self.indexed_columns,
             theme,
         );
 
@@ -763,6 +774,7 @@ fn build_header_row<'a>(
     selected_col: usize,
     sort_state: Option<(usize, SortOrder)>,
     edit_state: Option<&'a EditRenderState>,
+    indexed_columns: &HashSet<String>,
     theme: &'a Theme,
 ) -> Row<'a> {
     let selected_header_style = Style::default()
@@ -782,7 +794,9 @@ fn build_header_row<'a>(
             };
             let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_idx);
             let is_fk = edit_state.is_some_and(|s| s.fk_columns.contains(&abs_idx));
-            let header_text = build_header_text(&col.name, is_sorted, is_fk, sort_state);
+            let is_indexed = indexed_columns.contains(&col.name);
+            let header_text =
+                build_header_text(&col.name, is_sorted, is_fk, is_indexed, sort_state);
             Cell::from(header_text).style(style)
         })
         .collect();
@@ -794,22 +808,24 @@ fn build_header_text(
     name: &str,
     is_sorted: bool,
     is_fk: bool,
+    is_indexed: bool,
     sort_state: Option<(usize, SortOrder)>,
 ) -> String {
-    if is_sorted {
-        let arrow = match sort_state.unwrap().1 {
+    // Build suffix: index indicator first, then FK arrow, then sort arrow.
+    let index_dot = if is_indexed { "\u{00B7}" } else { "" }; // middle dot ·
+    let fk_arrow = if is_fk { "\u{2197}" } else { "" }; // ↗
+    let sort_arrow = if is_sorted {
+        match sort_state.unwrap().1 {
             SortOrder::Ascending => " \u{25B2}",
             SortOrder::Descending => " \u{25BC}",
-        };
-        if is_fk {
-            format!("{name}\u{2197}{arrow}")
-        } else {
-            format!("{name}{arrow}")
         }
-    } else if is_fk {
-        format!("{name}\u{2197}")
     } else {
+        ""
+    };
+    if index_dot.is_empty() && fk_arrow.is_empty() && sort_arrow.is_empty() {
         name.to_string()
+    } else {
+        format!("{name}{index_dot}{fk_arrow}{sort_arrow}")
     }
 }
 
@@ -868,6 +884,7 @@ fn build_edited_row<'a>(
 /// - Deleted rows: `edit_deleted` style (strikethrough) on all cells
 /// - Pending inserts: appended after query rows with `edit_inserted` style
 /// - FK column headers: `↗` suffix (accent color)
+/// - Indexed column headers: `·` suffix (leading index key indicator)
 #[allow(clippy::too_many_arguments)]
 fn build_visible_table<'a>(
     columns: &'a [ColumnDef],
@@ -878,6 +895,7 @@ fn build_visible_table<'a>(
     sort_state: Option<(usize, SortOrder)>,
     null_display: &'a str,
     edit_state: Option<&'a EditRenderState>,
+    indexed_columns: &HashSet<String>,
     theme: &'a Theme,
 ) -> Table<'a> {
     let col_widths: Vec<Constraint> = column_widths[visible_range.clone()]
@@ -887,12 +905,17 @@ fn build_visible_table<'a>(
             let abs_col_idx = visible_range.start + vis_idx;
             let is_sorted = sort_state.is_some_and(|(sc, _)| sc == abs_col_idx);
             let is_fk = edit_state.is_some_and(|s| s.fk_columns.contains(&abs_col_idx));
+            let col_name = columns.get(abs_col_idx).map_or("", |c| c.name.as_str());
+            let is_indexed = indexed_columns.contains(col_name);
             let mut width = w;
             if is_sorted {
                 width = width.saturating_add(2);
             }
             if is_fk {
                 width = width.saturating_add(1); // room for ↗ suffix
+            }
+            if is_indexed {
+                width = width.saturating_add(1); // room for · suffix
             }
             Constraint::Length(width)
         })
@@ -904,6 +927,7 @@ fn build_visible_table<'a>(
         selected_col,
         sort_state,
         edit_state,
+        indexed_columns,
         theme,
     );
 

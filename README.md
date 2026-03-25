@@ -72,11 +72,15 @@
 
 **Schema Browser** — color-coded tree view of tables, views, indexes, triggers, and columns with inline search filtering, async row counts, and DDL viewing. Each entity type has a distinct color for quick visual scanning.
 
-**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution.
+**SQL Editor** — syntax-highlighted editor with undo/redo, text selection, auto-save, active line highlighting, and statement-at-cursor execution. Supports parameterized queries with bound parameters.
+
+**Parameterized Queries** — when the editor detects SQL parameters (`?1`, `:name`, `$name`), a parameter bar appears below the editor. Tab between fields, type values, use `Ctrl+N` for NULL. Parameters are bound safely via the database driver — no string interpolation. Values persist across restarts and are logged in query history.
 
 **Schema-Aware Autocomplete** — context-sensitive completions for table names, columns, SQL keywords, and qualified references with alias resolution.
 
-**Results Table** — sortable, resizable columns with alternating row colors, cell/row clipboard copy, JSON pretty-printing, and configurable NULL display.
+**Results Table** — sortable, resizable columns with alternating row colors, cell/row clipboard copy, JSON pretty-printing, and configurable NULL display. Indexed columns are marked with a `·` indicator in the header for quick identification of indexed vs. non-indexed columns.
+
+**Index Awareness** — columns that are the leading key of a database index are marked with `·` in the results header. When filtering on a non-indexed column (via the `w` WHERE filter) on a table with >1,000 rows, a brief hint warns that the query may be slow.
 
 **Inline Data Editor** — edit table data directly in the results view. Add, modify, and delete rows with full change tracking. Preview generated DML (INSERT/UPDATE/DELETE) before committing. Transactional submission with automatic rollback on failure.
 
@@ -88,7 +92,13 @@
 
 **Go to Object** — fuzzy search across all open databases (`Ctrl+P`). Instantly navigate to any table, view, index, trigger, or column with ranked results.
 
-**EXPLAIN View** — bytecode table and query plan tree, toggled with a single key.
+**Enhanced EXPLAIN View** — bytecode table and query plan tree, toggled with a single key. Query plan lines are color-coded by scan type (red for full table scans, yellow for temp B-trees, green for index seeks). Warnings section highlights performance issues and suggests CREATE INDEX statements based on WHERE/ORDER BY columns. Press Enter on a suggestion to send it to the editor, or `y` to copy to clipboard.
+
+**Data Profiling** — press `5` to open the Profile tab, then `Enter` to generate. Two-column layout: left shows columns with colored completeness indicators (`●` green = no nulls, `◐` yellow = <50% nulls, `○` red = ≥50% nulls, `∅` dim = all null), right shows per-column statistics including null count, distinct count, uniqueness ratio, min/max, and for numeric columns: avg, sum, stddev (Turso). Text columns show length statistics. Top-5 value frequency with bar chart visualization (hidden for high-cardinality columns with >50 distinct values). Automatic sampling for tables over 10,000 rows (configurable via `[profile] sample_threshold` in config). Profile auto-invalidates on DML operations — stale indicator (`*`) appears on the tab. Press `r` to refresh, `Ctrl+Up/Down` to scroll stats.
+
+**Schema Diffing** — press `F7` to compare schemas between two open databases. Visual diff overlay shows added (+), removed (-), modified (~), and identical (=) objects with color-coded status icons. Expand modified tables to see column-level diffs including type changes. Copy DDL or auto-generated migration SQL (ALTER TABLE for added columns, 12-step rebuild guidance for type changes) to clipboard. Toggle visibility of identical objects with `i`.
+
+**Slow Query Tracking** — execution time in the status bar is color-coded against a configurable threshold (`[performance] slow_query_ms` in config, default 500ms): yellow for slow, red for very slow. Query history overlay adds `s` to filter slow queries only and `S` to sort by execution time descending. Slow entries are marked with a `⏱` icon.
 
 **Export** — save results as CSV, JSON, or SQL INSERT statements to file or clipboard. Quick TSV copy with a shortcut.
 
@@ -98,7 +108,7 @@
 
 **DDL Viewer** — press `Shift+D` on any schema object to view its full CREATE statement with syntax highlighting, scrolling, and clipboard copy.
 
-**Query History** — SQLite-backed per-database history with search, recall, re-execute, and auto-prune.
+**Query History** — SQLite-backed per-database history with search, recall, re-execute, auto-prune, slow-query filtering, and execution time sorting.
 
 **Admin Tab** — database info (file stats, WAL status, journal mode), PRAGMA dashboard with inline editing, WAL checkpoint, and integrity checks.
 

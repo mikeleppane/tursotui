@@ -150,6 +150,16 @@ pub(crate) fn handle_key_event(
             }
             return;
         }
+        Some(app::Overlay::SchemaDiff) => {
+            if let Some(ref mut diff_state) = app.schema_diff_state
+                && let Some(action) = crate::components::schema_diff::handle_key(diff_state, key)
+            {
+                app.update(&action);
+                app.databases[active_idx].broadcast_update(&action);
+                dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+            }
+            return;
+        }
         Some(app::Overlay::GoToObject) => {
             if let Some(ref mut goto) = global_ui.goto_object {
                 let active_db_path = app.databases[active_idx].path.clone();
@@ -277,6 +287,9 @@ fn route_key_to_component(
             KeyCode::Char('4') if key.modifiers == KeyModifiers::NONE => {
                 Some(app::Action::SwitchBottomTab(BottomTab::ERDiagram))
             }
+            KeyCode::Char('5') if key.modifiers == KeyModifiers::NONE => {
+                Some(app::Action::SwitchBottomTab(BottomTab::Profile))
+            }
             _ => match db.bottom_tab {
                 BottomTab::Results => {
                     // DataEditor intercepts before ResultsTable when active
@@ -290,6 +303,7 @@ fn route_key_to_component(
                 BottomTab::Explain => db.explain.handle_key(key),
                 BottomTab::Detail => db.record_detail.handle_key(key),
                 BottomTab::ERDiagram => db.er_diagram.handle_key(key),
+                BottomTab::Profile => db.profile.handle_key(key),
             },
         }
     } else {

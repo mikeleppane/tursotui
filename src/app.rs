@@ -9,14 +9,16 @@ use crate::components::er_diagram::ERDiagram;
 use crate::components::explain::ExplainView;
 use crate::components::export::ExportPopup;
 use crate::components::pragmas::PragmaDashboard;
+use crate::components::profile::ProfileView;
 use crate::components::record::RecordDetail;
 use crate::components::results::ResultsTable;
 use crate::components::schema::SchemaExplorer;
+use crate::components::schema_diff;
 use crate::config::{AppConfig, ThemeMode};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
 use tursotui_db::{
-    ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, PragmaEntry, QueryKind,
-    QueryResult, SchemaEntry,
+    ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, IndexDetail, PragmaEntry,
+    QueryKind, QueryResult, SchemaEntry,
 };
 
 /// In-memory cache of schema metadata for autocomplete.
@@ -35,6 +37,8 @@ pub(crate) struct SchemaCache {
     pub(crate) row_counts: HashMap<String, u64>,
     /// Custom types from `PRAGMA list_types` (non-base types only).
     pub(crate) custom_types: Vec<CustomTypeInfo>,
+    /// Index metadata keyed by table name.
+    pub(crate) index_details: HashMap<String, Vec<IndexDetail>>,
 }
 
 impl SchemaCache {
@@ -76,6 +80,7 @@ pub(crate) enum Overlay {
     DdlViewer,
     Bookmarks,
     ERDiagram,
+    SchemaDiff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +95,7 @@ pub(crate) enum BottomTab {
     Explain,
     Detail,
     ERDiagram,
+    Profile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +163,12 @@ pub(crate) enum Action {
     ShowHelp,
     Quit,
     ClearEditor,
-    ExecuteQuery(String, ExecutionSource, Option<String>), // third = source_table hint
+    ExecuteQuery {
+        sql: String,
+        source: ExecutionSource,
+        source_table: Option<String>,
+        params: Option<tursotui_db::QueryParams>,
+    },
     QueryCompleted(QueryResult),
     QueryFailed(String),
     SchemaLoaded(Vec<SchemaEntry>),
@@ -254,6 +265,14 @@ pub(crate) enum Action {
     DeleteBookmark(i64),
     BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
     BookmarkReloadRequested,
+    IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
+    RequestProfile,
+    ProfileCompleted(tursotui_db::ProfileData),
+    ProfileFailed(String),
+    StddevProbeResult(bool),
+    ShowSchemaDiff,
+    CloseSchemaDiff,
+    CopyText(String),
 }
 
 /// Per-database workspace.
@@ -274,6 +293,10 @@ pub(crate) struct DatabaseContext {
     pub(crate) last_rows_affected: u64,
     pub(crate) last_execution_source: ExecutionSource,
     pub(crate) last_executed_sql: Option<String>,
+    /// JSON-serialized parameters from the last `ExecuteQuery` action.
+    /// Stored here so the `QueryCompleted` / `QueryFailed` handlers can include
+    /// params in the history log entry without needing to re-derive them.
+    pub(crate) last_executed_params_json: Option<String>,
     /// True when the last query was from the WHERE filter bar.
     pub(crate) last_filter_query: bool,
     pub(crate) schema_cache: SchemaCache,
@@ -287,6 +310,8 @@ pub(crate) struct DatabaseContext {
     pub(crate) pragmas: PragmaDashboard,
     pub(crate) data_editor: DataEditor,
     pub(crate) er_diagram: ERDiagram,
+    pub(crate) profile: ProfileView,
+    pub(crate) supports_stddev: bool,
     pub(crate) export_popup: Option<ExportPopup>,
     // Layout percentages (adjustable at runtime)
     pub(crate) sidebar_pct: u16,
@@ -331,6 +356,7 @@ impl DatabaseContext {
             last_rows_affected: 0,
             last_execution_source: ExecutionSource::FullBuffer,
             last_executed_sql: None,
+            last_executed_params_json: None,
             last_filter_query: false,
             schema_cache: SchemaCache::default(),
             schema: SchemaExplorer::new(),
@@ -345,6 +371,8 @@ impl DatabaseContext {
             pragmas: PragmaDashboard::new(),
             data_editor: DataEditor::new(),
             er_diagram: ERDiagram::new(),
+            profile: ProfileView::new(),
+            supports_stddev: false,
             export_popup: None,
             sidebar_pct: 20,
             editor_pct: 40,
@@ -365,6 +393,7 @@ impl DatabaseContext {
         self.pragmas.update(action);
         self.data_editor.update(action);
         self.er_diagram.update(action);
+        self.profile.update(action);
     }
 
     /// Returns the ordered list of focusable panels for the current sub-tab.
@@ -424,6 +453,41 @@ pub(crate) struct AppState {
     pub(crate) help_scroll: usize,
     pub(crate) ddl_viewer: Option<DdlViewerState>,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
+    pub(crate) schema_diff_state: Option<schema_diff::SchemaDiffState>,
+}
+
+/// Serialize `QueryParams` to a compact JSON string for history storage.
+///
+/// Positional params become `["42", null, "hello"]` (values as strings).
+/// Named params become `{":name": "Alice", ":age": "30"}`.
+/// Returns an error if JSON serialization fails (should never happen in practice).
+/// Convert a single `turso::Value` to a `serde_json::Value` for history serialization.
+fn turso_value_to_json(v: &turso::Value) -> serde_json::Value {
+    match v {
+        turso::Value::Null => serde_json::Value::Null,
+        turso::Value::Integer(n) => serde_json::Value::String(n.to_string()),
+        turso::Value::Real(f) => serde_json::Value::String(f.to_string()),
+        turso::Value::Text(s) => serde_json::Value::String(s.clone()),
+        turso::Value::Blob(b) => serde_json::Value::String(format!("[BLOB {} B]", b.len())),
+    }
+}
+
+pub(crate) fn params_to_json(params: &tursotui_db::QueryParams) -> Result<String, String> {
+    use tursotui_db::QueryParams;
+
+    match params {
+        QueryParams::Positional(vals) => {
+            let arr: Vec<serde_json::Value> = vals.iter().map(turso_value_to_json).collect();
+            serde_json::to_string(&arr).map_err(|e| e.to_string())
+        }
+        QueryParams::Named(pairs) => {
+            let mut map = serde_json::Map::new();
+            for (name, val) in pairs {
+                map.insert(name.clone(), turso_value_to_json(val));
+            }
+            serde_json::to_string(&serde_json::Value::Object(map)).map_err(|e| e.to_string())
+        }
+    }
 }
 
 impl AppState {
@@ -447,6 +511,7 @@ impl AppState {
             help_scroll: 0,
             ddl_viewer: None,
             history_db,
+            schema_diff_state: None,
         }
     }
 
@@ -485,11 +550,18 @@ impl AppState {
             Action::PopulateEditor(_) => {
                 db.focus = PanelId::Editor;
             }
-            Action::ExecuteQuery(sql, source, _source_table) => {
+            Action::ExecuteQuery {
+                sql,
+                source,
+                source_table: _,
+                params,
+            } => {
                 if !sql.trim().is_empty() {
                     db.executing = true;
                     db.last_execution_source = *source;
                     db.last_executed_sql = Some(sql.clone());
+                    db.last_executed_params_json =
+                        params.as_ref().and_then(|p| params_to_json(p).ok());
                 }
             }
             Action::QueryCompleted(result) => {
@@ -508,6 +580,26 @@ impl AppState {
             }
             Action::FKLoaded(table, fks) => {
                 db.schema_cache.fk_info.insert(table.clone(), fks.clone());
+            }
+            Action::IndexDetailsLoaded(table, indexes) => {
+                db.schema_cache
+                    .index_details
+                    .insert(table.clone(), indexes.clone());
+                // Refresh results table indicators if it's displaying this table.
+                // Closes the first-query timing gap: IndexDetailsLoaded often arrives
+                // after QueryCompleted, so indicators would be missing on initial display.
+                let displaying_table = db
+                    .results
+                    .current_result()
+                    .and_then(|r| r.source_table.as_deref())
+                    .map(str::to_lowercase);
+                if displaying_table.as_deref() == Some(&table.to_lowercase()) {
+                    let leading_cols: std::collections::HashSet<String> = indexes
+                        .iter()
+                        .filter_map(|idx| idx.columns.first().cloned())
+                        .collect();
+                    db.results.set_indexed_columns(leading_cols);
+                }
             }
             // Actions that only mutate global state — handled below
             _ => {}
@@ -707,6 +799,35 @@ impl AppState {
                     scroll: 0,
                 });
                 self.active_overlay = Some(Overlay::DdlViewer);
+            }
+            Action::ShowSchemaDiff => {
+                if self.databases.len() < 2 {
+                    self.transient_message = Some(TransientMessage {
+                        text: "Open 2+ databases to compare schemas".to_string(),
+                        created_at: Instant::now(),
+                        is_error: false,
+                    });
+                } else {
+                    let target_idx = (self.active_db + 1) % self.databases.len();
+                    let source_db = &self.databases[self.active_db];
+                    let target_db = &self.databases[target_idx];
+                    let diffs = schema_diff::compute_schema_diff(
+                        &source_db.schema_cache.entries,
+                        &target_db.schema_cache.entries,
+                        &source_db.schema_cache.columns,
+                        &target_db.schema_cache.columns,
+                    );
+                    self.schema_diff_state = Some(schema_diff::SchemaDiffState::new(
+                        diffs,
+                        source_db.label.clone(),
+                        target_db.label.clone(),
+                    ));
+                    self.active_overlay = Some(Overlay::SchemaDiff);
+                }
+            }
+            Action::CloseSchemaDiff => {
+                self.active_overlay = None;
+                self.schema_diff_state = None;
             }
             _ => {}
         }

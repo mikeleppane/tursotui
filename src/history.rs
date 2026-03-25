@@ -13,6 +13,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) row_count: Option<u64>,
     pub(crate) error_message: Option<String>,
     pub(crate) origin: String,
+    #[allow(dead_code)] // will be used when history panel displays params
+    pub(crate) params_json: Option<String>,
 }
 
 impl HistoryEntry {
@@ -41,6 +43,7 @@ pub(crate) struct LogEntry {
     pub(crate) row_count: usize,
     pub(crate) error_message: Option<String>,
     pub(crate) origin: &'static str,
+    pub(crate) params_json: Option<String>,
 }
 
 /// Messages sent from history tasks back to the main loop.
@@ -162,6 +165,29 @@ impl HistoryDb {
         .await
         .map_err(|e| format!("failed to create bookmarks unique index: {e}"))?;
 
+        // Idempotent migration: add params_json column if not present.
+        let mut has_params = conn
+            .query(
+                "SELECT COUNT(*) FROM pragma_table_info('query_log') WHERE name = 'params_json'",
+                (),
+            )
+            .await
+            .map_err(|e| format!("migration check failed: {e}"))?;
+        if let Some(row) = has_params
+            .next()
+            .await
+            .map_err(|e| format!("migration check failed: {e}"))?
+        {
+            let count: i64 = row
+                .get(0)
+                .map_err(|e| format!("migration check failed: {e}"))?;
+            if count == 0 {
+                conn.execute("ALTER TABLE query_log ADD COLUMN params_json TEXT", ())
+                    .await
+                    .map_err(|e| format!("migration failed: {e}"))?;
+            }
+        }
+
         Ok(())
     }
 
@@ -178,8 +204,8 @@ impl HistoryDb {
             };
             let _ = conn
                 .execute(
-                    "INSERT INTO query_log (sql, database_path, execution_time_ms, row_count, status, error_message, origin)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO query_log (sql, database_path, execution_time_ms, row_count, status, error_message, origin, params_json)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     turso::params![
                         entry.sql,
                         entry.database_path,
@@ -187,7 +213,8 @@ impl HistoryDb {
                         entry.row_count as i64,
                         status,
                         entry.error_message,
-                        entry.origin
+                        entry.origin,
+                        entry.params_json
                     ],
                 )
                 .await;
@@ -265,7 +292,7 @@ impl HistoryDb {
         };
 
         let sql = format!(
-            "SELECT id, sql, database_path, timestamp, execution_time_ms, row_count, error_message, origin \
+            "SELECT id, sql, database_path, timestamp, execution_time_ms, row_count, error_message, origin, params_json \
              FROM query_log{where_clause} ORDER BY id DESC LIMIT ?"
         );
         params.push(turso::Value::Integer(limit as i64));
@@ -545,6 +572,10 @@ fn row_to_entry(row: &turso::Row) -> Result<HistoryEntry, String> {
         _ => None,
     };
     let origin: String = row.get(7).map_err(|e| map_err("origin", e))?;
+    let params_json = match row.get_value(8).map_err(|e| map_err("params_json", e))? {
+        turso::Value::Text(s) => Some(s),
+        _ => None,
+    };
 
     Ok(HistoryEntry {
         id,
@@ -555,6 +586,7 @@ fn row_to_entry(row: &turso::Row) -> Result<HistoryEntry, String> {
         row_count,
         error_message,
         origin,
+        params_json,
     })
 }
 
@@ -595,6 +627,7 @@ mod tests {
             row_count: Some(1),
             error_message: Some("fail".into()),
             origin: "editor".into(),
+            params_json: None,
         };
         assert!(entry.is_error());
     }
@@ -610,6 +643,7 @@ mod tests {
             row_count: Some(1),
             error_message: None,
             origin: "editor".into(),
+            params_json: None,
         };
         assert!(!entry.is_error());
     }
@@ -625,6 +659,7 @@ mod tests {
             row_count: 1,
             error_message: None,
             origin: "editor",
+            params_json: None,
         });
 
         // log_query is fire-and-forget — no acknowledgement message.
@@ -701,6 +736,7 @@ mod tests {
             row_count: 0,
             error_message: None,
             origin: "editor",
+            params_json: None,
         });
         db.log_query(LogEntry {
             sql: "INSERT INTO orders VALUES (1)".into(),
@@ -709,6 +745,7 @@ mod tests {
             row_count: 0,
             error_message: None,
             origin: "editor",
+            params_json: None,
         });
 
         // log_query is fire-and-forget — no acknowledgement message.
@@ -763,6 +800,7 @@ mod tests {
             row_count: 0,
             error_message: None,
             origin: "editor",
+            params_json: None,
         });
 
         // log_query is fire-and-forget — wait for spawned INSERT
@@ -793,5 +831,75 @@ mod tests {
             }
             other => panic!("expected Loaded, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn params_json_round_trips_through_log_and_load() {
+        let mut db = test_history_db().await;
+
+        let params = r#"["42","hello"]"#;
+        db.log_query(LogEntry {
+            sql: "SELECT * FROM t WHERE id = ?1 AND name = ?2".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 1,
+            row_count: 1,
+            error_message: None,
+            origin: "user",
+            params_json: Some(params.to_string()),
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        db.request_load(10, None, None, None, false);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(
+                    entries[0].params_json.as_deref(),
+                    Some(params),
+                    "params_json should round-trip through log and load"
+                );
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn params_json_null_round_trips() {
+        let mut db = test_history_db().await;
+
+        db.log_query(LogEntry {
+            sql: "SELECT 1".into(),
+            database_path: "test.db".into(),
+            execution_time_ms: 0,
+            row_count: 1,
+            error_message: None,
+            origin: "user",
+            params_json: None,
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        db.request_load(10, None, None, None, false);
+        match recv_timeout(&mut db).await {
+            HistoryMessage::Loaded(entries) => {
+                assert_eq!(entries.len(), 1);
+                assert!(
+                    entries[0].params_json.is_none(),
+                    "params_json should be None when not provided"
+                );
+            }
+            other => panic!("expected Loaded, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_is_idempotent() {
+        // Create schema twice on the same connection — should not fail.
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        HistoryDb::create_schema(&conn).await.unwrap();
+        // Second call must succeed even though params_json column now exists.
+        HistoryDb::create_schema(&conn).await.unwrap();
     }
 }

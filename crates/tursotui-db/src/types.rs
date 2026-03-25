@@ -5,6 +5,15 @@ use std::time::Duration;
 use tursotui_sql::parser::ForeignKeyInfo;
 use tursotui_sql::query_kind::QueryKind;
 
+/// Bound parameter values for parameterized query execution.
+#[derive(Debug, Clone)]
+pub enum QueryParams {
+    /// Positional parameters bound to `?1`, `?2`, … placeholders.
+    Positional(Vec<turso::Value>),
+    /// Named parameters bound to `:name`, `@name`, or `$name` placeholders.
+    Named(Vec<(String, turso::Value)>),
+}
+
 /// A single column definition from query results.
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
@@ -58,6 +67,16 @@ pub struct CustomTypeInfo {
     pub builtin: bool,
 }
 
+/// Index metadata from PRAGMA `index_list` + `index_info`.
+#[derive(Debug, Clone)]
+pub struct IndexDetail {
+    pub name: String,
+    pub table_name: String,
+    pub unique: bool,
+    /// Columns in index order (first = leftmost key).
+    pub columns: Vec<String>,
+}
+
 /// Database metadata from PRAGMAs and file system.
 #[derive(Debug, Clone)]
 pub struct DbInfo {
@@ -81,6 +100,34 @@ pub struct PragmaEntry {
     pub value: String,
     pub writable: bool,
     pub note: Option<String>,
+}
+
+/// Per-column profiling statistics.
+#[derive(Debug, Clone)]
+pub struct ColumnProfile {
+    pub name: String,
+    pub col_type: String,
+    pub total_count: u64,
+    pub null_count: u64,
+    pub distinct_count: u64,
+    pub min: Option<String>,
+    pub max: Option<String>,
+    pub avg: Option<f64>,
+    pub sum: Option<f64>,
+    pub stddev: Option<f64>,
+    pub min_length: Option<u64>,
+    pub max_length: Option<u64>,
+    pub avg_length: Option<f64>,
+    pub top_values: Vec<(String, u64)>,
+}
+
+/// Complete profile result for a table.
+#[derive(Debug, Clone)]
+pub struct ProfileData {
+    pub table_name: String,
+    pub total_rows: u64,
+    pub sampled: bool,
+    pub columns: Vec<ColumnProfile>,
 }
 
 /// Messages sent from query tasks back to the main loop.
@@ -108,6 +155,10 @@ pub enum QueryMessage {
     ForeignKeysLoaded(String, Vec<ForeignKeyInfo>),
     CustomTypesLoaded(Vec<CustomTypeInfo>),
     RowCount(String, u64), // (table_name_lowercase, count)
+    IndexDetailsLoaded(String, Vec<IndexDetail>), // (table_name, indexes)
+    ProfileCompleted(ProfileData),
+    ProfileFailed(String),
+    StddevProbeResult(bool),
 }
 
 /// Convert a turso Value to a display-ready `Option<String>`.

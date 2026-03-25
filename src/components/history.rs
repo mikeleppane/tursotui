@@ -33,6 +33,12 @@ pub(crate) struct QueryHistoryPanel {
     history_unavailable: bool,
     /// Origin filter: when true, show all origins; when false, show user+ddl only.
     show_all_origins: bool,
+    /// Show only queries that exceeded the slow-query threshold.
+    show_slow_only: bool,
+    /// Sort entries by execution time (descending) instead of chronological.
+    sort_by_time: bool,
+    /// Slow-query threshold in milliseconds (from config).
+    slow_threshold_ms: u64,
 }
 
 impl QueryHistoryPanel {
@@ -48,7 +54,15 @@ impl QueryHistoryPanel {
             preview_scroll: 0,
             history_unavailable: false,
             show_all_origins: false,
+            show_slow_only: false,
+            sort_by_time: false,
+            slow_threshold_ms: 500,
         }
+    }
+
+    /// Update the slow-query threshold (called when config is loaded).
+    pub(crate) fn set_slow_threshold(&mut self, ms: u64) {
+        self.slow_threshold_ms = ms;
     }
 
     pub(crate) fn set_unavailable(&mut self) {
@@ -68,6 +82,7 @@ impl QueryHistoryPanel {
     /// Rebuild `filtered` from `entries` based on current search/filter state.
     fn refilter(&mut self) {
         let search_lower = self.search_buffer.to_lowercase();
+        let threshold = self.slow_threshold_ms;
         self.filtered = self
             .entries
             .iter()
@@ -75,6 +90,12 @@ impl QueryHistoryPanel {
             .filter(|(_, e)| {
                 if self.errors_only && !e.is_error() {
                     return false;
+                }
+                if self.show_slow_only {
+                    let is_slow = e.execution_time_ms.is_some_and(|ms| ms > threshold);
+                    if !is_slow {
+                        return false;
+                    }
                 }
                 // Origin filter: default (user+ddl) hides pragma/other origins
                 if !self.show_all_origins && e.origin != "user" && e.origin != "ddl" {
@@ -87,6 +108,15 @@ impl QueryHistoryPanel {
             })
             .map(|(i, _)| i)
             .collect();
+
+        // Sort by execution time (descending) if enabled
+        if self.sort_by_time {
+            self.filtered.sort_by(|&a, &b| {
+                let ta = self.entries[a].execution_time_ms.unwrap_or(0);
+                let tb = self.entries[b].execution_time_ms.unwrap_or(0);
+                tb.cmp(&ta)
+            });
+        }
 
         // Clamp selected
         if self.filtered.is_empty() {
@@ -201,6 +231,20 @@ impl QueryHistoryPanel {
             // Toggle errors-only filter
             (KeyModifiers::NONE, KeyCode::Char('e')) => {
                 self.errors_only = !self.errors_only;
+                self.refilter();
+                None
+            }
+
+            // Toggle slow-queries-only filter
+            (KeyModifiers::NONE, KeyCode::Char('s')) => {
+                self.show_slow_only = !self.show_slow_only;
+                self.refilter();
+                None
+            }
+
+            // Toggle sort by execution time (descending)
+            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('S')) => {
+                self.sort_by_time = !self.sort_by_time;
                 self.refilter();
                 None
             }
@@ -541,7 +585,11 @@ impl QueryHistoryPanel {
         } else {
             "user+ddl"
         };
-        let hints = format!(" /search  Tab:{origin_label}  e:errors  d:del  y:copy  Enter:recall ");
+        let slow_label = if self.show_slow_only { "on" } else { "off" };
+        let sort_label = if self.sort_by_time { "time" } else { "chrono" };
+        let hints = format!(
+            " /search  Tab:{origin_label}  e:errors  s:slow({slow_label})  S:sort({sort_label})  d:del  y:copy  Enter:recall "
+        );
         let status_width = area.width as usize;
         let hints_w = UnicodeWidthStr::width(hints.as_str());
         let status_display = truncate_to_width(&status, status_width.saturating_sub(hints_w));
@@ -592,7 +640,14 @@ impl QueryHistoryPanel {
 
             // Build label: first line of SQL + optional badges
             let first_line = sql.lines().next().unwrap_or("");
-            let mut label = first_line.to_string();
+            let is_slow = entry
+                .execution_time_ms
+                .is_some_and(|ms| ms > self.slow_threshold_ms);
+            let mut label = if is_slow {
+                format!("\u{23f1} {first_line}")
+            } else {
+                first_line.to_string()
+            };
 
             if entry.is_error() {
                 label.push_str(" [err]");
@@ -667,6 +722,7 @@ mod tests {
             row_count: Some(5),
             error_message: None,
             origin: origin.to_string(),
+            params_json: None,
         }
     }
 

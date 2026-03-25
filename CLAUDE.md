@@ -36,6 +36,9 @@ Milestone plans live in `docs/plans/`.
 - All panel borders use `BorderType::Rounded` via the `panel_block`/`overlay_block` helpers — never create `Block::bordered()` directly
 - SQL identifiers must be escaped with `quote_identifier()` (double-quotes), literals with `quote_literal()` (single-quotes) — both in `data_editor.rs`
 - Status bar is intentionally minimal — show panel name + context info + "F1 Help", no keybinding cheat sheets (those belong in the help overlay)
+- **Overlay pattern**: `Overlay` enum must derive `Copy` — use unit variants only (no data). Store overlay state as a separate `Option<State>` field on `AppState`. Wire key routing in `input.rs`, rendering in `layout.rs`, action handling in `AppState::update()`.
+- **Shift+Letter in standard terminals**: `Shift+S` sends `KeyCode::Char('S')` with `KeyModifiers::NONE`, NOT `KeyModifiers::SHIFT`. The SHIFT modifier is only populated under kitty keyboard protocol. Always match both: `(KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('S'))`.
+- **Tab key priority**: When multiple subsystems compete for Tab (autocomplete, param bar, indentation), check in priority order BEFORE the autocomplete popup intercept. Autocomplete always has a selected candidate, so Tab would be swallowed otherwise.
 
 ### Turso/libsql compatibility
 
@@ -74,7 +77,7 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 - Full date/time functions: `date`, `time`, `datetime`, `strftime`, `unixepoch`, `julianday`
 - 30+ JSON functions including `json_extract`, `json_each`, operators (`->`, `->>`)
 - Built-in extensions: UUID (`uuid4()`, `uuid7()`), regexp, vector search, FTS (Tantivy-powered), CSV virtual tables, `generate_series`, percentile aggregates
-- Turso-specific: `stddev()` aggregate, `timediff()`, CDC helper functions (`table_columns_json_array()`, `bin_record_json_object()`)
+- Turso-specific: `stddev()` aggregate (NOT available in standard SQLite — must be probed at connection time before use), `timediff()`, CDC helper functions (`table_columns_json_array()`, `bin_record_json_object()`)
 - Custom types for STRICT tables: built-in `boolean`, `varchar(N)`, `date`, `time`, `timestamp`, `numeric(P,S)`, `uuid`, `inet`, `bytea`, `json`, `jsonb` (experimental, requires enablement)
 - Native vector types: `FLOAT64`, `FLOAT32`, `FLOAT16`, `FLOATB16`, `FLOAT8`, `FLOAT1BIT` with DiskANN indexing via `libsql_vector_idx()`
 
@@ -99,6 +102,12 @@ Turso aims for full SQLite compatibility but has gaps that directly affect this 
 - `serde` + `toml` for config serialization
 - `dirs` for platform config/data directory paths
 - `arboard` for clipboard (default-features = false for SSH-safe fallback)
+
+### EXPLAIN QUERY PLAN format quirks
+
+- The `detail` column from `EXPLAIN QUERY PLAN` returns clean text like `SEARCH employees USING INDEX idx_dept (department_id=?)` — no tree formatting. The `|--` / `` `-- `` prefixes are added by the sqlite3 CLI, not the raw query output.
+- **SQLite may omit `TABLE` keyword** when aliases are used: `SCAN employees AS e` instead of `SCAN TABLE employees`. Any plan line parser must handle both forms (match on `starts_with("SCAN")` not `contains("SCAN TABLE")`).
+- Plan lines from the `detail` column at index 3 are the useful ones; columns 0-2 (id, parent, notused) are structural.
 
 ## Known issues discovered via testing
 

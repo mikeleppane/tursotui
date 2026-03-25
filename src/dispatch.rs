@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
+
 use crate::GlobalMessage;
 use crate::GlobalUi;
 use crate::app::{self, AppState, BottomTab, SubTab};
@@ -33,6 +36,12 @@ pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
         QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
         QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
         QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
+        QueryMessage::IndexDetailsLoaded(table, indexes) => {
+            app::Action::IndexDetailsLoaded(table, indexes)
+        }
+        QueryMessage::ProfileCompleted(data) => app::Action::ProfileCompleted(data),
+        QueryMessage::ProfileFailed(err) => app::Action::ProfileFailed(err),
+        QueryMessage::StddevProbeResult(supported) => app::Action::StddevProbeResult(supported),
         QueryMessage::RowCount(..) | QueryMessage::CustomTypesLoaded(..) => {
             // These are handled directly in the drain loop (main.rs) and should
             // never reach here. Panic in debug builds to catch the invariant
@@ -60,6 +69,43 @@ pub(crate) fn map_history_message(msg: history::HistoryMessage) -> app::Action {
     }
 }
 
+/// Extract the leading column name from a WHERE clause for index hint purposes.
+///
+/// This is a best-effort heuristic: take the first token before any comparison
+/// operator and strip identifier quoting. Handles common patterns like
+/// `status = 'active'`, `id > 5`, `name LIKE '%foo%'`.
+/// Returns `None` for function expressions like `LOWER(name) = 'foo'`.
+fn extract_filter_column(where_clause: &str) -> Option<String> {
+    let trimmed = where_clause.trim();
+    let first_token = trimmed
+        .split(|c: char| c.is_whitespace() || c == '=' || c == '<' || c == '>' || c == '!')
+        .next()?;
+    // Skip function expressions — if the token contains '(' it's not a bare column
+    if first_token.contains('(') {
+        return None;
+    }
+    let col = first_token
+        .trim_matches('"')
+        .trim_matches('`')
+        .trim_matches('[')
+        .trim_matches(']');
+    if col.is_empty() {
+        None
+    } else {
+        Some(col.to_string())
+    }
+}
+
+/// Case-insensitive lookup in the index details cache.
+fn get_table_indexes<'a>(
+    index_details: &'a HashMap<String, Vec<tursotui_db::IndexDetail>>,
+    table: &str,
+) -> Option<&'a Vec<tursotui_db::IndexDetail>> {
+    index_details
+        .get(table)
+        .or_else(|| index_details.get(&table.to_lowercase()))
+}
+
 /// Set execution state on a `DatabaseContext` and fire the query.
 ///
 /// Shared by `RecallAndExecute`, `RecallAndExecuteBookmark`, and any path
@@ -69,7 +115,7 @@ fn begin_execution(db: &mut app::DatabaseContext, sql: &str, source: app::Execut
         db.executing = true;
         db.last_execution_source = source;
         db.last_executed_sql = Some(sql.to_owned());
-        db.handle.execute(sql.to_owned(), None);
+        db.handle.execute(sql.to_owned(), None, None);
     }
 }
 
@@ -84,11 +130,18 @@ pub(crate) fn dispatch_action_to_db(
     global_ui: &mut GlobalUi,
 ) {
     match action {
-        app::Action::ExecuteQuery(sql, _source, source_table) => {
+        app::Action::ExecuteQuery {
+            sql,
+            source: _,
+            source_table,
+            params,
+        } => {
             if !sql.trim().is_empty() {
-                app.databases[db_idx]
-                    .handle
-                    .execute(sql.clone(), source_table.clone());
+                app.databases[db_idx].handle.execute(
+                    sql.clone(),
+                    source_table.clone(),
+                    params.clone(),
+                );
             }
         }
         app::Action::ExecuteFilteredQuery {
@@ -113,8 +166,36 @@ pub(crate) fn dispatch_action_to_db(
             };
             db.last_executed_sql = Some(sql.clone());
             db.last_filter_query = true;
-            db.handle.execute(sql, Some(table.clone()));
+            db.handle.execute(sql, Some(table.clone()), None);
             db.executing = true;
+            // Show a hint if the filter column is not indexed and the table is large.
+            if !where_clause.is_empty()
+                && let Some(col_name) = extract_filter_column(where_clause)
+            {
+                let is_indexed = get_table_indexes(&db.schema_cache.index_details, table)
+                    .is_some_and(|indexes| {
+                        indexes.iter().any(|idx| {
+                            idx.columns
+                                .first()
+                                .is_some_and(|c| c.eq_ignore_ascii_case(&col_name))
+                        })
+                    });
+                let row_count = db
+                    .schema_cache
+                    .row_counts
+                    .get(&table.to_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                if !is_indexed && row_count > 1000 {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!(
+                            "Column \"{col_name}\" is not indexed \u{2014} query may be slow on large tables"
+                        ),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+            }
         }
         app::Action::LoadColumns(table_name) => {
             app.databases[db_idx]
@@ -131,8 +212,34 @@ pub(crate) fn dispatch_action_to_db(
                 enriched.source_table = tursotui_sql::parser::detect_source_table(&enriched.sql);
             }
             db.results.set_results(&enriched);
+            // Populate index indicators: mark leading-key columns for the source table.
+            let leading_cols: HashSet<String> = enriched
+                .source_table
+                .as_deref()
+                .and_then(|t| get_table_indexes(&db.schema_cache.index_details, t))
+                .map(|indexes| {
+                    indexes
+                        .iter()
+                        .filter_map(|idx| idx.columns.first().cloned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            db.results.set_indexed_columns(leading_cols);
             // Mark explain as stale with the executed SQL
             db.explain.mark_stale(result.sql.clone());
+            // Invalidate profile on DML (INSERT/UPDATE/DELETE) or if row count changed
+            let is_dml = matches!(
+                result.query_kind,
+                QueryKind::Insert | QueryKind::Update | QueryKind::Delete
+            );
+            if is_dml {
+                db.profile.mark_stale();
+            } else if let Some(ref table) = enriched.source_table {
+                let new_count = enriched.rows.len() as u64;
+                if db.profile.should_invalidate(table, new_count) {
+                    db.profile.mark_stale();
+                }
+            }
             // Populate record detail with the first row
             if let Some((cols, vals)) = db.results.row_data(0) {
                 db.record_detail.set_row(cols, vals);
@@ -164,6 +271,7 @@ pub(crate) fn dispatch_action_to_db(
                     row_count: result.rows.len(),
                     error_message: None,
                     origin,
+                    params_json: app.databases[db_idx].last_executed_params_json.clone(),
                 });
             }
             // Editability detection: determine if result targets a single editable table.
@@ -278,6 +386,7 @@ pub(crate) fn dispatch_action_to_db(
                     row_count: 0,
                     error_message: Some(err.clone()),
                     origin: "user",
+                    params_json: app.databases[db_idx].last_executed_params_json.clone(),
                 });
             }
         }
@@ -288,6 +397,7 @@ pub(crate) fn dispatch_action_to_db(
             db.schema_cache.entries.clone_from(entries);
             db.schema_cache.columns.clear();
             db.schema_cache.row_counts.clear();
+            db.schema_cache.index_details.clear();
             db.schema_cache.fully_loaded = false;
             let table_names: Vec<String> = entries
                 .iter()
@@ -296,6 +406,10 @@ pub(crate) fn dispatch_action_to_db(
                 .collect();
             db.handle.load_all_columns(&table_names);
             db.handle.load_custom_types();
+            // Trigger index loading for each table (indexes only exist on tables, not views)
+            for entry in entries.iter().filter(|e| e.obj_type == "table") {
+                db.handle.load_indexes(entry.name.clone());
+            }
         }
         app::Action::ColumnsLoaded(table_name, columns) => {
             let db = &mut app.databases[db_idx];
@@ -327,6 +441,8 @@ pub(crate) fn dispatch_action_to_db(
                         .map(|e| e.name.clone())
                         .collect();
                     db.handle.load_row_counts(&table_names);
+                    // Probe stddev() availability for profiling
+                    db.handle.probe_stddev();
                 }
             }
             // Check if this completes a deferred editability check
@@ -415,7 +531,17 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_pragmas();
             }
         }
-        // ExplainCompleted handled by explain.update() via broadcast
+        app::Action::ExplainCompleted(bytecode, plan) => {
+            let db = &mut app.databases[db_idx];
+            let sql = db.explain.last_query_ref().unwrap_or_default().to_owned();
+            db.explain.set_results(
+                bytecode.clone(),
+                plan.clone(),
+                &sql,
+                &db.schema_cache.row_counts,
+                &db.schema_cache.index_details,
+            );
+        }
         app::Action::ExplainFailed(err) => {
             app.databases[db_idx].explain.set_loading_failed();
             app.transient_message = Some(app::TransientMessage {
@@ -733,6 +859,29 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
+        app::Action::CopyText(text) => {
+            match global_ui
+                .clipboard
+                .as_mut()
+                .ok_or(arboard::Error::ContentNotAvailable)
+                .and_then(|cb| cb.set_text(text))
+            {
+                Ok(()) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: "Copied to clipboard".to_string(),
+                        created_at: std::time::Instant::now(),
+                        is_error: false,
+                    });
+                }
+                Err(e) => {
+                    app.transient_message = Some(app::TransientMessage {
+                        text: format!("Clipboard unavailable: {e}"),
+                        created_at: std::time::Instant::now(),
+                        is_error: true,
+                    });
+                }
+            }
+        }
         // ConfirmCellEdit, CancelCellEdit, AddRow handled by data_editor.update() via broadcast
         // Data editor cell edit actions (requiring cross-component coordination)
         app::Action::StartCellEdit => {
@@ -888,11 +1037,13 @@ pub(crate) fn dispatch_action_to_db(
             let db = &mut app.databases[db_idx];
             // AppState::update() already cleared the overlay.
             db.data_editor.revert_all_edits();
+            // Mark profile as stale since data has changed
+            db.profile.mark_stale();
             // Re-execute activating query to refresh results
             let activating_sql = db.data_editor.activating_query().to_string();
             let source_table = db.data_editor.source_table().map(str::to_string);
             if !activating_sql.is_empty() {
-                db.handle.execute(activating_sql, source_table);
+                db.handle.execute(activating_sql, source_table, None);
             }
             app.transient_message = Some(app::TransientMessage {
                 text: "Changes committed successfully".to_string(),
@@ -908,6 +1059,55 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: true,
             });
             // Changes remain staged — user can inspect and retry
+        }
+        app::Action::RequestProfile => {
+            let db = &mut app.databases[db_idx];
+            // Determine which table to profile from the last query result
+            let source_table = db
+                .results
+                .current_result()
+                .and_then(|r| r.source_table.clone());
+            if let Some(ref table) = source_table
+                && let Some(cols) = db.schema_cache.get_columns(table).cloned()
+            {
+                let total_rows = db
+                    .schema_cache
+                    .row_counts
+                    .get(&table.to_lowercase())
+                    .copied()
+                    .unwrap_or(0);
+                let threshold = app.config.profile.sample_threshold;
+                let supports_stddev = db.supports_stddev;
+                db.profile.set_loading();
+                db.handle.profile_table(
+                    table.clone(),
+                    cols,
+                    total_rows,
+                    threshold,
+                    supports_stddev,
+                );
+            } else {
+                app.transient_message = Some(app::TransientMessage {
+                    text: "No table selected for profiling".to_string(),
+                    created_at: std::time::Instant::now(),
+                    is_error: false,
+                });
+            }
+        }
+        app::Action::ProfileCompleted(data) => {
+            let db = &mut app.databases[db_idx];
+            db.profile.set_data(data.clone());
+        }
+        app::Action::ProfileFailed(err) => {
+            app.databases[db_idx].profile.mark_stale();
+            app.transient_message = Some(app::TransientMessage {
+                text: format!("Profile failed: {err}"),
+                created_at: std::time::Instant::now(),
+                is_error: true,
+            });
+        }
+        app::Action::StddevProbeResult(supported) => {
+            app.databases[db_idx].supports_stddev = *supported;
         }
         app::Action::FKLoaded(table, fks) => {
             // AppState::update() already stored the FK info in schema_cache.fk_info.
@@ -992,11 +1192,12 @@ pub(crate) fn dispatch_action_to_db(
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)
             app.databases[db_idx].pending_fk_activation = true;
-            let execute_action = app::Action::ExecuteQuery(
+            let execute_action = app::Action::ExecuteQuery {
                 sql,
-                app::ExecutionSource::FullBuffer,
-                Some(target_table),
-            );
+                source: app::ExecutionSource::FullBuffer,
+                source_table: Some(target_table),
+                params: None,
+            };
             app.update(&execute_action);
             dispatch_action_to_db(db_idx, &execute_action, app, global_ui);
         }
@@ -1205,7 +1406,9 @@ mod tests {
     use super::*;
     use crate::app::Action;
     use std::time::Duration;
-    use tursotui_db::{ColumnDef, ColumnInfo, DbInfo, ForeignKeyInfo, PragmaEntry, SchemaEntry};
+    use tursotui_db::{
+        ColumnDef, ColumnInfo, DbInfo, ForeignKeyInfo, IndexDetail, PragmaEntry, SchemaEntry,
+    };
 
     fn dummy_query_result() -> QueryResult {
         QueryResult {
@@ -1502,6 +1705,22 @@ mod tests {
         let _ = map_query_message(QueryMessage::CustomTypesLoaded(vec![]));
     }
 
+    #[test]
+    fn map_query_message_index_details_loaded_returns_action() {
+        let detail = IndexDetail {
+            name: "idx".into(),
+            table_name: "t".into(),
+            unique: false,
+            columns: vec![],
+        };
+        let action = map_query_message(QueryMessage::IndexDetailsLoaded("t".into(), vec![detail]));
+        assert!(
+            matches!(action, Action::IndexDetailsLoaded(ref table, ref indexes)
+                if table == "t" && indexes.len() == 1),
+            "IndexDetailsLoaded should map to Action::IndexDetailsLoaded"
+        );
+    }
+
     // ── map_history_message tests ────────────────────────────────────
 
     #[test]
@@ -1563,5 +1782,73 @@ mod tests {
             }
             other => panic!("expected SetTransient, got: {other:?}"),
         }
+    }
+
+    // ── extract_filter_column tests ──────────────────────────────────
+
+    #[test]
+    fn extract_filter_column_simple_equality() {
+        assert_eq!(
+            extract_filter_column("status = 'active'"),
+            Some("status".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_filter_column_greater_than() {
+        assert_eq!(extract_filter_column("id > 5"), Some("id".to_string()));
+    }
+
+    #[test]
+    fn extract_filter_column_like() {
+        assert_eq!(
+            extract_filter_column("name LIKE '%foo%'"),
+            Some("name".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_filter_column_strips_double_quotes() {
+        assert_eq!(
+            extract_filter_column("\"my_col\" = 1"),
+            Some("my_col".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_filter_column_strips_backticks() {
+        assert_eq!(extract_filter_column("`col` = 1"), Some("col".to_string()));
+    }
+
+    #[test]
+    fn extract_filter_column_empty_returns_none() {
+        assert_eq!(extract_filter_column(""), None);
+    }
+
+    #[test]
+    fn extract_filter_column_only_whitespace_returns_none() {
+        assert_eq!(extract_filter_column("   "), None);
+    }
+
+    #[test]
+    fn extract_filter_column_not_equal_operator() {
+        assert_eq!(
+            extract_filter_column("type != 'foo'"),
+            Some("type".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_filter_column_function_expression_returns_none() {
+        assert_eq!(extract_filter_column("LOWER(name) = 'foo'"), None);
+    }
+
+    #[test]
+    fn extract_filter_column_compound_where() {
+        // Best-effort: returns the first column only
+        assert_eq!(
+            extract_filter_column("a > 5 AND b = 3"),
+            Some("a".to_string())
+        );
     }
 }
