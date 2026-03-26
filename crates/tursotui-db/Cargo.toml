@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Database abstraction layer for tursotui"
 
 [dependencies]
-tursotui-sql = { path = "../tursotui-sql", version = "0.1.0" }
+tursotui-sql = { path = "../tursotui-sql", version = "0.6.0" }
 turso = { workspace = true }
 tokio = { version = "1", features = ["rt", "sync", "macros", "fs"] }
 

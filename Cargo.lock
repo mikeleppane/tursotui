@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "tursotui"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "clap",
@@ -2941,7 +2941,7 @@ dependencies = [
 
 [[package]]
 name = "tursotui-db"
-version = "0.1.0"
+version = "0.6.0"
 dependencies = [
  "tokio",
  "turso",
@@ -2950,7 +2950,7 @@ dependencies = [
 
 [[package]]
 name = "tursotui-sql"
-version = "0.1.0"
+version = "0.6.0"
 
 [[package]]
 name = "twox-hash"
