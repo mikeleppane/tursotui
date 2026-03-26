@@ -1,7 +1,5 @@
 //! Pure text buffer with cursor, selection, undo/redo, and scroll management.
 
-#![allow(dead_code)] // Items are used after QueryEditor migration (next task).
-
 use std::collections::VecDeque;
 
 use unicode_width::UnicodeWidthChar;
@@ -9,20 +7,20 @@ use unicode_width::UnicodeWidthChar;
 const MAX_UNDO: usize = 100;
 
 /// Word-character predicate for SQL identifiers: alphanumeric + underscore.
-pub(crate) fn is_word_char(c: char) -> bool {
+fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
 /// Convert a char offset to a byte offset within a string.
 /// Panics if `char_idx` > number of chars (same contract as `String::insert`).
-pub(crate) fn char_to_byte(s: &str, char_idx: usize) -> usize {
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices()
         .nth(char_idx)
         .map_or(s.len(), |(byte_idx, _)| byte_idx)
 }
 
 /// Number of chars in a string (not bytes).
-pub(crate) fn char_len(s: &str) -> usize {
+fn char_len(s: &str) -> usize {
     s.chars().count()
 }
 
@@ -78,8 +76,9 @@ pub(crate) struct Selection {
     pub(crate) anchor: (usize, usize), // (row, col)
 }
 
-// pub(super): accessible to editor.rs during migration (Task 5).
-// Revert to private once QueryEditor delegates all buffer access.
+// pub(super) on buffer, cursor, selection: accessible to editor.rs for
+// test setup (direct field writes) and render-loop reads. Production code
+// uses method accessors; only tests and the render path use direct access.
 #[derive(Debug)]
 pub(crate) struct TextBuffer {
     pub(super) buffer: Vec<String>,
@@ -88,7 +87,7 @@ pub(crate) struct TextBuffer {
     undo_stack: VecDeque<Vec<String>>,
     redo_stack: Vec<Vec<String>>,
     tab_size: usize,
-    selection: Option<Selection>,
+    pub(super) selection: Option<Selection>,
     dirty: bool,
     last_save: std::time::Instant,
 }
@@ -151,10 +150,6 @@ impl TextBuffer {
         self.cursor
     }
 
-    pub(crate) fn set_cursor(&mut self, row: usize, col: usize) {
-        self.cursor = (row, col);
-    }
-
     pub(crate) fn buffer_lines(&self) -> &[String] {
         &self.buffer
     }
@@ -167,8 +162,15 @@ impl TextBuffer {
         self.selection
     }
 
-    pub(crate) fn tab_size(&self) -> usize {
-        self.tab_size
+    /// Compute the cursor's byte offset within the joined buffer contents.
+    /// Used by `statement_at_cursor` to map cursor position to byte ranges.
+    pub(crate) fn cursor_byte_offset(&self) -> usize {
+        let (row, col) = self.cursor;
+        let mut offset = 0;
+        for line in self.buffer.iter().take(row) {
+            offset += line.len() + 1; // +1 for newline
+        }
+        offset + char_to_byte(&self.buffer[row], col)
     }
 
     // ─── Undo infrastructure ───────────────────────────────────────────
@@ -537,6 +539,59 @@ impl TextBuffer {
 mod tests {
     use super::*;
 
+    // ─── Free function tests ─────────────────────────────────────────
+
+    #[test]
+    fn visual_line_height_empty() {
+        assert_eq!(visual_line_height("", 40), 1);
+    }
+
+    #[test]
+    fn visual_line_height_fits() {
+        assert_eq!(visual_line_height("hello", 40), 1);
+    }
+
+    #[test]
+    fn visual_line_height_exact_fit() {
+        assert_eq!(visual_line_height("12345", 5), 1);
+    }
+
+    #[test]
+    fn visual_line_height_wraps() {
+        // 10 chars in width 4 → 3 visual rows (4+4+2)
+        assert_eq!(visual_line_height("1234567890", 4), 3);
+    }
+
+    #[test]
+    fn visual_line_height_zero_width() {
+        assert_eq!(visual_line_height("hello", 0), 1);
+    }
+
+    #[test]
+    fn cursor_visual_pos_no_wrap() {
+        assert_eq!(cursor_visual_pos("hello", 3, 40), (0, 3));
+    }
+
+    #[test]
+    fn cursor_visual_pos_at_wrap_boundary() {
+        // Width 5: "12345|67890" — col 5 is first char of second row
+        assert_eq!(cursor_visual_pos("1234567890", 5, 5), (1, 0));
+    }
+
+    #[test]
+    fn cursor_visual_pos_second_row() {
+        // Width 4: "1234|5678|90" — col 6 is on row 1, display_col 2
+        assert_eq!(cursor_visual_pos("1234567890", 6, 4), (1, 2));
+    }
+
+    #[test]
+    fn cursor_visual_pos_end_of_line() {
+        // Cursor past last char
+        assert_eq!(cursor_visual_pos("abc", 3, 40), (0, 3));
+    }
+
+    // ─── TextBuffer construction ─────────────────────────────────────
+
     #[test]
     fn new_buffer_has_one_empty_line() {
         let buf = TextBuffer::new(4);
@@ -673,6 +728,47 @@ mod tests {
         buf.dedent();
         assert_eq!(buf.buffer[0], "SELECT");
         assert_eq!(buf.cursor, (0, 2));
+    }
+
+    #[test]
+    fn dedent_partial_indent() {
+        // Only 2 leading spaces with tab_size=4 → removes 2
+        let mut buf = TextBuffer::new(4);
+        buf.buffer = vec!["  SELECT".into()];
+        buf.cursor = (0, 4);
+        buf.dedent();
+        assert_eq!(buf.buffer[0], "SELECT");
+        assert_eq!(buf.cursor, (0, 2));
+    }
+
+    #[test]
+    fn dedent_no_indent_is_noop() {
+        let mut buf = TextBuffer::new(4);
+        buf.buffer = vec!["SELECT".into()];
+        buf.cursor = (0, 3);
+        buf.dedent();
+        assert_eq!(buf.buffer[0], "SELECT");
+        assert_eq!(buf.cursor, (0, 3));
+        assert!(!buf.is_dirty()); // no undo pushed
+    }
+
+    // ─── cursor_byte_offset ──────────────────────────────────────────
+
+    #[test]
+    fn cursor_byte_offset_single_line() {
+        let mut buf = TextBuffer::new(4);
+        buf.buffer = vec!["hello".into()];
+        buf.cursor = (0, 3);
+        assert_eq!(buf.cursor_byte_offset(), 3);
+    }
+
+    #[test]
+    fn cursor_byte_offset_multiline() {
+        let mut buf = TextBuffer::new(4);
+        buf.buffer = vec!["hello".into(), "world".into()];
+        buf.cursor = (1, 2); // "wo|rld"
+        // "hello\n" = 6 bytes, then 2 chars into "world"
+        assert_eq!(buf.cursor_byte_offset(), 8);
     }
 
     #[test]
