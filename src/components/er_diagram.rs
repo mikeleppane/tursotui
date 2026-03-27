@@ -6,7 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use tursotui_sql::quoting::quote_identifier;
 
-use crate::app::{Action, BottomTab, Direction};
+use crate::app::{Action, BottomTab, Direction, TableId};
 use crate::theme::Theme;
 use tursotui_db::{ColumnInfo, SchemaEntry};
 use tursotui_sql::parser::parse_foreign_keys;
@@ -107,14 +107,15 @@ impl ERDiagram {
     pub(crate) fn build_from_schema(
         &mut self,
         entries: &[SchemaEntry],
-        columns: &HashMap<String, Vec<ColumnInfo>>,
+        columns: &HashMap<TableId, Vec<ColumnInfo>>,
     ) {
         self.tables.clear();
         self.relationships.clear();
         self.expanded_tables.clear();
 
         // Build a name → index map so FK targets can be resolved to table indices.
-        let mut name_to_idx: HashMap<&str, usize> = HashMap::new();
+        // Uses TableId keys so FK target names with different casing still resolve.
+        let mut name_to_idx: HashMap<TableId, usize> = HashMap::new();
 
         for entry in entries {
             if entry.obj_type != "table" {
@@ -122,7 +123,7 @@ impl ERDiagram {
             }
 
             let cols: Vec<ERColumn> = columns
-                .get(&entry.name)
+                .get(&TableId::new(&entry.name))
                 .map(|infos| {
                     infos
                         .iter()
@@ -137,7 +138,7 @@ impl ERDiagram {
                 .unwrap_or_default();
 
             let idx = self.tables.len();
-            name_to_idx.insert(&entry.name, idx);
+            name_to_idx.insert(TableId::new(&entry.name), idx);
 
             self.tables.push(ERTable {
                 name: entry.name.clone(),
@@ -156,13 +157,13 @@ impl ERDiagram {
             let Some(sql) = entry.sql.as_deref() else {
                 continue;
             };
-            let Some(&from_idx) = name_to_idx.get(entry.name.as_str()) else {
+            let Some(&from_idx) = name_to_idx.get(&TableId::new(&entry.name)) else {
                 continue;
             };
 
             let fks = parse_foreign_keys(sql);
             for fk in fks {
-                let Some(&to_idx) = name_to_idx.get(fk.to_table.as_str()) else {
+                let Some(&to_idx) = name_to_idx.get(&TableId::new(&fk.to_table)) else {
                     continue; // FK target table not in schema (e.g., dropped)
                 };
 

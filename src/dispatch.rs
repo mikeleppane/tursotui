@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::GlobalMessage;
 use crate::GlobalUi;
-use crate::app::{self, AppState, BottomTab, EditActivation, SubTab};
+use crate::app::{self, AppState, BottomTab, EditActivation, SubTab, TableId};
 use crate::components;
 use crate::export;
 use crate::history;
@@ -96,14 +96,12 @@ fn extract_filter_column(where_clause: &str) -> Option<String> {
     }
 }
 
-/// Case-insensitive lookup in the index details cache.
+/// Lookup indexes for a table. Case-insensitive via `TableId`.
 fn get_table_indexes<'a>(
-    index_details: &'a HashMap<String, Vec<tursotui_db::IndexDetail>>,
+    index_details: &'a HashMap<TableId, Vec<tursotui_db::IndexDetail>>,
     table: &str,
 ) -> Option<&'a Vec<tursotui_db::IndexDetail>> {
-    index_details
-        .get(table)
-        .or_else(|| index_details.get(&table.to_lowercase()))
+    index_details.get(&TableId::new(table))
 }
 
 /// Set execution state on a `DatabaseContext` and fire the query.
@@ -183,7 +181,7 @@ pub(crate) fn dispatch_action_to_db(
                 let row_count = db
                     .schema_cache
                     .row_counts
-                    .get(&table.to_lowercase())
+                    .get(&TableId::new(table))
                     .copied()
                     .unwrap_or(0);
                 if !is_indexed && row_count > 1000 {
@@ -324,7 +322,7 @@ pub(crate) fn dispatch_action_to_db(
                         if !app.databases[db_idx]
                             .schema_cache
                             .fk_info
-                            .contains_key(table)
+                            .contains_key(&TableId::new(table.as_str()))
                             && let Some(entry) = app.databases[db_idx]
                                 .schema_cache
                                 .entries
@@ -336,12 +334,12 @@ pub(crate) fn dispatch_action_to_db(
                             app.databases[db_idx]
                                 .schema_cache
                                 .fk_info
-                                .insert(table.clone(), fks.clone());
+                                .insert(TableId::new(table.as_str()), fks.clone());
                             app.databases[db_idx].data_editor.update_fk_columns(&fks);
                         } else if let Some(fks) = app.databases[db_idx]
                             .schema_cache
                             .fk_info
-                            .get(table)
+                            .get(&TableId::new(table.as_str()))
                             .cloned()
                         {
                             app.databases[db_idx].data_editor.update_fk_columns(&fks);
@@ -422,7 +420,7 @@ pub(crate) fn dispatch_action_to_db(
             // Update schema cache for autocomplete
             db.schema_cache
                 .columns
-                .insert(table_name.clone(), columns.clone());
+                .insert(TableId::new(table_name.as_str()), columns.clone());
             // Check if all tables/views have been loaded
             let expected = db
                 .schema_cache
@@ -497,7 +495,10 @@ pub(crate) fn dispatch_action_to_db(
                         );
                     }
                     // Parse FK info from CREATE TABLE SQL if not yet cached
-                    if !db.schema_cache.fk_info.contains_key(table_name)
+                    if !db
+                        .schema_cache
+                        .fk_info
+                        .contains_key(&TableId::new(table_name.as_str()))
                         && let Some(entry) = db
                             .schema_cache
                             .entries
@@ -508,9 +509,14 @@ pub(crate) fn dispatch_action_to_db(
                         let fks = parse_foreign_keys(create_sql);
                         db.schema_cache
                             .fk_info
-                            .insert(table_name.clone(), fks.clone());
+                            .insert(TableId::new(table_name.as_str()), fks.clone());
                         db.data_editor.update_fk_columns(&fks);
-                    } else if let Some(fks) = db.schema_cache.fk_info.get(table_name).cloned() {
+                    } else if let Some(fks) = db
+                        .schema_cache
+                        .fk_info
+                        .get(&TableId::new(table_name.as_str()))
+                        .cloned()
+                    {
                         db.data_editor.update_fk_columns(&fks);
                     }
                 }
@@ -1094,7 +1100,7 @@ pub(crate) fn dispatch_action_to_db(
                 let total_rows = db
                     .schema_cache
                     .row_counts
-                    .get(&table.to_lowercase())
+                    .get(&TableId::new(table.as_str()))
                     .copied()
                     .unwrap_or(0);
                 let threshold = app.config.profile.sample_threshold;
@@ -1160,7 +1166,7 @@ pub(crate) fn dispatch_action_to_db(
             let fk = db
                 .schema_cache
                 .fk_info
-                .get(&source_table)
+                .get(&TableId::new(&source_table))
                 .and_then(|fks| fks.iter().find(|fk| fk.from_column == col_name))
                 .cloned();
             let Some(fk) = fk else {
@@ -1239,7 +1245,7 @@ pub(crate) fn dispatch_action_to_db(
                 .source_table()
                 .map(str::to_string)
                 .unwrap_or_default();
-            if let Some(fks) = db.schema_cache.fk_info.get(&table).cloned() {
+            if let Some(fks) = db.schema_cache.fk_info.get(&TableId::new(&table)).cloned() {
                 db.data_editor.update_fk_columns(&fks);
             }
         }

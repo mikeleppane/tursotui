@@ -248,8 +248,14 @@ impl SchemaExplorer {
     }
 
     /// Update row counts for display next to table names.
-    pub(crate) fn set_row_counts(&mut self, counts: &std::collections::HashMap<String, u64>) {
-        self.row_counts.clone_from(counts);
+    pub(crate) fn set_row_counts(
+        &mut self,
+        counts: &std::collections::HashMap<crate::app::TableId, u64>,
+    ) {
+        self.row_counts.clear();
+        for (table_id, &count) in counts {
+            self.row_counts.insert(table_id.as_str().to_string(), count);
+        }
     }
 
     /// Look up cached DDL SQL for a schema object by name.

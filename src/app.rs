@@ -21,6 +21,42 @@ use tursotui_db::{
     QueryKind, QueryResult, SchemaEntry,
 };
 
+/// Case-normalizing table identifier.
+///
+/// Normalizes to lowercase on construction so `HashMap` lookups never miss
+/// due to case differences between sources (PRAGMA results, SQL parsing,
+/// user input, FK references).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct TableId(String);
+
+impl TableId {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self(name.into().to_lowercase())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TableId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for TableId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for TableId {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
 /// In-memory cache of schema metadata for autocomplete.
 /// Populated eagerly after schema loads — all columns for all tables/views.
 #[derive(Debug, Clone, Default)]
@@ -28,30 +64,23 @@ pub(crate) struct SchemaCache {
     /// All table and view names from `sqlite_schema`.
     pub(crate) entries: Vec<SchemaEntry>,
     /// Column info keyed by table/view name. Populated via PRAGMA `table_info`.
-    pub(crate) columns: HashMap<String, Vec<ColumnInfo>>,
+    pub(crate) columns: HashMap<TableId, Vec<ColumnInfo>>,
     /// True once all tables have had their columns loaded.
     pub(crate) fully_loaded: bool,
     /// Foreign key info keyed by table name.
-    pub(crate) fk_info: HashMap<String, Vec<ForeignKeyInfo>>,
-    /// Approximate row counts keyed by lowercase table name.
-    pub(crate) row_counts: HashMap<String, u64>,
+    pub(crate) fk_info: HashMap<TableId, Vec<ForeignKeyInfo>>,
+    /// Approximate row counts keyed by table name (normalized via `TableId`).
+    pub(crate) row_counts: HashMap<TableId, u64>,
     /// Custom types from `PRAGMA list_types` (non-base types only).
     pub(crate) custom_types: Vec<CustomTypeInfo>,
     /// Index metadata keyed by table name.
-    pub(crate) index_details: HashMap<String, Vec<IndexDetail>>,
+    pub(crate) index_details: HashMap<TableId, Vec<IndexDetail>>,
 }
 
 impl SchemaCache {
-    /// Case-insensitive column lookup. Tries exact match first, then
-    /// falls back to a linear scan comparing lowercased names.
+    /// Column lookup by table name. Case-insensitive via `TableId` normalization.
     pub(crate) fn get_columns(&self, table: &str) -> Option<&Vec<ColumnInfo>> {
-        self.columns.get(table).or_else(|| {
-            let lower = table.to_lowercase();
-            self.columns
-                .iter()
-                .find(|(k, _)| k.to_lowercase() == lower)
-                .map(|(_, v)| v)
-        })
+        self.columns.get(&TableId::new(table))
     }
 }
 
@@ -597,12 +626,14 @@ impl AppState {
                 db.last_truncated = false;
             }
             Action::FKLoaded(table, fks) => {
-                db.schema_cache.fk_info.insert(table.clone(), fks.clone());
+                db.schema_cache
+                    .fk_info
+                    .insert(TableId::new(table.as_str()), fks.clone());
             }
             Action::IndexDetailsLoaded(table, indexes) => {
                 db.schema_cache
                     .index_details
-                    .insert(table.clone(), indexes.clone());
+                    .insert(TableId::new(table.as_str()), indexes.clone());
                 // Refresh results table indicators if it's displaying this table.
                 // Closes the first-query timing gap: IndexDetailsLoaded often arrives
                 // after QueryCompleted, so indicators would be missing on initial display.
@@ -611,7 +642,7 @@ impl AppState {
                     .current_result()
                     .and_then(|r| r.source_table.as_deref())
                     .map(str::to_lowercase);
-                if displaying_table.as_deref() == Some(&table.to_lowercase()) {
+                if displaying_table.as_deref() == Some(TableId::new(table.as_str()).as_str()) {
                     let leading_cols: std::collections::HashSet<String> = indexes
                         .iter()
                         .filter_map(|idx| idx.columns.first().cloned())
@@ -1189,5 +1220,43 @@ mod tests {
         // New QueryCompleted arrives — clears old state
         db.edit_activation = None;
         assert!(db.edit_activation.is_none());
+    }
+
+    // ─── TableId tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn table_id_normalizes_case() {
+        let id = TableId::new("MyTable");
+        assert_eq!(id.as_str(), "mytable");
+    }
+
+    #[test]
+    fn table_id_eq_ignores_case() {
+        let a = TableId::new("Users");
+        let b = TableId::new("users");
+        let c = TableId::new("USERS");
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn table_id_hash_consistent() {
+        use std::collections::HashMap;
+        let mut map: HashMap<TableId, i32> = HashMap::new();
+        map.insert(TableId::new("Orders"), 1);
+        assert_eq!(map.get(&TableId::new("orders")), Some(&1));
+        assert_eq!(map.get(&TableId::new("ORDERS")), Some(&1));
+    }
+
+    #[test]
+    fn table_id_from_string() {
+        let id: TableId = "MyTable".into();
+        assert_eq!(id.as_str(), "mytable");
+    }
+
+    #[test]
+    fn table_id_display_shows_normalized() {
+        let id = TableId::new("MyTable");
+        assert_eq!(format!("{id}"), "mytable");
     }
 }

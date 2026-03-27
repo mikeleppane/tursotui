@@ -19,7 +19,7 @@ use clap::Parser;
 use ratatui::crossterm::event::{Event, KeyEventKind};
 use tokio::sync::mpsc;
 
-use app::{AppState, DatabaseContext};
+use app::{AppState, DatabaseContext, TableId};
 use components::history::QueryHistoryPanel;
 use tursotui_db::{DatabaseHandle, QueryMessage};
 
@@ -246,7 +246,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
             app.databases[db_idx]
                 .schema_cache
                 .row_counts
-                .insert(table.clone(), count);
+                .insert(TableId::new(table.as_str()), count);
             continue;
         }
         // Handle CustomTypesLoaded directly (needs db_idx routing)

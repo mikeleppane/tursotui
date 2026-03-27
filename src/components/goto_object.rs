@@ -362,17 +362,19 @@ fn build_candidates(databases: &[DatabaseContext]) -> Vec<ObjectMatch> {
             });
         }
 
-        // Columns from `schema_cache.columns` (NOT from entries)
-        for (table_name, columns) in &cache.columns {
-            for col in columns {
-                candidates.push(ObjectMatch {
-                    name: col.name.clone(),
-                    kind: ObjectKind::Column,
-                    parent: Some(table_name.clone()),
-                    database_path: db.path.clone(),
-                    database_label: db.label.clone(),
-                    score: 0,
-                });
+        // Columns: iterate entries for original-case names, look up via get_columns()
+        for entry in &cache.entries {
+            if let Some(columns) = cache.get_columns(&entry.name) {
+                for col in columns {
+                    candidates.push(ObjectMatch {
+                        name: col.name.clone(),
+                        kind: ObjectKind::Column,
+                        parent: Some(entry.name.clone()),
+                        database_path: db.path.clone(),
+                        database_label: db.label.clone(),
+                        score: 0,
+                    });
+                }
             }
         }
     }
