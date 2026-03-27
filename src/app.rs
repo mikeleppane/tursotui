@@ -275,6 +275,29 @@ pub(crate) enum Action {
     CopyText(String),
 }
 
+/// Tracks deferred data-editor activation across async boundaries.
+///
+/// `FollowFK` sets `FkNavPending` before the FK query runs so `QueryCompleted`
+/// knows to call `activate_for_fk_nav()` instead of `activate()`.
+///
+/// When `QueryCompleted` fires but columns aren't cached yet, the check defers
+/// to `ColumnsLoaded` as `DeferredForColumns`, carrying the FK flag through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EditActivation {
+    /// The next `QueryCompleted` originated from FK navigation — use `activate_for_fk_nav()`.
+    FkNavPending,
+    /// Columns not yet cached — waiting for `ColumnsLoaded` to complete the check.
+    DeferredForColumns {
+        /// Table being checked for editability.
+        table: String,
+        /// SQL that produced the result (needed for `data_editor.activate()`).
+        sql: String,
+        /// Whether this activation originated from FK navigation.
+        /// Carried through deferral so the correct activation method is called.
+        is_fk_nav: bool,
+    },
+}
+
 /// Per-database workspace.
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct DatabaseContext {
@@ -316,12 +339,8 @@ pub(crate) struct DatabaseContext {
     // Layout percentages (adjustable at runtime)
     pub(crate) sidebar_pct: u16,
     pub(crate) editor_pct: u16,
-    #[allow(dead_code)]
-    pub(crate) pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
-    /// Set to true by `FollowFK` before dispatching `ExecuteQuery`,
-    /// cleared by `QueryCompleted`. Used to distinguish FK navigation
-    /// activations (preserve stack) from manual queries (clear stack).
-    pub(crate) pending_fk_activation: bool,
+    /// Deferred editability check state. See `EditActivation` for the state machine.
+    pub(crate) edit_activation: Option<EditActivation>,
 }
 
 impl DatabaseContext {
@@ -376,8 +395,7 @@ impl DatabaseContext {
             export_popup: None,
             sidebar_pct: 20,
             editor_pct: 40,
-            pending_edit_table: None,
-            pending_fk_activation: false,
+            edit_activation: None,
         }
     }
 
@@ -1062,5 +1080,114 @@ mod tests {
             app.active_overlay.is_none(),
             "bookmarks should not open without history_db"
         );
+    }
+
+    // ─── EditActivation state machine tests ────────────────────────
+
+    #[tokio::test]
+    async fn edit_activation_starts_none() {
+        let app = test_app_state().await;
+        assert!(app.active_db().edit_activation.is_none());
+    }
+
+    #[tokio::test]
+    async fn follow_fk_sets_fk_nav_pending() {
+        let mut app = test_app_state().await;
+        app.active_db_mut().edit_activation = Some(EditActivation::FkNavPending);
+        assert_eq!(
+            app.active_db().edit_activation,
+            Some(EditActivation::FkNavPending)
+        );
+    }
+
+    #[tokio::test]
+    async fn fk_nav_pending_promotes_to_deferred_with_flag() {
+        // Simulates the QueryCompleted handler: reads FkNavPending, clears it,
+        // then creates DeferredForColumns carrying is_fk_nav = true.
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+        db.edit_activation = Some(EditActivation::FkNavPending);
+
+        // QueryCompleted reads the flag, then clears
+        let is_fk = matches!(db.edit_activation, Some(EditActivation::FkNavPending));
+        db.edit_activation = None;
+        assert!(is_fk);
+
+        // Defers because columns aren't cached
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "orders".to_string(),
+            sql: "SELECT * FROM orders".to_string(),
+            is_fk_nav: is_fk,
+        });
+
+        // ColumnsLoaded reads the deferred state — flag survived
+        match &db.edit_activation {
+            Some(EditActivation::DeferredForColumns { is_fk_nav, .. }) => {
+                assert!(is_fk_nav, "FK flag must survive deferral to ColumnsLoaded");
+            }
+            other => panic!("expected DeferredForColumns, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_query_defers_without_fk_flag() {
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+        // No FkNavPending — normal query
+        assert!(db.edit_activation.is_none());
+
+        let is_fk = matches!(db.edit_activation, Some(EditActivation::FkNavPending));
+        assert!(!is_fk);
+
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "users".to_string(),
+            sql: "SELECT * FROM users".to_string(),
+            is_fk_nav: is_fk,
+        });
+
+        match &db.edit_activation {
+            Some(EditActivation::DeferredForColumns { is_fk_nav, .. }) => {
+                assert!(!is_fk_nav);
+            }
+            other => panic!("expected DeferredForColumns, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn query_failed_clears_any_activation_state() {
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+
+        // Clear from FkNavPending
+        db.edit_activation = Some(EditActivation::FkNavPending);
+        db.edit_activation = None; // QueryFailed handler
+        assert!(db.edit_activation.is_none());
+
+        // Clear from DeferredForColumns
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "t".to_string(),
+            sql: "s".to_string(),
+            is_fk_nav: true,
+        });
+        db.edit_activation = None; // QueryFailed handler
+        assert!(db.edit_activation.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_query_overwrites_pending_deferred() {
+        // "Only the latest query matters" — a new QueryCompleted clears
+        // any previously deferred check
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "old_table".to_string(),
+            sql: "SELECT * FROM old_table".to_string(),
+            is_fk_nav: false,
+        });
+
+        // New QueryCompleted arrives — clears old state
+        db.edit_activation = None;
+        assert!(db.edit_activation.is_none());
     }
 }

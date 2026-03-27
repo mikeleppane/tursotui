@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::GlobalMessage;
 use crate::GlobalUi;
-use crate::app::{self, AppState, BottomTab, SubTab};
+use crate::app::{self, AppState, BottomTab, EditActivation, SubTab};
 use crate::components;
 use crate::export;
 use crate::history;
@@ -276,9 +276,11 @@ pub(crate) fn dispatch_action_to_db(
             }
             // Editability detection: determine if result targets a single editable table.
             // Clear any pending deferred check — only the latest query matters.
-            app.databases[db_idx].pending_edit_table = None;
-            let is_fk_activation = app.databases[db_idx].pending_fk_activation;
-            app.databases[db_idx].pending_fk_activation = false;
+            let is_fk_activation = matches!(
+                app.databases[db_idx].edit_activation,
+                Some(EditActivation::FkNavPending)
+            );
+            app.databases[db_idx].edit_activation = None;
             let source_table = if result.source_table.is_some() {
                 result.source_table.clone() // Tier 1: hint from ExecuteQuery
             } else {
@@ -300,7 +302,7 @@ pub(crate) fn dispatch_action_to_db(
                     } else {
                         let cols_cloned = cols.clone();
                         // Use activate_for_fk_nav when this QueryCompleted is from
-                        // an FK navigation follow (signaled by pending_fk_activation flag).
+                        // an FK navigation follow (signaled by EditActivation::FkNavPending).
                         if is_fk_activation {
                             app.databases[db_idx].data_editor.activate_for_fk_nav(
                                 table.clone(),
@@ -349,8 +351,12 @@ pub(crate) fn dispatch_action_to_db(
                     // Columns not cached — defer activation until ColumnsLoaded arrives.
                     // Store both table name and activating SQL so the deferred path
                     // doesn't rely on last_executed_sql (which may change).
-                    app.databases[db_idx].pending_edit_table =
-                        Some((table.clone(), result.sql.clone()));
+                    app.databases[db_idx].edit_activation =
+                        Some(EditActivation::DeferredForColumns {
+                            table: table.clone(),
+                            sql: result.sql.clone(),
+                            is_fk_nav: is_fk_activation,
+                        });
                     app.databases[db_idx].handle.load_columns(table.clone());
                     app.databases[db_idx].data_editor.deactivate();
                 }
@@ -360,8 +366,7 @@ pub(crate) fn dispatch_action_to_db(
         }
         app::Action::QueryFailed(err) => {
             // Clear any pending deferred editability check — the query failed
-            app.databases[db_idx].pending_edit_table = None;
-            app.databases[db_idx].pending_fk_activation = false;
+            app.databases[db_idx].edit_activation = None;
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
                 created_at: std::time::Instant::now(),
@@ -446,9 +451,13 @@ pub(crate) fn dispatch_action_to_db(
                 }
             }
             // Check if this completes a deferred editability check
-            let pending = app.databases[db_idx].pending_edit_table.clone();
-            if let Some((ref pending_table, ref activating_sql)) = pending
-                && pending_table == table_name
+            let pending = app.databases[db_idx].edit_activation.clone();
+            if let Some(EditActivation::DeferredForColumns {
+                ref table,
+                ref sql,
+                is_fk_nav,
+            }) = pending
+                && table == table_name
             {
                 let db = &mut app.databases[db_idx];
                 let pk_cols = components::data_editor::find_pk_columns(columns);
@@ -465,18 +474,28 @@ pub(crate) fn dispatch_action_to_db(
                                 rows: vec![],
                                 execution_time: std::time::Duration::ZERO,
                                 truncated: false,
-                                sql: activating_sql.clone(),
+                                sql: sql.clone(),
                                 rows_affected: 0,
                                 query_kind: QueryKind::Select,
                                 source_table: Some(table_name.clone()),
                             });
-                    db.data_editor.activate(
-                        table_name.clone(),
-                        pk_cols,
-                        columns.clone(),
-                        activating_sql.clone(),
-                        cached,
-                    );
+                    if is_fk_nav {
+                        db.data_editor.activate_for_fk_nav(
+                            table_name.clone(),
+                            pk_cols,
+                            columns.clone(),
+                            sql.clone(),
+                            cached,
+                        );
+                    } else {
+                        db.data_editor.activate(
+                            table_name.clone(),
+                            pk_cols,
+                            columns.clone(),
+                            sql.clone(),
+                            cached,
+                        );
+                    }
                     // Parse FK info from CREATE TABLE SQL if not yet cached
                     if !db.schema_cache.fk_info.contains_key(table_name)
                         && let Some(entry) = db
@@ -484,16 +503,18 @@ pub(crate) fn dispatch_action_to_db(
                             .entries
                             .iter()
                             .find(|e| &e.name == table_name)
-                        && let Some(ref sql) = entry.sql
+                        && let Some(ref create_sql) = entry.sql
                     {
-                        let fks = parse_foreign_keys(sql);
+                        let fks = parse_foreign_keys(create_sql);
                         db.schema_cache
                             .fk_info
                             .insert(table_name.clone(), fks.clone());
                         db.data_editor.update_fk_columns(&fks);
+                    } else if let Some(fks) = db.schema_cache.fk_info.get(table_name).cloned() {
+                        db.data_editor.update_fk_columns(&fks);
                     }
                 }
-                app.databases[db_idx].pending_edit_table = None;
+                db.edit_activation = None;
             }
         }
         app::Action::SwitchBottomTab(BottomTab::Detail) => {
@@ -1191,7 +1212,7 @@ pub(crate) fn dispatch_action_to_db(
             let sql = format!("SELECT * FROM {quoted_table} WHERE {quoted_col} = {quoted_val}");
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)
-            app.databases[db_idx].pending_fk_activation = true;
+            app.databases[db_idx].edit_activation = Some(EditActivation::FkNavPending);
             let execute_action = app::Action::ExecuteQuery {
                 sql,
                 source: app::ExecutionSource::FullBuffer,
