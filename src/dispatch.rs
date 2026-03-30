@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::GlobalMessage;
-use crate::GlobalUi;
+use crate::DbOpenMessage;
+use crate::GlobalFeatures;
 use crate::app::{self, AppState, BottomTab, EditActivation, SubTab, TableId};
 use crate::components;
 use crate::export;
@@ -125,7 +125,7 @@ pub(crate) fn dispatch_action_to_db(
     db_idx: usize,
     action: &app::Action,
     app: &mut AppState,
-    global_ui: &mut GlobalUi,
+    global_ui: &mut GlobalFeatures,
 ) {
     match action {
         app::Action::ExecuteQuery {
@@ -694,7 +694,7 @@ pub(crate) fn dispatch_action_to_db(
             let _ = persistence::delete_buffer(&path);
         }
         app::Action::ShowHistory => {
-            if app.active_overlay == Some(app::Overlay::History) {
+            if app.global_overlay == Some(app::GlobalOverlay::History) {
                 if let Some(ref history_db) = app.history_db {
                     global_ui.history.set_loading();
                     history_db.request_load(
@@ -751,7 +751,7 @@ pub(crate) fn dispatch_action_to_db(
                 return;
             }
             // Only load when overlay is actually opening (update() already toggled it)
-            if matches!(app.active_overlay, Some(app::Overlay::Bookmarks))
+            if matches!(app.global_overlay, Some(app::GlobalOverlay::Bookmarks))
                 && let Some(ref hdb) = app.history_db
             {
                 let db_path = &app.databases[db_idx].path;
@@ -828,7 +828,7 @@ pub(crate) fn dispatch_action_to_db(
             db.editor.trigger_autocomplete(schema);
         }
         app::Action::ShowExport => {
-            if app.active_overlay == Some(app::Overlay::Export) {
+            if app.databases[db_idx].db_overlay == Some(app::DbOverlay::Export) {
                 let db = &mut app.databases[db_idx];
                 // Create the popup with current result data
                 if db.results.export_data().is_some() {
@@ -841,7 +841,7 @@ pub(crate) fn dispatch_action_to_db(
                         Some(components::export::ExportPopup::new(row_count, table_name));
                 } else {
                     // No results to export
-                    app.active_overlay = None;
+                    app.databases[db_idx].db_overlay = None;
                     app.transient_message = Some(app::TransientMessage {
                         text: "No results to export".to_string(),
                         created_at: std::time::Instant::now(),
@@ -1033,7 +1033,7 @@ pub(crate) fn dispatch_action_to_db(
             let db = &mut app.databases[db_idx];
             // AppState::update() already set the overlay. Here we generate DML and store it.
             if db.data_editor.changes().is_empty() {
-                app.active_overlay = None; // cancel overlay set by update()
+                app.databases[db_idx].db_overlay = None; // cancel overlay set by update()
                 app.transient_message = Some(app::TransientMessage {
                     text: "No pending changes".to_string(),
                     created_at: std::time::Instant::now(),
@@ -1055,7 +1055,7 @@ pub(crate) fn dispatch_action_to_db(
         app::Action::SubmitDataEdits => {
             let db = &mut app.databases[db_idx];
             let stmts = db.data_editor.preview_dml().to_vec();
-            app.active_overlay = None;
+            db.db_overlay = None;
             if !stmts.is_empty() {
                 db.handle.execute_transaction(stmts);
             }
@@ -1250,7 +1250,7 @@ pub(crate) fn dispatch_action_to_db(
             }
         }
         app::Action::OpenFilePicker => {
-            if app.active_overlay == Some(app::Overlay::FilePicker) {
+            if app.global_overlay == Some(app::GlobalOverlay::FilePicker) {
                 // Create the file picker with the active database path
                 let active_path = app.databases[app.active_db].path.clone();
                 global_ui.file_picker =
@@ -1291,7 +1291,7 @@ pub(crate) fn dispatch_action_to_db(
                     is_error: false,
                 });
                 // Dismiss picker on success
-                app.active_overlay = None;
+                app.global_overlay = None;
                 global_ui.file_picker = None;
             } else if global_ui.opening_paths.contains(&path_str) {
                 // Already opening this path — ignore duplicate request
@@ -1304,18 +1304,18 @@ pub(crate) fn dispatch_action_to_db(
                 // Check if path doesn't exist yet (SQLite will create it)
                 let is_new = !path.exists();
                 global_ui.opening_paths.insert(path_str.clone());
-                // Open the database asynchronously — result arrives via global_rx
-                let tx = global_ui.global_tx.clone();
+                // Open the database asynchronously — result arrives via db_open_rx
+                let tx = global_ui.db_open_tx.clone();
                 let path_clone = path_str.clone();
                 tokio::spawn(async move {
                     match DatabaseHandle::open(&path_clone).await {
                         Ok(handle) => {
                             let _ =
-                                tx.send(GlobalMessage::DatabaseOpened(handle, path_clone, is_new));
+                                tx.send(DbOpenMessage::DatabaseOpened(handle, path_clone, is_new));
                         }
                         Err(e) => {
                             let _ = tx
-                                .send(GlobalMessage::DatabaseOpenFailed(path_clone, e.to_string()));
+                                .send(DbOpenMessage::DatabaseOpenFailed(path_clone, e.to_string()));
                         }
                     }
                 });
@@ -1327,7 +1327,7 @@ pub(crate) fn dispatch_action_to_db(
             }
         }
         app::Action::OpenGoToObject => {
-            if app.active_overlay == Some(app::Overlay::GoToObject) {
+            if app.global_overlay == Some(app::GlobalOverlay::GoToObject) {
                 // Create the Go to Object popup with all databases' schemas
                 let active_path = app.databases[app.active_db].path.clone();
                 global_ui.goto_object = Some(components::goto_object::GoToObject::new(
@@ -1348,7 +1348,7 @@ pub(crate) fn dispatch_action_to_db(
 }
 
 /// Execute the export action using the current export popup configuration.
-pub(crate) fn execute_export(app: &mut AppState, global_ui: &mut GlobalUi) {
+pub(crate) fn execute_export(app: &mut AppState, global_ui: &mut GlobalFeatures) {
     let active_idx = app.active_db;
     let db = &mut app.databases[active_idx];
     let Some(ref popup) = db.export_popup else {

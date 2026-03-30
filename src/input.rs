@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
-use crate::GlobalUi;
+use crate::GlobalFeatures;
 use crate::app::{self, AppState, BottomTab, PanelId};
 use crate::components::Component;
 use crate::dispatch;
@@ -11,192 +11,206 @@ use crate::event;
 pub(crate) fn handle_key_event(
     key: ratatui::crossterm::event::KeyEvent,
     app: &mut AppState,
-    global_ui: &mut GlobalUi,
+    global_ui: &mut GlobalFeatures,
 ) {
     let active_idx = app.active_db;
 
-    match app.active_overlay {
-        Some(app::Overlay::Help) => {
-            handle_help_key(key, app);
-            return;
-        }
-        Some(app::Overlay::History) => {
-            if let Some(action) = global_ui.history.handle_key(key) {
-                app.update(&action);
-                app.databases[active_idx].broadcast_update(&action);
-                dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+    // Phase 1: Global overlays take priority
+    if let Some(global) = app.global_overlay {
+        match global {
+            app::GlobalOverlay::Help => {
+                handle_help_key(key, app);
+                return;
             }
-            return;
-        }
-        Some(app::Overlay::Export) => {
-            let db = &mut app.databases[active_idx];
-            if let Some(ref mut popup) = db.export_popup
-                && let Some(action) = popup.handle_key(key)
-            {
-                if matches!(&action, app::Action::ExecuteExport) {
-                    dispatch::execute_export(app, global_ui);
-                    app.active_overlay = None;
-                    app.databases[active_idx].export_popup = None;
-                } else {
+            app::GlobalOverlay::History => {
+                if let Some(action) = global_ui.history.handle_key(key) {
                     app.update(&action);
                     app.databases[active_idx].broadcast_update(&action);
                     dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                 }
+                return;
             }
-            return;
-        }
-        Some(app::Overlay::DmlPreview { submit_enabled }) => {
-            let db = &mut app.databases[active_idx];
-            match key.code {
-                KeyCode::Esc => {
-                    app.active_overlay = None;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    db.data_editor.scroll_preview_down();
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    db.data_editor.scroll_preview_up();
-                }
-                KeyCode::Enter if submit_enabled => {
-                    let action = app::Action::SubmitDataEdits;
+            app::GlobalOverlay::Bookmarks => {
+                if let Some(action) = global_ui.bookmarks.handle_key(key) {
                     app.update(&action);
                     app.databases[active_idx].broadcast_update(&action);
                     dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                 }
-                _ => {}
+                return;
             }
-            return;
+            app::GlobalOverlay::FilePicker => {
+                if let Some(ref mut picker) = global_ui.file_picker
+                    && let Some(action) = picker.handle_key(key)
+                {
+                    match &action {
+                        app::Action::OpenDatabase(_) => {
+                            // Dispatch OpenDatabase; picker dismissal happens on
+                            // success inside dispatch_action_to_db.
+                            app.update(&action);
+                            app.databases[active_idx].broadcast_update(&action);
+                            dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+                        }
+                        app::Action::OpenFilePicker => {
+                            // Esc — toggle off via update()
+                            app.update(&action);
+                            global_ui.file_picker = None;
+                        }
+                        app::Action::Quit => {
+                            app.should_quit = true;
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
+            app::GlobalOverlay::GoToObject => {
+                if let Some(ref mut goto) = global_ui.goto_object {
+                    let active_db_path = app.databases[active_idx].path.clone();
+                    if let Some(action) = goto.handle_key(key, &app.databases, &active_db_path) {
+                        match &action {
+                            app::Action::GoToObject(obj_ref) => {
+                                let obj_ref_clone = obj_ref.clone();
+                                app.global_overlay = None;
+                                global_ui.goto_object = None;
+                                app.update(&action);
+                                // After switching database, reveal_and_select on the target db
+                                let target_idx = app.active_db;
+                                let db = &mut app.databases[target_idx];
+                                db.schema
+                                    .reveal_and_select(&obj_ref_clone.name, obj_ref_clone.kind);
+                                // Ensure sidebar is visible so user can see the selection
+                                if !db.sidebar_visible {
+                                    db.sidebar_visible = true;
+                                }
+                                db.focus = PanelId::Schema;
+                            }
+                            app::Action::OpenGoToObject => {
+                                // Toggle off (Esc or Ctrl+P)
+                                app.global_overlay = None;
+                                global_ui.goto_object = None;
+                            }
+                            _ => {
+                                app.update(&action);
+                                app.databases[active_idx].broadcast_update(&action);
+                                dispatch::dispatch_action_to_db(
+                                    active_idx, &action, app, global_ui,
+                                );
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            app::GlobalOverlay::SchemaDiff => {
+                if let Some(ref mut diff_state) = app.schema_diff_state
+                    && let Some(action) =
+                        crate::components::schema_diff::handle_key(diff_state, key)
+                {
+                    app.update(&action);
+                    app.databases[active_idx].broadcast_update(&action);
+                    dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+                }
+                return;
+            }
         }
-        Some(app::Overlay::FilePicker) => {
-            if let Some(ref mut picker) = global_ui.file_picker
-                && let Some(action) = picker.handle_key(key)
-            {
-                match &action {
-                    app::Action::OpenDatabase(_) => {
-                        // Dispatch OpenDatabase; picker dismissal happens on
-                        // success inside dispatch_action_to_db.
+    }
+
+    // Phase 2: Per-database overlays
+    if let Some(db_overlay) = app.databases[active_idx].db_overlay {
+        match db_overlay {
+            app::DbOverlay::Export => {
+                let db = &mut app.databases[active_idx];
+                if let Some(ref mut popup) = db.export_popup
+                    && let Some(action) = popup.handle_key(key)
+                {
+                    if matches!(&action, app::Action::ExecuteExport) {
+                        dispatch::execute_export(app, global_ui);
+                        app.databases[active_idx].db_overlay = None;
+                        app.databases[active_idx].export_popup = None;
+                    } else {
                         app.update(&action);
                         app.databases[active_idx].broadcast_update(&action);
                         dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                     }
-                    app::Action::OpenFilePicker => {
-                        // Esc — toggle off via update()
-                        app.update(&action);
-                        global_ui.file_picker = None;
+                }
+                return;
+            }
+            app::DbOverlay::DmlPreview => {
+                let submit_enabled = app.databases[active_idx].dml_submit_enabled;
+                let db = &mut app.databases[active_idx];
+                match key.code {
+                    KeyCode::Esc => {
+                        db.db_overlay = None;
                     }
-                    app::Action::Quit => {
-                        app.should_quit = true;
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        db.data_editor.scroll_preview_down();
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        db.data_editor.scroll_preview_up();
+                    }
+                    KeyCode::Enter if submit_enabled => {
+                        let action = app::Action::SubmitDataEdits;
+                        app.update(&action);
+                        app.databases[active_idx].broadcast_update(&action);
+                        dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                     }
                     _ => {}
                 }
+                return;
             }
-            return;
-        }
-        Some(app::Overlay::DdlViewer) => {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => {
-                    app.active_overlay = None;
-                    app.ddl_viewer = None;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(ref mut viewer) = app.ddl_viewer {
-                        // With word wrapping, wrapped line count exceeds raw line count.
-                        // Use a generous upper bound; render-time clamp refines it.
-                        let max = viewer.sql.len();
-                        viewer.scroll = viewer.scroll.saturating_add(1).min(max);
+            app::DbOverlay::DdlViewer => {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        app.databases[active_idx].db_overlay = None;
+                        app.databases[active_idx].ddl_viewer = None;
                     }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if let Some(ref mut viewer) = app.ddl_viewer {
-                        viewer.scroll = viewer.scroll.saturating_sub(1);
-                    }
-                }
-                KeyCode::Char('y') => {
-                    if let Some(ref viewer) = app.ddl_viewer {
-                        if let Some(ref mut clip) = global_ui.clipboard {
-                            let _ = clip.set_text(viewer.sql.clone());
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if let Some(ref mut viewer) = app.databases[active_idx].ddl_viewer {
+                            // With word wrapping, wrapped line count exceeds raw line count.
+                            // Use a generous upper bound; render-time clamp refines it.
+                            let max = viewer.sql.len();
+                            viewer.scroll = viewer.scroll.saturating_add(1).min(max);
                         }
-                        let action =
-                            app::Action::SetTransient("DDL copied to clipboard".to_string(), false);
-                        app.update(&action);
                     }
-                }
-                _ => {}
-            }
-            return;
-        }
-        Some(app::Overlay::Bookmarks) => {
-            if let Some(action) = global_ui.bookmarks.handle_key(key) {
-                app.update(&action);
-                app.databases[active_idx].broadcast_update(&action);
-                dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
-            }
-            return;
-        }
-        Some(app::Overlay::ERDiagram) => {
-            if key.kind == KeyEventKind::Press {
-                if let (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('f') | KeyCode::F(6)) =
-                    (key.modifiers, key.code)
-                {
-                    app.active_overlay = None;
-                } else {
-                    let db = &mut app.databases[active_idx];
-                    if let Some(action) = db.er_diagram.handle_key(key) {
-                        app.update(&action);
-                        app.databases[active_idx].broadcast_update(&action);
-                        dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if let Some(ref mut viewer) = app.databases[active_idx].ddl_viewer {
+                            viewer.scroll = viewer.scroll.saturating_sub(1);
+                        }
                     }
-                }
-            }
-            return;
-        }
-        Some(app::Overlay::SchemaDiff) => {
-            if let Some(ref mut diff_state) = app.schema_diff_state
-                && let Some(action) = crate::components::schema_diff::handle_key(diff_state, key)
-            {
-                app.update(&action);
-                app.databases[active_idx].broadcast_update(&action);
-                dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
-            }
-            return;
-        }
-        Some(app::Overlay::GoToObject) => {
-            if let Some(ref mut goto) = global_ui.goto_object {
-                let active_db_path = app.databases[active_idx].path.clone();
-                if let Some(action) = goto.handle_key(key, &app.databases, &active_db_path) {
-                    match &action {
-                        app::Action::GoToObject(obj_ref) => {
-                            let obj_ref_clone = obj_ref.clone();
-                            app.active_overlay = None;
-                            global_ui.goto_object = None;
-                            app.update(&action);
-                            // After switching database, reveal_and_select on the target db
-                            let target_idx = app.active_db;
-                            let db = &mut app.databases[target_idx];
-                            db.schema
-                                .reveal_and_select(&obj_ref_clone.name, obj_ref_clone.kind);
-                            // Ensure sidebar is visible so user can see the selection
-                            if !db.sidebar_visible {
-                                db.sidebar_visible = true;
+                    KeyCode::Char('y') => {
+                        if let Some(ref viewer) = app.databases[active_idx].ddl_viewer {
+                            if let Some(ref mut clip) = global_ui.clipboard {
+                                let _ = clip.set_text(viewer.sql.clone());
                             }
-                            db.focus = PanelId::Schema;
+                            let action = app::Action::SetTransient(
+                                "DDL copied to clipboard".to_string(),
+                                false,
+                            );
+                            app.update(&action);
                         }
-                        app::Action::OpenGoToObject => {
-                            // Toggle off (Esc or Ctrl+P)
-                            app.active_overlay = None;
-                            global_ui.goto_object = None;
-                        }
-                        _ => {
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            app::DbOverlay::ERDiagram => {
+                if key.kind == KeyEventKind::Press {
+                    if let (KeyModifiers::NONE, KeyCode::Esc | KeyCode::Char('f') | KeyCode::F(6)) =
+                        (key.modifiers, key.code)
+                    {
+                        app.databases[active_idx].db_overlay = None;
+                    } else {
+                        let db = &mut app.databases[active_idx];
+                        if let Some(action) = db.er_diagram.handle_key(key) {
                             app.update(&action);
                             app.databases[active_idx].broadcast_update(&action);
                             dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                         }
                     }
                 }
+                return;
             }
-            return;
         }
-        None => {}
     }
 
     // Route to focused component first
@@ -235,7 +249,7 @@ pub(crate) fn handle_key_event(
 fn handle_help_key(key: ratatui::crossterm::event::KeyEvent, app: &mut AppState) {
     match key.code {
         KeyCode::F(1) | KeyCode::Esc | KeyCode::Char('?') => {
-            app.active_overlay = None;
+            app.global_overlay = None;
         }
         KeyCode::Down | KeyCode::Char('j') => {
             app.help_scroll = app.help_scroll.saturating_add(1);

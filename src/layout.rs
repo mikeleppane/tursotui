@@ -2,7 +2,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph, Tabs};
 
-use crate::GlobalUi;
+use crate::GlobalFeatures;
 use crate::app::{AppState, BottomTab, DatabaseContext, PanelId, SubTab};
 use crate::components;
 use crate::components::Component;
@@ -35,7 +35,7 @@ pub(crate) fn build_tab_labels(databases: &[DatabaseContext]) -> Vec<String> {
 }
 
 #[allow(clippy::too_many_lines)]
-pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut GlobalUi) {
+pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut GlobalFeatures) {
     // Copy theme to avoid holding a borrow on app while we mutate databases
     let theme = app.theme;
     let area = frame.area();
@@ -57,7 +57,8 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
 
     let multi_db = app.databases.len() > 1;
     let active_idx = app.active_db;
-    let active_overlay = app.active_overlay;
+    let global_overlay = app.global_overlay;
+    let db_overlay = app.databases[active_idx].db_overlay;
     let help_scroll = app.help_scroll;
 
     // Top level layout depends on whether we have multiple databases
@@ -180,30 +181,10 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
             .render_overlay(frame, area, &theme);
     }
 
-    // History overlay
-    if active_overlay == Some(crate::app::Overlay::History) {
-        global_ui.history.render(frame, area, &theme);
-    }
-
-    // Bookmarks overlay
-    if active_overlay == Some(crate::app::Overlay::Bookmarks) {
-        let db = &app.databases[active_idx];
-        global_ui
-            .bookmarks
-            .set_editor_content(&db.editor.contents());
-        global_ui.bookmarks.set_database_path(&db.path);
-        let full = frame.area();
-        let popup_w = full.width * 70 / 100;
-        let popup_h = full.height * 80 / 100;
-        let x = (full.width.saturating_sub(popup_w)) / 2;
-        let y = (full.height.saturating_sub(popup_h)) / 2;
-        let popup_area = Rect::new(x, y, popup_w, popup_h);
-        frame.render_widget(Clear, popup_area);
-        global_ui.bookmarks.render(frame, popup_area, &theme);
-    }
+    // --- Per-db overlays (rendered first, below global) ---
 
     // ER Diagram fullscreen overlay
-    if active_overlay == Some(crate::app::Overlay::ERDiagram) {
+    if db_overlay == Some(crate::app::DbOverlay::ERDiagram) {
         let full = frame.area();
         let popup_w = full.width * 95 / 100;
         let popup_h = full.height * 95 / 100;
@@ -223,28 +204,15 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
     }
 
     // Export overlay
-    if active_overlay == Some(crate::app::Overlay::Export)
+    if db_overlay == Some(crate::app::DbOverlay::Export)
         && let Some(ref popup) = app.databases[active_idx].export_popup
     {
         popup.render(frame, area, &theme);
     }
 
-    // File picker overlay
-    if active_overlay == Some(crate::app::Overlay::FilePicker)
-        && let Some(ref picker) = global_ui.file_picker
-    {
-        picker.render(frame, area, &theme);
-    }
-
-    // Go to Object overlay
-    if active_overlay == Some(crate::app::Overlay::GoToObject)
-        && let Some(ref goto) = global_ui.goto_object
-    {
-        goto.render(frame, area, &theme);
-    }
-
     // DML preview overlay
-    if let Some(crate::app::Overlay::DmlPreview { submit_enabled }) = active_overlay {
+    if db_overlay == Some(crate::app::DbOverlay::DmlPreview) {
+        let submit_enabled = app.databases[active_idx].dml_submit_enabled;
         components::dml_preview::render_dml_preview(
             frame,
             area,
@@ -256,8 +224,8 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
     }
 
     // DDL viewer overlay
-    if active_overlay == Some(crate::app::Overlay::DdlViewer)
-        && let Some(ref viewer) = app.ddl_viewer
+    if db_overlay == Some(crate::app::DbOverlay::DdlViewer)
+        && let Some(ref viewer) = app.databases[active_idx].ddl_viewer
     {
         let full = frame.area();
         let popup_w = full.width * 70 / 100;
@@ -286,8 +254,46 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
         frame.render_widget(para, inner);
     }
 
+    // --- Global overlays (rendered on top) ---
+
+    // History overlay
+    if global_overlay == Some(crate::app::GlobalOverlay::History) {
+        global_ui.history.render(frame, area, &theme);
+    }
+
+    // Bookmarks overlay
+    if global_overlay == Some(crate::app::GlobalOverlay::Bookmarks) {
+        let db = &app.databases[active_idx];
+        global_ui
+            .bookmarks
+            .set_editor_content(&db.editor.contents());
+        global_ui.bookmarks.set_database_path(&db.path);
+        let full = frame.area();
+        let popup_w = full.width * 70 / 100;
+        let popup_h = full.height * 80 / 100;
+        let x = (full.width.saturating_sub(popup_w)) / 2;
+        let y = (full.height.saturating_sub(popup_h)) / 2;
+        let popup_area = Rect::new(x, y, popup_w, popup_h);
+        frame.render_widget(Clear, popup_area);
+        global_ui.bookmarks.render(frame, popup_area, &theme);
+    }
+
+    // File picker overlay
+    if global_overlay == Some(crate::app::GlobalOverlay::FilePicker)
+        && let Some(ref picker) = global_ui.file_picker
+    {
+        picker.render(frame, area, &theme);
+    }
+
+    // Go to Object overlay
+    if global_overlay == Some(crate::app::GlobalOverlay::GoToObject)
+        && let Some(ref goto) = global_ui.goto_object
+    {
+        goto.render(frame, area, &theme);
+    }
+
     // Schema diff overlay
-    if active_overlay == Some(crate::app::Overlay::SchemaDiff)
+    if global_overlay == Some(crate::app::GlobalOverlay::SchemaDiff)
         && let Some(ref mut diff_state) = app.schema_diff_state
     {
         components::schema_diff::render(frame, diff_state, &theme);
@@ -310,7 +316,7 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
     }
 
     // Help overlay (rendered last so it floats on top)
-    if active_overlay == Some(crate::app::Overlay::Help) {
+    if global_overlay == Some(crate::app::GlobalOverlay::Help) {
         components::help::render(frame, help_scroll, &theme);
     }
 }

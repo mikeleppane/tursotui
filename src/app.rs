@@ -98,18 +98,26 @@ pub(crate) struct DdlViewerState {
     pub(crate) scroll: usize,
 }
 
+/// Overlays that are independent of the active database.
+/// Survive database switching -- only dismissed by explicit close.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Overlay {
+pub(crate) enum GlobalOverlay {
     Help,
     History,
-    Export,
-    DmlPreview { submit_enabled: bool },
+    Bookmarks,
     FilePicker,
     GoToObject,
-    DdlViewer,
-    Bookmarks,
-    ERDiagram,
     SchemaDiff,
+}
+
+/// Overlays tied to a specific database context.
+/// Dismissed when switching databases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DbOverlay {
+    Export,
+    DmlPreview,
+    DdlViewer,
+    ERDiagram,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,6 +373,9 @@ pub(crate) struct DatabaseContext {
     pub(crate) profile: ProfileView,
     pub(crate) supports_stddev: bool,
     pub(crate) export_popup: Option<ExportPopup>,
+    pub(crate) db_overlay: Option<DbOverlay>,
+    pub(crate) dml_submit_enabled: bool,
+    pub(crate) ddl_viewer: Option<DdlViewerState>,
     // Layout percentages (adjustable at runtime)
     pub(crate) sidebar_pct: u16,
     pub(crate) editor_pct: u16,
@@ -422,6 +433,9 @@ impl DatabaseContext {
             profile: ProfileView::new(),
             supports_stddev: false,
             export_popup: None,
+            db_overlay: None,
+            dml_submit_enabled: false,
+            ddl_viewer: None,
             sidebar_pct: 20,
             editor_pct: 40,
             edit_activation: None,
@@ -496,9 +510,8 @@ pub(crate) struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) transient_message: Option<TransientMessage>,
     pub(crate) should_quit: bool,
-    pub(crate) active_overlay: Option<Overlay>,
+    pub(crate) global_overlay: Option<GlobalOverlay>,
     pub(crate) help_scroll: usize,
-    pub(crate) ddl_viewer: Option<DdlViewerState>,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
     pub(crate) schema_diff_state: Option<schema_diff::SchemaDiffState>,
 }
@@ -554,9 +567,8 @@ impl AppState {
             config,
             transient_message: None,
             should_quit: false,
-            active_overlay: None,
+            global_overlay: None,
             help_scroll: 0,
-            ddl_viewer: None,
             history_db,
             schema_diff_state: None,
         }
@@ -673,35 +685,38 @@ impl AppState {
                 }
             }
             Action::ShowHelp => {
-                self.active_overlay = if let Some(Overlay::Help) = self.active_overlay {
+                self.global_overlay = if matches!(self.global_overlay, Some(GlobalOverlay::Help)) {
                     None
                 } else {
                     self.help_scroll = 0;
-                    Some(Overlay::Help)
+                    Some(GlobalOverlay::Help)
                 };
             }
             Action::ShowHistory => {
-                self.active_overlay = if let Some(Overlay::History) = self.active_overlay {
+                self.global_overlay = if matches!(self.global_overlay, Some(GlobalOverlay::History))
+                {
                     None
                 } else {
-                    Some(Overlay::History)
+                    Some(GlobalOverlay::History)
                 };
             }
             Action::ShowBookmarks => {
                 if self.history_db.is_none() {
                     return;
                 }
-                self.active_overlay = if let Some(Overlay::Bookmarks) = self.active_overlay {
-                    None
-                } else {
-                    Some(Overlay::Bookmarks)
-                };
+                self.global_overlay =
+                    if matches!(self.global_overlay, Some(GlobalOverlay::Bookmarks)) {
+                        None
+                    } else {
+                        Some(GlobalOverlay::Bookmarks)
+                    };
             }
             Action::ShowERDiagram => {
-                if self.active_overlay == Some(Overlay::ERDiagram) {
-                    self.active_overlay = None;
+                let db = &mut self.databases[db_idx];
+                if db.db_overlay == Some(DbOverlay::ERDiagram) {
+                    db.db_overlay = None;
                 } else {
-                    self.active_overlay = Some(Overlay::ERDiagram);
+                    db.db_overlay = Some(DbOverlay::ERDiagram);
                 }
             }
             Action::RecallHistory(_)
@@ -710,24 +725,31 @@ impl AppState {
             | Action::RecallAndExecuteBookmark(_)
             | Action::DataEditsCommitted
             | Action::DataEditsFailed(_) => {
-                self.active_overlay = None;
+                self.global_overlay = None;
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = None;
+                db.ddl_viewer = None;
             }
             Action::ShowExport => {
-                self.active_overlay = if let Some(Overlay::Export) = self.active_overlay {
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = if db.db_overlay == Some(DbOverlay::Export) {
                     None
                 } else {
-                    Some(Overlay::Export)
+                    Some(DbOverlay::Export)
                 };
             }
             Action::OpenFilePicker => {
-                self.active_overlay = if let Some(Overlay::FilePicker) = self.active_overlay {
-                    None
-                } else {
-                    Some(Overlay::FilePicker)
-                };
+                self.global_overlay =
+                    if matches!(self.global_overlay, Some(GlobalOverlay::FilePicker)) {
+                        None
+                    } else {
+                        Some(GlobalOverlay::FilePicker)
+                    };
             }
             Action::ShowDmlPreview(b) => {
-                self.active_overlay = Some(Overlay::DmlPreview { submit_enabled: *b });
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = Some(DbOverlay::DmlPreview);
+                db.dml_submit_enabled = *b;
             }
             Action::SwitchDatabase(idx) => {
                 if *idx < self.databases.len() && *idx != self.active_db {
@@ -736,8 +758,8 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
+                    // Per-db overlay state lives on DatabaseContext; switching away
+                    // naturally stops rendering it. Global overlays survive the switch.
                     self.active_db = *idx;
                 }
             }
@@ -748,8 +770,6 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
                     self.active_db = (self.active_db + 1) % self.databases.len();
                 }
             }
@@ -760,8 +780,6 @@ impl AppState {
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
                     self.active_db =
                         (self.active_db + self.databases.len() - 1) % self.databases.len();
                 }
@@ -774,9 +792,8 @@ impl AppState {
                         is_error: false,
                     });
                 } else {
-                    // Clear any open overlay/DDL viewer before removing the database
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
+                    // Clear global overlays before removing the database
+                    self.global_overlay = None;
                     // Auto-save editor buffer before removal so we target the
                     // correct database (after remove(), active_db points elsewhere).
                     let db = &self.databases[self.active_db];
@@ -793,10 +810,10 @@ impl AppState {
                 // Handled in dispatch — requires async DatabaseHandle::open
             }
             Action::OpenGoToObject => {
-                self.active_overlay = if self.active_overlay == Some(Overlay::GoToObject) {
+                self.global_overlay = if self.global_overlay == Some(GlobalOverlay::GoToObject) {
                     None
                 } else {
-                    Some(Overlay::GoToObject)
+                    Some(GlobalOverlay::GoToObject)
                 };
             }
             Action::ResizeSidebar(delta) => {
@@ -839,15 +856,16 @@ impl AppState {
                         }
                     }
                 }
-                self.active_overlay = None;
+                self.global_overlay = None;
             }
             Action::ShowDdl { name, sql } => {
-                self.ddl_viewer = Some(DdlViewerState {
+                let db = &mut self.databases[db_idx];
+                db.ddl_viewer = Some(DdlViewerState {
                     object_name: name.clone(),
                     sql: sql.clone(),
                     scroll: 0,
                 });
-                self.active_overlay = Some(Overlay::DdlViewer);
+                db.db_overlay = Some(DbOverlay::DdlViewer);
             }
             Action::ShowSchemaDiff => {
                 if self.databases.len() < 2 {
@@ -871,11 +889,11 @@ impl AppState {
                         source_db.label.clone(),
                         target_db.label.clone(),
                     ));
-                    self.active_overlay = Some(Overlay::SchemaDiff);
+                    self.global_overlay = Some(GlobalOverlay::SchemaDiff);
                 }
             }
             Action::CloseSchemaDiff => {
-                self.active_overlay = None;
+                self.global_overlay = None;
                 self.schema_diff_state = None;
             }
             _ => {}
@@ -921,23 +939,23 @@ mod tests {
     #[tokio::test]
     async fn update_show_help_toggles_overlay() {
         let mut app = test_app_state().await;
-        assert!(app.active_overlay.is_none());
+        assert!(app.global_overlay.is_none());
 
         app.update(&Action::ShowHelp);
-        assert_eq!(app.active_overlay, Some(Overlay::Help));
+        assert_eq!(app.global_overlay, Some(GlobalOverlay::Help));
 
         app.update(&Action::ShowHelp);
-        assert!(app.active_overlay.is_none(), "ShowHelp again should close");
+        assert!(app.global_overlay.is_none(), "ShowHelp again should close");
     }
 
     #[tokio::test]
     async fn update_show_history_toggles_overlay() {
         let mut app = test_app_state().await;
         app.update(&Action::ShowHistory);
-        assert_eq!(app.active_overlay, Some(Overlay::History));
+        assert_eq!(app.global_overlay, Some(GlobalOverlay::History));
 
         app.update(&Action::ShowHistory);
-        assert!(app.active_overlay.is_none());
+        assert!(app.global_overlay.is_none());
     }
 
     #[tokio::test]
@@ -1087,8 +1105,8 @@ mod tests {
             name: "users".into(),
             sql: "CREATE TABLE users (id INT)".into(),
         });
-        assert_eq!(app.active_overlay, Some(Overlay::DdlViewer));
-        let viewer = app.ddl_viewer.as_ref().unwrap();
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::DdlViewer));
+        let viewer = app.databases[0].ddl_viewer.as_ref().unwrap();
         assert_eq!(viewer.object_name, "users");
         assert_eq!(viewer.sql, "CREATE TABLE users (id INT)");
         assert_eq!(viewer.scroll, 0);
@@ -1097,9 +1115,75 @@ mod tests {
     #[tokio::test]
     async fn update_recall_history_clears_overlay() {
         let mut app = test_app_state().await;
-        app.active_overlay = Some(Overlay::History);
+        app.global_overlay = Some(GlobalOverlay::History);
         app.update(&Action::RecallHistory("SELECT 1".into()));
-        assert!(app.active_overlay.is_none(), "overlay should be cleared");
+        assert!(app.global_overlay.is_none(), "overlay should be cleared");
+    }
+
+    #[tokio::test]
+    async fn update_recall_history_clears_both_overlays() {
+        let mut app = test_app_state().await;
+        app.global_overlay = Some(GlobalOverlay::History);
+        app.databases[0].db_overlay = Some(DbOverlay::Export);
+        app.update(&Action::RecallHistory("SELECT 1".into()));
+        assert!(app.global_overlay.is_none(), "global overlay should clear");
+        assert!(
+            app.databases[0].db_overlay.is_none(),
+            "db overlay should clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_show_er_diagram_toggles_db_overlay() {
+        let mut app = test_app_state().await;
+        assert!(app.databases[0].db_overlay.is_none());
+
+        app.update(&Action::ShowERDiagram);
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::ERDiagram));
+
+        app.update(&Action::ShowERDiagram);
+        assert!(
+            app.databases[0].db_overlay.is_none(),
+            "second toggle should close"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_show_export_toggles_db_overlay() {
+        let mut app = test_app_state().await;
+        app.update(&Action::ShowExport);
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::Export));
+
+        app.update(&Action::ShowExport);
+        assert!(app.databases[0].db_overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn global_overlay_survives_database_switch() {
+        let mut app = two_db_app_state().await;
+        app.global_overlay = Some(GlobalOverlay::Help);
+        app.update(&Action::SwitchDatabase(1));
+        assert_eq!(
+            app.global_overlay,
+            Some(GlobalOverlay::Help),
+            "global overlay should survive database switch"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_overlay_preserved_on_switch_away() {
+        let mut app = two_db_app_state().await;
+        app.databases[0].db_overlay = Some(DbOverlay::ERDiagram);
+        app.update(&Action::SwitchDatabase(1));
+        assert_eq!(app.active_db, 1);
+        // The old db's overlay is preserved — not rendered but still there
+        assert_eq!(
+            app.databases[0].db_overlay,
+            Some(DbOverlay::ERDiagram),
+            "per-db overlay should be preserved on its DatabaseContext"
+        );
+        // The new db has no overlay
+        assert!(app.databases[1].db_overlay.is_none());
     }
 
     #[tokio::test]
@@ -1108,7 +1192,7 @@ mod tests {
         // history_db is None in test — ShowBookmarks should be a no-op
         app.update(&Action::ShowBookmarks);
         assert!(
-            app.active_overlay.is_none(),
+            app.global_overlay.is_none(),
             "bookmarks should not open without history_db"
         );
     }
