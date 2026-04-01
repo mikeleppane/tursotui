@@ -7,7 +7,7 @@ use tursotui_sql::quoting::{format_value, quote_identifier, quote_literal};
 
 use super::Component;
 use super::cell_editor::CellEditor;
-use crate::app::Action;
+use crate::app::{Action, DataAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnInfo, ForeignKeyInfo, QueryResult, SchemaEntry};
 
@@ -44,17 +44,60 @@ pub(crate) struct DataEditorStatus {
 }
 
 /// Pre-computed render state passed to `ResultsTable` before each draw call.
+///
+/// This is the **only** interface `ResultsTable` should use to understand edit state.
+/// It provides methods for PK extraction, row marker lookup, and cell modification
+/// checks. `ResultsTable` should never access `DataEditor`, `ChangeLog`, or `RowEdit`
+/// directly.
+///
+/// `ChangeLog` is exposed to `dispatch.rs` for DML generation only.
 pub(crate) struct EditRenderState {
-    /// Indices of PK columns (used to extract PK keys from result rows).
-    pub pk_columns: Vec<usize>,
+    /// PK column indices — exposed for action dispatch (delete/revert need PK).
+    pub(crate) pk_columns: Vec<usize>,
     /// Row-level annotations keyed by PK tuple.
-    pub row_markers: HashMap<Vec<Option<String>>, RowMarker>,
+    row_markers: HashMap<Vec<Option<String>>, RowMarker>,
     /// Set of `(pk_tuple, column_index)` pairs that have been modified.
-    pub modified_cells: HashSet<(Vec<Option<String>>, usize)>,
-    /// Pending INSERTs to be appended after query rows.
-    pub pending_inserts: Vec<Vec<Option<String>>>,
-    /// Columns that are FK targets (accent indicator). Empty until Task 13.
-    pub fk_columns: HashSet<usize>,
+    modified_cells: HashSet<(Vec<Option<String>>, usize)>,
+    /// Pending INSERT rows to append after query rows.
+    pub(crate) pending_inserts: Vec<Vec<Option<String>>>,
+    /// Column indices with FK relationships (for header accent indicator).
+    pub(crate) fk_columns: HashSet<usize>,
+}
+
+impl EditRenderState {
+    /// Extract PK values from a display row.
+    pub(crate) fn extract_pk(&self, row: &[Option<String>]) -> Vec<Option<String>> {
+        self.pk_columns
+            .iter()
+            .map(|&i| row.get(i).cloned().flatten())
+            .collect()
+    }
+
+    /// Look up the row marker for a display row (extracts PK internally).
+    #[allow(dead_code)] // convenience API for future callers outside the render hot path
+    pub(crate) fn row_marker_for(&self, row: &[Option<String>]) -> Option<RowMarker> {
+        let pk = self.extract_pk(row);
+        self.row_markers.get(&pk).copied()
+    }
+
+    /// Look up the row marker for a pre-extracted PK (avoids re-extraction in hot loops).
+    pub(crate) fn row_marker_for_pk(&self, pk: &[Option<String>]) -> Option<RowMarker> {
+        self.row_markers.get(pk).copied()
+    }
+
+    /// Check whether a specific cell has been modified (extracts PK internally).
+    #[allow(dead_code)] // convenience API for future callers outside the render hot path
+    pub(crate) fn is_cell_modified(&self, row: &[Option<String>], col: usize) -> bool {
+        let pk = self.extract_pk(row);
+        self.modified_cells.contains(&(pk, col))
+    }
+
+    /// Check whether a specific cell has been modified using a pre-extracted PK.
+    pub(crate) fn is_cell_modified_pk(&self, pk: &[Option<String>], col: usize) -> bool {
+        // `to_vec()` needed: `HashSet<(Vec<T>, usize)>` doesn't impl `Borrow<(&[T], usize)>`,
+        // so `contains()` requires an owned tuple.
+        self.modified_cells.contains(&(pk.to_vec(), col))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -870,26 +913,36 @@ impl Component for DataEditor {
 
         // Edit-mode keys
         match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Char('e') | KeyCode::F(2)) => Some(Action::StartCellEdit),
-            (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::AddRow),
-            (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::ToggleDeleteRow),
+            (KeyModifiers::NONE, KeyCode::Char('e') | KeyCode::F(2)) => {
+                Some(Action::Data(DataAction::StartCellEdit))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::Data(DataAction::AddRow)),
+            (KeyModifiers::NONE, KeyCode::Char('d')) => {
+                Some(Action::Data(DataAction::ToggleDeleteRow))
+            }
             (KeyModifiers::NONE, KeyCode::Char('c')) => {
                 // Signal: main.rs will read actual row data and call clone_row()
-                Some(Action::CloneRow)
+                Some(Action::Data(DataAction::CloneRow))
             }
-            (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::RevertCell),
+            (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::Data(DataAction::RevertCell)),
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('U')) => {
-                Some(Action::RevertRow)
+                Some(Action::Data(DataAction::RevertRow))
             }
-            (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::RevertAll),
-            (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ShowDmlPreview(false)),
-            (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(Action::ShowDmlPreview(true)),
-            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::FollowFK),
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                Some(Action::Data(DataAction::RevertAll))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                Some(Action::Data(DataAction::ShowDmlPreview(false)))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                Some(Action::Data(DataAction::ShowDmlPreview(true)))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Data(DataAction::FollowFK)),
             (KeyModifiers::ALT, KeyCode::Left) => {
                 if self.fk_nav_stack.is_empty() {
                     None // fall through to ResultsTable
                 } else {
-                    Some(Action::FKNavigateBack)
+                    Some(Action::Data(DataAction::FKNavigateBack))
                 }
             }
             _ => None, // fall through to ResultsTable
@@ -898,13 +951,13 @@ impl Component for DataEditor {
 
     fn update(&mut self, action: &Action) {
         match action {
-            Action::ConfirmCellEdit(value) => {
+            Action::Data(DataAction::ConfirmCellEdit(value)) => {
                 self.confirm_edit(value.clone());
             }
-            Action::CancelCellEdit => {
+            Action::Data(DataAction::CancelCellEdit) => {
                 self.cancel_edit();
             }
-            Action::AddRow => {
+            Action::Data(DataAction::AddRow) => {
                 self.add_row();
             }
             _ => {}
@@ -1987,5 +2040,96 @@ mod tests {
             stmts[0],
             r#"UPDATE "users" SET "name" = 'Bob', "email" = 'bob@example.com' WHERE "id" = '1'"#
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // EditRenderState method tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn edit_render_state_extract_pk() {
+        let state = EditRenderState {
+            pk_columns: vec![0, 2],
+            row_markers: HashMap::new(),
+            modified_cells: HashSet::new(),
+            pending_inserts: vec![],
+            fk_columns: HashSet::new(),
+        };
+        let row = vec![
+            Some("1".to_string()),
+            Some("Alice".to_string()),
+            Some("admin".to_string()),
+        ];
+        assert_eq!(
+            state.extract_pk(&row),
+            vec![Some("1".to_string()), Some("admin".to_string())]
+        );
+    }
+
+    #[test]
+    fn edit_render_state_row_marker_lookup() {
+        let mut state = EditRenderState {
+            pk_columns: vec![0],
+            row_markers: HashMap::new(),
+            modified_cells: HashSet::new(),
+            pending_inserts: vec![],
+            fk_columns: HashSet::new(),
+        };
+        let row = vec![Some("1".to_string()), Some("Alice".to_string())];
+        assert_eq!(state.row_marker_for(&row), None);
+
+        let pk = vec![Some("1".to_string())];
+        state.row_markers.insert(pk, RowMarker::Modified);
+        assert_eq!(state.row_marker_for(&row), Some(RowMarker::Modified));
+    }
+
+    #[test]
+    fn edit_render_state_row_marker_for_pk() {
+        let mut state = EditRenderState {
+            pk_columns: vec![0],
+            row_markers: HashMap::new(),
+            modified_cells: HashSet::new(),
+            pending_inserts: vec![],
+            fk_columns: HashSet::new(),
+        };
+        let pk = vec![Some("1".to_string())];
+        assert_eq!(state.row_marker_for_pk(&pk), None);
+
+        state.row_markers.insert(pk.clone(), RowMarker::Deleted);
+        assert_eq!(state.row_marker_for_pk(&pk), Some(RowMarker::Deleted));
+    }
+
+    #[test]
+    fn edit_render_state_cell_modified_check() {
+        let mut state = EditRenderState {
+            pk_columns: vec![0],
+            row_markers: HashMap::new(),
+            modified_cells: HashSet::new(),
+            pending_inserts: vec![],
+            fk_columns: HashSet::new(),
+        };
+        let row = vec![Some("1".to_string()), Some("Alice".to_string())];
+        assert!(!state.is_cell_modified(&row, 1));
+
+        let pk = vec![Some("1".to_string())];
+        state.modified_cells.insert((pk, 1));
+        assert!(state.is_cell_modified(&row, 1));
+    }
+
+    #[test]
+    fn edit_render_state_cell_modified_pk() {
+        let mut state = EditRenderState {
+            pk_columns: vec![0],
+            row_markers: HashMap::new(),
+            modified_cells: HashSet::new(),
+            pending_inserts: vec![],
+            fk_columns: HashSet::new(),
+        };
+        let pk = vec![Some("1".to_string())];
+        assert!(!state.is_cell_modified_pk(&pk, 1));
+
+        state.modified_cells.insert((pk.clone(), 1));
+        assert!(state.is_cell_modified_pk(&pk, 1));
+        assert!(!state.is_cell_modified_pk(&pk, 0));
     }
 }

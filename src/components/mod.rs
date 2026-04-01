@@ -19,6 +19,7 @@ pub(crate) mod results;
 pub(crate) mod schema;
 pub(crate) mod schema_diff;
 pub(crate) mod status_bar;
+pub(crate) mod text_buffer;
 
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::prelude::*;

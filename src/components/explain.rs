@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, BottomTab, Direction};
+use crate::app::{Action, AdminAction, BottomTab, Direction, EditorAction, NavAction, TableId};
 use crate::theme::Theme;
 
 use super::Component;
@@ -198,8 +198,8 @@ fn extract_identifiers_from_clause(clause: &str, columns: &mut Vec<String>) {
 pub(crate) fn generate_plan_warnings(
     plan_lines: &[String],
     sql: &str,
-    row_counts: &std::collections::HashMap<String, u64>,
-    index_details: &std::collections::HashMap<String, Vec<tursotui_db::IndexDetail>>,
+    row_counts: &std::collections::HashMap<TableId, u64>,
+    index_details: &std::collections::HashMap<TableId, Vec<tursotui_db::IndexDetail>>,
 ) -> Vec<PlanWarning> {
     let mut warnings = Vec::new();
 
@@ -211,11 +211,7 @@ pub(crate) fn generate_plan_warnings(
                 let table_name = extract_table_from_plan(line);
                 let row_count = table_name
                     .as_ref()
-                    .and_then(|t| {
-                        row_counts
-                            .get(t.as_str())
-                            .or_else(|| row_counts.get(&t.to_lowercase()))
-                    })
+                    .and_then(|t| row_counts.get(&TableId::new(t.as_str())))
                     .copied()
                     .unwrap_or(0);
 
@@ -309,7 +305,7 @@ fn extract_table_from_plan(line: &str) -> Option<String> {
 fn build_index_suggestion(
     sql: &str,
     table_name: Option<&str>,
-    index_details: &std::collections::HashMap<String, Vec<tursotui_db::IndexDetail>>,
+    index_details: &std::collections::HashMap<TableId, Vec<tursotui_db::IndexDetail>>,
 ) -> Option<String> {
     let table = table_name?;
     let columns = extract_where_columns(sql);
@@ -319,8 +315,7 @@ fn build_index_suggestion(
 
     // Filter out columns that are already the leading column of an existing index
     let existing_leading: Vec<String> = index_details
-        .get(table)
-        .or_else(|| index_details.get(&table.to_lowercase()))
+        .get(&TableId::new(table))
         .map(|indexes| {
             indexes
                 .iter()
@@ -424,8 +419,8 @@ impl ExplainView {
         bytecode: Vec<Vec<String>>,
         plan: Vec<String>,
         sql: &str,
-        row_counts: &std::collections::HashMap<String, u64>,
-        index_details: &std::collections::HashMap<String, Vec<tursotui_db::IndexDetail>>,
+        row_counts: &std::collections::HashMap<TableId, u64>,
+        index_details: &std::collections::HashMap<TableId, Vec<tursotui_db::IndexDetail>>,
     ) {
         self.plan_classifications = plan.iter().map(|l| classify_plan_line(l)).collect();
         self.warnings = generate_plan_warnings(&plan, sql, row_counts, index_details);
@@ -815,7 +810,7 @@ impl Component for ExplainView {
                 // Must return Some to consume Tab and prevent global focus cycling
                 // (event.rs maps bare Tab → CycleFocus). SwitchBottomTab(Explain)
                 // is idempotent since we're already on this tab.
-                Some(Action::SwitchBottomTab(BottomTab::Explain))
+                Some(Action::Nav(NavAction::SwitchBottomTab(BottomTab::Explain)))
             }
             // Enter: generate EXPLAIN when stale, or populate editor with suggestion
             (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -824,13 +819,13 @@ impl Component for ExplainView {
                     && let Some(sql) = self.last_query.clone()
                 {
                     // loading flag set by dispatch calling set_loading()
-                    return Some(Action::GenerateExplain(sql));
+                    return Some(Action::Admin(AdminAction::GenerateExplain(sql)));
                 }
                 // If on a suggestion line in QueryPlan mode, populate editor
                 if self.mode == ExplainMode::QueryPlan
                     && let Some(suggestion) = self.selected_suggestion()
                 {
-                    return Some(Action::PopulateEditor(suggestion));
+                    return Some(Action::Editor(EditorAction::PopulateEditor(suggestion)));
                 }
                 None
             }
@@ -857,7 +852,9 @@ impl Component for ExplainView {
                 None
             }
             // Esc releases focus.
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
+            }
             // Navigation: j/Down scroll down
             (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                 let count = self.row_count();
@@ -1039,7 +1036,7 @@ mod tests {
         let plan_lines = vec!["SCAN TABLE orders".to_string()];
         let sql = "SELECT * FROM orders WHERE status = 'active'";
         let mut row_counts = HashMap::new();
-        row_counts.insert("orders".to_string(), 50_000u64);
+        row_counts.insert(TableId::new("orders"), 50_000u64);
         let warnings = generate_plan_warnings(&plan_lines, sql, &row_counts, &HashMap::new());
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].severity, WarningSeverity::Critical);
@@ -1059,7 +1056,7 @@ mod tests {
         let plan_lines = vec!["SCAN TABLE small".to_string()];
         let sql = "SELECT * FROM small WHERE x = 1";
         let mut row_counts = HashMap::new();
-        row_counts.insert("small".to_string(), 500u64);
+        row_counts.insert(TableId::new("small"), 500u64);
         let warnings = generate_plan_warnings(&plan_lines, sql, &row_counts, &HashMap::new());
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].severity, WarningSeverity::Info);
@@ -1170,7 +1167,7 @@ mod tests {
         let sql = "SELECT * FROM t WHERE a = 1";
         let mut indexes = HashMap::new();
         indexes.insert(
-            "t".to_string(),
+            TableId::new("t"),
             vec![tursotui_db::IndexDetail {
                 name: "idx_t_a".to_string(),
                 table_name: "t".to_string(),

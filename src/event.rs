@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::{Action, Direction, SubTab};
+use crate::app::{Action, Direction, NavAction, SubTab, UiAction};
 
 // Note: Multi-database key bindings (Ctrl+PgUp/PgDn/W) are documented in
 // the help overlay (components/help.rs).
@@ -43,40 +43,48 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // Note: Ctrl+Tab is not reliably transmitted by all terminals (xterm, older tmux).
         // Terminals supporting the kitty keyboard protocol deliver it correctly.
         // Bare Tab/Esc in component handle_key provides the fallback for non-editor panels.
-        (KeyModifiers::CONTROL, KeyCode::Tab) => Some(Action::CycleFocus(Direction::Forward)),
+        (KeyModifiers::CONTROL, KeyCode::Tab) => {
+            Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
+        }
 
         // Sidebar toggle
-        (KeyModifiers::CONTROL, KeyCode::Char('b')) => Some(Action::ToggleSidebar),
+        (KeyModifiers::CONTROL, KeyCode::Char('b')) => Some(Action::Nav(NavAction::ToggleSidebar)),
 
         // Sub-tab switching
-        (KeyModifiers::ALT, KeyCode::Char('1')) => Some(Action::SwitchSubTab(SubTab::Query)),
-        (KeyModifiers::ALT, KeyCode::Char('2')) => Some(Action::SwitchSubTab(SubTab::Admin)),
+        (KeyModifiers::ALT, KeyCode::Char('1')) => {
+            Some(Action::Nav(NavAction::SwitchSubTab(SubTab::Query)))
+        }
+        (KeyModifiers::ALT, KeyCode::Char('2')) => {
+            Some(Action::Nav(NavAction::SwitchSubTab(SubTab::Admin)))
+        }
 
         // Theme toggle
-        (KeyModifiers::CONTROL, KeyCode::Char('t')) => Some(Action::ToggleTheme),
+        (KeyModifiers::CONTROL, KeyCode::Char('t')) => Some(Action::Ui(UiAction::ToggleTheme)),
 
         // Help
         (KeyModifiers::NONE, KeyCode::F(1))
-        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('?')) => Some(Action::ShowHelp),
+        | (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('?')) => {
+            Some(Action::Ui(UiAction::ShowHelp))
+        }
 
         // History
-        (KeyModifiers::CONTROL, KeyCode::Char('h')) => Some(Action::ShowHistory),
+        (KeyModifiers::CONTROL, KeyCode::Char('h')) => Some(Action::Ui(UiAction::ShowHistory)),
 
         // Bookmarks
-        (KeyModifiers::NONE, KeyCode::F(3)) => Some(Action::ShowBookmarks),
+        (KeyModifiers::NONE, KeyCode::F(3)) => Some(Action::Ui(UiAction::ShowBookmarks)),
 
         // ER Diagram fullscreen
-        (KeyModifiers::NONE, KeyCode::F(6)) => Some(Action::ShowERDiagram),
+        (KeyModifiers::NONE, KeyCode::F(6)) => Some(Action::Ui(UiAction::ShowERDiagram)),
 
         // Schema Diff
-        (KeyModifiers::NONE, KeyCode::F(7)) => Some(Action::ShowSchemaDiff),
+        (KeyModifiers::NONE, KeyCode::F(7)) => Some(Action::Ui(UiAction::ShowSchemaDiff)),
 
         // Export popup — Ctrl+E (traditional terminals can't distinguish Ctrl+Shift+E).
         // When editor is focused, Ctrl+E is consumed as end-of-line and never reaches here.
-        (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::ShowExport),
+        (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::Ui(UiAction::ShowExport)),
         // Ctrl+Shift+E also works in kitty-protocol terminals
         (m, KeyCode::Char('E')) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
-            Some(Action::ShowExport)
+            Some(Action::Ui(UiAction::ShowExport))
         }
 
         // Quick export: copy all results as TSV — Ctrl+Shift+C or plain Ctrl+C with shift.
@@ -84,25 +92,27 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
         // Some terminals intercept it before the application receives it.
         // Terminals supporting the kitty keyboard protocol deliver it correctly.
         (m, KeyCode::Char('c' | 'C')) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
-            Some(Action::CopyAllResults)
+            Some(Action::Ui(UiAction::CopyAllResults))
         }
 
         // File picker
-        (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::OpenFilePicker),
+        (KeyModifiers::CONTROL, KeyCode::Char('o')) => Some(Action::Nav(NavAction::OpenFilePicker)),
 
         // Go to Object
-        (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(Action::OpenGoToObject),
+        (KeyModifiers::CONTROL, KeyCode::Char('p')) => Some(Action::Nav(NavAction::OpenGoToObject)),
 
         // Panel resizing
-        (KeyModifiers::CONTROL, KeyCode::Left) => Some(Action::ResizeSidebar(-5)),
-        (KeyModifiers::CONTROL, KeyCode::Right) => Some(Action::ResizeSidebar(5)),
-        (KeyModifiers::CONTROL, KeyCode::Up) => Some(Action::ResizeEditor(-5)),
-        (KeyModifiers::CONTROL, KeyCode::Down) => Some(Action::ResizeEditor(5)),
+        (KeyModifiers::CONTROL, KeyCode::Left) => Some(Action::Ui(UiAction::ResizeSidebar(-5))),
+        (KeyModifiers::CONTROL, KeyCode::Right) => Some(Action::Ui(UiAction::ResizeSidebar(5))),
+        (KeyModifiers::CONTROL, KeyCode::Up) => Some(Action::Ui(UiAction::ResizeEditor(-5))),
+        (KeyModifiers::CONTROL, KeyCode::Down) => Some(Action::Ui(UiAction::ResizeEditor(5))),
 
         // Multi-database tab switching
-        (KeyModifiers::CONTROL, KeyCode::PageDown) => Some(Action::NextDatabase),
-        (KeyModifiers::CONTROL, KeyCode::PageUp) => Some(Action::PrevDatabase),
-        (KeyModifiers::CONTROL, KeyCode::Char('w')) => Some(Action::CloseActiveDatabase),
+        (KeyModifiers::CONTROL, KeyCode::PageDown) => Some(Action::Nav(NavAction::NextDatabase)),
+        (KeyModifiers::CONTROL, KeyCode::PageUp) => Some(Action::Nav(NavAction::PrevDatabase)),
+        (KeyModifiers::CONTROL, KeyCode::Char('w')) => {
+            Some(Action::Nav(NavAction::CloseActiveDatabase))
+        }
 
         _ => None,
     }

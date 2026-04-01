@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, Direction, NavAction};
 use crate::theme::Theme;
 use tursotui_db::ColumnDef;
 
@@ -411,7 +411,9 @@ impl Component for RecordDetail {
 
         if self.columns.is_empty() {
             return match key.code {
-                KeyCode::Tab | KeyCode::Esc => Some(Action::CycleFocus(Direction::Forward)),
+                KeyCode::Tab | KeyCode::Esc => {
+                    Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
+                }
                 _ => None,
             };
         }
@@ -457,7 +459,7 @@ impl Component for RecordDetail {
                 None
             }
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
             _ => None,
         }

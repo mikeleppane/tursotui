@@ -6,7 +6,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use tursotui_sql::quoting::quote_identifier;
 
-use crate::app::{Action, BottomTab, Direction};
+use crate::app::{Action, BottomTab, Direction, EditorAction, NavAction, TableId, UiAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnInfo, SchemaEntry};
 use tursotui_sql::parser::parse_foreign_keys;
@@ -107,14 +107,15 @@ impl ERDiagram {
     pub(crate) fn build_from_schema(
         &mut self,
         entries: &[SchemaEntry],
-        columns: &HashMap<String, Vec<ColumnInfo>>,
+        columns: &HashMap<TableId, Vec<ColumnInfo>>,
     ) {
         self.tables.clear();
         self.relationships.clear();
         self.expanded_tables.clear();
 
         // Build a name → index map so FK targets can be resolved to table indices.
-        let mut name_to_idx: HashMap<&str, usize> = HashMap::new();
+        // Uses TableId keys so FK target names with different casing still resolve.
+        let mut name_to_idx: HashMap<TableId, usize> = HashMap::new();
 
         for entry in entries {
             if entry.obj_type != "table" {
@@ -122,7 +123,7 @@ impl ERDiagram {
             }
 
             let cols: Vec<ERColumn> = columns
-                .get(&entry.name)
+                .get(&TableId::new(&entry.name))
                 .map(|infos| {
                     infos
                         .iter()
@@ -137,7 +138,7 @@ impl ERDiagram {
                 .unwrap_or_default();
 
             let idx = self.tables.len();
-            name_to_idx.insert(&entry.name, idx);
+            name_to_idx.insert(TableId::new(&entry.name), idx);
 
             self.tables.push(ERTable {
                 name: entry.name.clone(),
@@ -156,13 +157,13 @@ impl ERDiagram {
             let Some(sql) = entry.sql.as_deref() else {
                 continue;
             };
-            let Some(&from_idx) = name_to_idx.get(entry.name.as_str()) else {
+            let Some(&from_idx) = name_to_idx.get(&TableId::new(&entry.name)) else {
                 continue;
             };
 
             let fks = parse_foreign_keys(sql);
             for fk in fks {
-                let Some(&to_idx) = name_to_idx.get(fk.to_table.as_str()) else {
+                let Some(&to_idx) = name_to_idx.get(&TableId::new(&fk.to_table)) else {
                     continue; // FK target table not in schema (e.g., dropped)
                 };
 
@@ -1009,7 +1010,9 @@ impl Component for ERDiagram {
                     self.rebuild_connected_tables();
                 }
                 // Return Some to consume Tab — prevents global CycleFocus
-                Some(Action::SwitchBottomTab(BottomTab::ERDiagram))
+                Some(Action::Nav(NavAction::SwitchBottomTab(
+                    BottomTab::ERDiagram,
+                )))
             }
 
             // Reverse cycle focus between tables
@@ -1022,7 +1025,9 @@ impl Component for ERDiagram {
                     self.focused_table = Some(prev);
                     self.rebuild_connected_tables();
                 }
-                Some(Action::SwitchBottomTab(BottomTab::ERDiagram))
+                Some(Action::Nav(NavAction::SwitchBottomTab(
+                    BottomTab::ERDiagram,
+                )))
             }
 
             // Open focused table in query editor
@@ -1030,7 +1035,7 @@ impl Component for ERDiagram {
                 if let Some(idx) = self.focused_table {
                     let table_name = &self.tables[idx].name;
                     let sql = format!("SELECT * FROM {} LIMIT 100;", quote_identifier(table_name));
-                    return Some(Action::PopulateEditor(sql));
+                    return Some(Action::Editor(EditorAction::PopulateEditor(sql)));
                 }
                 None
             }
@@ -1071,13 +1076,13 @@ impl Component for ERDiagram {
             }
 
             // Toggle fullscreen overlay
-            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::ShowERDiagram),
+            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Ui(UiAction::ShowERDiagram)),
 
             // Esc releases focus
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 self.focused_table = None;
                 self.connected_tables.clear();
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
 
             _ => None,
@@ -1834,7 +1839,7 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
         let action = er.handle_key(key);
         match action {
-            Some(Action::PopulateEditor(sql)) => {
+            Some(Action::Editor(EditorAction::PopulateEditor(sql))) => {
                 assert!(
                     sql.contains("\"beta\""),
                     "SQL should reference the focused table name, got: {sql}"

@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::app::{Action, DatabaseContext, ObjectKind, ObjectRef};
+use crate::app::{Action, DatabaseContext, NavAction, ObjectKind, ObjectRef};
 use crate::theme::Theme;
 
 /// Maximum number of results to display.
@@ -79,7 +79,7 @@ impl GoToObject {
         match (key.modifiers, key.code) {
             // Dismiss: Esc or Ctrl+P toggle
             (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
-                Some(Action::OpenGoToObject) // toggles overlay off via update()
+                Some(Action::Nav(NavAction::OpenGoToObject)) // toggles overlay off via update()
             }
 
             // Navigate results
@@ -102,11 +102,11 @@ impl GoToObject {
 
             // Select result
             (KeyModifiers::NONE, KeyCode::Enter) => self.results.get(self.selected).map(|m| {
-                Action::GoToObject(ObjectRef {
+                Action::Nav(NavAction::GoToObject(ObjectRef {
                     name: m.name.clone(),
                     kind: m.kind,
                     database_path: m.database_path.clone(),
-                })
+                }))
             }),
 
             // Backspace: delete char before cursor
@@ -362,17 +362,19 @@ fn build_candidates(databases: &[DatabaseContext]) -> Vec<ObjectMatch> {
             });
         }
 
-        // Columns from `schema_cache.columns` (NOT from entries)
-        for (table_name, columns) in &cache.columns {
-            for col in columns {
-                candidates.push(ObjectMatch {
-                    name: col.name.clone(),
-                    kind: ObjectKind::Column,
-                    parent: Some(table_name.clone()),
-                    database_path: db.path.clone(),
-                    database_label: db.label.clone(),
-                    score: 0,
-                });
+        // Columns: iterate entries for original-case names, look up via get_columns()
+        for entry in &cache.entries {
+            if let Some(columns) = cache.get_columns(&entry.name) {
+                for col in columns {
+                    candidates.push(ObjectMatch {
+                        name: col.name.clone(),
+                        kind: ObjectKind::Column,
+                        parent: Some(entry.name.clone()),
+                        database_path: db.path.clone(),
+                        database_label: db.label.clone(),
+                        score: 0,
+                    });
+                }
             }
         }
     }

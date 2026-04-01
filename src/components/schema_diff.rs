@@ -7,7 +7,7 @@ use tursotui_db::{ColumnInfo, SchemaEntry};
 use tursotui_sql::quoting::quote_identifier;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::Action;
+use crate::app::{Action, TableId, UiAction};
 use crate::theme::Theme;
 
 /// Classification of schema objects for diffing.
@@ -132,8 +132,8 @@ impl SchemaDiffState {
 pub(crate) fn compute_schema_diff(
     source_entries: &[SchemaEntry],
     target_entries: &[SchemaEntry],
-    source_columns: &HashMap<String, Vec<ColumnInfo>>,
-    target_columns: &HashMap<String, Vec<ColumnInfo>>,
+    source_columns: &HashMap<TableId, Vec<ColumnInfo>>,
+    target_columns: &HashMap<TableId, Vec<ColumnInfo>>,
 ) -> Vec<ObjectDiff> {
     // Build maps: (lowercase_name, obj_type) -> (name, sql)
     let mut source_map: HashMap<(String, SchemaObjectType), (&str, Option<&str>)> = HashMap::new();
@@ -237,8 +237,8 @@ fn normalize_ddl(sql: Option<&str>) -> String {
 /// Compute column-level diffs for a table.
 fn compute_column_diffs(
     table_lower: &str,
-    source_columns: &HashMap<String, Vec<ColumnInfo>>,
-    target_columns: &HashMap<String, Vec<ColumnInfo>>,
+    source_columns: &HashMap<TableId, Vec<ColumnInfo>>,
+    target_columns: &HashMap<TableId, Vec<ColumnInfo>>,
 ) -> Vec<ColumnDiff> {
     let empty = Vec::new();
     let src_cols = find_columns(table_lower, source_columns).unwrap_or(&empty);
@@ -305,17 +305,12 @@ fn compute_column_diffs(
     col_diffs
 }
 
-/// Case-insensitive column lookup in a column map.
+/// Column lookup by table name. Case-insensitive via `TableId`.
 fn find_columns<'a>(
-    table_lower: &str,
-    columns: &'a HashMap<String, Vec<ColumnInfo>>,
+    table: &str,
+    columns: &'a HashMap<TableId, Vec<ColumnInfo>>,
 ) -> Option<&'a Vec<ColumnInfo>> {
-    columns.get(table_lower).or_else(|| {
-        columns
-            .iter()
-            .find(|(k, _)| k.to_lowercase() == table_lower)
-            .map(|(_, v)| v)
-    })
+    columns.get(&TableId::new(table))
 }
 
 /// Generate a migration SQL statement for a single diff entry.
@@ -718,7 +713,7 @@ pub(crate) fn handle_key(state: &mut SchemaDiffState, key: KeyEvent) -> Option<A
 
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Esc) => {
-            return Some(Action::CloseSchemaDiff);
+            return Some(Action::Ui(UiAction::CloseSchemaDiff));
         }
         (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
             if visible_len > 0 {
@@ -770,14 +765,14 @@ pub(crate) fn handle_key(state: &mut SchemaDiffState, key: KeyEvent) -> Option<A
                     .as_deref()
                     .or(diff.source_ddl.as_deref())
                     .unwrap_or("-- No DDL available");
-                return Some(Action::CopyText(ddl.to_string()));
+                return Some(Action::Ui(UiAction::CopyText(ddl.to_string())));
             }
         }
         (KeyModifiers::NONE, KeyCode::Char('m')) => {
             // Copy migration SQL
             if let Some(&diff_idx) = visible.get(state.selected) {
                 let migration = generate_migration(&state.diffs[diff_idx]);
-                return Some(Action::CopyText(migration));
+                return Some(Action::Ui(UiAction::CopyText(migration)));
             }
         }
         _ => {}
@@ -793,6 +788,7 @@ pub(crate) fn handle_key(state: &mut SchemaDiffState, key: KeyEvent) -> Option<A
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::TableId;
 
     fn make_entry(obj_type: &str, name: &str, sql: Option<&str>) -> SchemaEntry {
         SchemaEntry {
@@ -864,9 +860,9 @@ mod tests {
             "users",
             Some("CREATE TABLE users (id INTEGER, name TEXT)"),
         )];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> =
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("users".into(), vec![make_column("id", "INTEGER")])].into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> = [(
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> = [(
             "users".into(),
             vec![make_column("id", "INTEGER"), make_column("name", "TEXT")],
         )]
@@ -887,7 +883,7 @@ mod tests {
         let ddl = "CREATE TABLE users (id INTEGER, name TEXT)";
         let source = vec![make_entry("table", "users", Some(ddl))];
         let target = vec![make_entry("table", "users", Some(ddl))];
-        let cols: HashMap<String, Vec<ColumnInfo>> = [(
+        let cols: HashMap<TableId, Vec<ColumnInfo>> = [(
             "users".into(),
             vec![make_column("id", "INTEGER"), make_column("name", "TEXT")],
         )]
@@ -905,9 +901,9 @@ mod tests {
             "t",
             Some("CREATE TABLE t (a INT, b TEXT)"),
         )];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> =
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column("a", "INT")])].into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> = [(
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> = [(
             "t".into(),
             vec![make_column("a", "INT"), make_column("b", "TEXT")],
         )]
@@ -931,12 +927,12 @@ mod tests {
             Some("CREATE TABLE t (a INT, b TEXT)"),
         )];
         let target = vec![make_entry("table", "t", Some("CREATE TABLE t (a INT)"))];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> = [(
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> = [(
             "t".into(),
             vec![make_column("a", "INT"), make_column("b", "TEXT")],
         )]
         .into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> =
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column("a", "INT")])].into();
         let diffs = compute_schema_diff(&source, &target, &src_cols, &tgt_cols);
         assert_eq!(diffs[0].status, DiffStatus::Modified);
@@ -953,9 +949,9 @@ mod tests {
     fn diff_detects_type_change() {
         let source = vec![make_entry("table", "t", Some("CREATE TABLE t (a INT)"))];
         let target = vec![make_entry("table", "t", Some("CREATE TABLE t (a TEXT)"))];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> =
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column("a", "INT")])].into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> =
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column("a", "TEXT")])].into();
         let diffs = compute_schema_diff(&source, &target, &src_cols, &tgt_cols);
         assert_eq!(diffs[0].status, DiffStatus::Modified);
@@ -1093,12 +1089,12 @@ mod tests {
             make_entry("table", "beta", Some("CREATE TABLE beta (id INT, x TEXT)")),
             make_entry("table", "gamma", Some("CREATE TABLE gamma (id INT)")),
         ];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> = [
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> = [
             ("alpha".into(), vec![make_column("id", "INT")]),
             ("beta".into(), vec![make_column("id", "INT")]),
         ]
         .into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> = [
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> = [
             (
                 "beta".into(),
                 vec![make_column("id", "INT"), make_column("x", "TEXT")],
@@ -1132,9 +1128,9 @@ mod tests {
             "users",
             Some("CREATE TABLE Users (id INT)"),
         )];
-        let cols: HashMap<String, Vec<ColumnInfo>> =
+        let cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("Users".into(), vec![make_column("id", "INT")])].into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> =
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("users".into(), vec![make_column("id", "INT")])].into();
         let diffs = compute_schema_diff(&source, &target, &cols, &tgt_cols);
         assert_eq!(diffs.len(), 1, "should match case-insensitively");
@@ -1149,9 +1145,9 @@ mod tests {
             "t",
             Some("CREATE TABLE t (id INT PRIMARY KEY)"),
         )];
-        let src_cols: HashMap<String, Vec<ColumnInfo>> =
+        let src_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column("id", "INT")])].into();
-        let tgt_cols: HashMap<String, Vec<ColumnInfo>> =
+        let tgt_cols: HashMap<TableId, Vec<ColumnInfo>> =
             [("t".into(), vec![make_column_pk("id", "INT")])].into();
         let diffs = compute_schema_diff(&source, &target, &src_cols, &tgt_cols);
         assert_eq!(diffs[0].status, DiffStatus::Modified);

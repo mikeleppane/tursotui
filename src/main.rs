@@ -19,12 +19,12 @@ use clap::Parser;
 use ratatui::crossterm::event::{Event, KeyEventKind};
 use tokio::sync::mpsc;
 
-use app::{AppState, DatabaseContext};
+use app::{AppState, DatabaseContext, TableId};
 use components::history::QueryHistoryPanel;
 use tursotui_db::{DatabaseHandle, QueryMessage};
 
 /// Result of an async database open operation.
-pub(crate) enum GlobalMessage {
+pub(crate) enum DbOpenMessage {
     DatabaseOpened(DatabaseHandle, String, bool), // handle, path, is_new_file
     DatabaseOpenFailed(String, String),           // path, error
 }
@@ -39,7 +39,7 @@ struct Cli {
 }
 
 /// Global UI state shared across all database tabs.
-pub(crate) struct GlobalUi {
+pub(crate) struct GlobalFeatures {
     pub(crate) history: QueryHistoryPanel,
     pub(crate) bookmarks: components::bookmarks::BookmarkPanel,
     /// Persistent clipboard handle — kept alive for the app's lifetime so that
@@ -50,23 +50,23 @@ pub(crate) struct GlobalUi {
     /// Go to Object popup (global since it searches across all databases).
     pub(crate) goto_object: Option<components::goto_object::GoToObject>,
     /// Channel for receiving async database-open results.
-    pub(crate) global_rx: mpsc::UnboundedReceiver<GlobalMessage>,
-    pub(crate) global_tx: mpsc::UnboundedSender<GlobalMessage>,
+    pub(crate) db_open_rx: mpsc::UnboundedReceiver<DbOpenMessage>,
+    pub(crate) db_open_tx: mpsc::UnboundedSender<DbOpenMessage>,
     /// Paths currently being opened asynchronously (prevents double-open).
     pub(crate) opening_paths: HashSet<String>,
 }
 
-impl GlobalUi {
+impl GlobalFeatures {
     fn new() -> Self {
-        let (global_tx, global_rx) = mpsc::unbounded_channel();
+        let (db_open_tx, db_open_rx) = mpsc::unbounded_channel();
         Self {
             history: QueryHistoryPanel::new(),
             bookmarks: components::bookmarks::BookmarkPanel::new(),
             clipboard: arboard::Clipboard::new().ok(),
             file_picker: None,
             goto_object: None,
-            global_rx,
-            global_tx,
+            db_open_rx,
+            db_open_tx,
             opening_paths: HashSet::new(),
         }
     }
@@ -151,7 +151,7 @@ fn run_loop(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut global_ui = GlobalUi::new();
+    let mut global_ui = GlobalFeatures::new();
     global_ui
         .history
         .set_slow_threshold(app.config.performance.slow_query_ms);
@@ -230,7 +230,7 @@ fn run_loop(
 }
 
 /// Drain all pending async messages and dispatch the resulting actions.
-fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
+fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalFeatures) {
     // Step 1: collect all pending messages from ALL databases with their db_idx
     let mut pending: Vec<(usize, QueryMessage)> = Vec::new();
     for (db_idx, db) in app.databases.iter_mut().enumerate() {
@@ -246,7 +246,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
             app.databases[db_idx]
                 .schema_cache
                 .row_counts
-                .insert(table.clone(), count);
+                .insert(TableId::new(table.as_str()), count);
             continue;
         }
         // Handle CustomTypesLoaded directly (needs db_idx routing)
@@ -262,15 +262,15 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
         dispatch::dispatch_action_to_db(db_idx, &action, app, global_ui);
     }
 
-    // Drain global messages (async database opens, etc.)
-    while let Ok(msg) = global_ui.global_rx.try_recv() {
+    // Drain database open messages (async database opens)
+    while let Ok(msg) = global_ui.db_open_rx.try_recv() {
         match msg {
-            GlobalMessage::DatabaseOpened(handle, path_str, is_new) => {
+            DbOpenMessage::DatabaseOpened(handle, path_str, is_new) => {
                 global_ui.opening_paths.remove(&path_str);
                 let new_db = DatabaseContext::new(handle, path_str.clone(), &app.config);
                 app.databases.push(new_db);
                 let new_idx = app.databases.len() - 1;
-                let switch = app::Action::SwitchDatabase(new_idx);
+                let switch = app::Action::Nav(app::NavAction::SwitchDatabase(new_idx));
                 app.update(&switch);
                 app.databases[new_idx].handle.load_schema();
                 // Restore saved editor buffer if available
@@ -291,10 +291,10 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalUi) {
                     is_error: false,
                 });
                 // Dismiss picker on success
-                app.active_overlay = None;
+                app.global_overlay = None;
                 global_ui.file_picker = None;
             }
-            GlobalMessage::DatabaseOpenFailed(path_str, err) => {
+            DbOpenMessage::DatabaseOpenFailed(path_str, err) => {
                 global_ui.opening_paths.remove(&path_str);
                 // Keep picker open on failure so user can correct the path
                 app.transient_message = Some(app::TransientMessage {

@@ -21,6 +21,42 @@ use tursotui_db::{
     QueryKind, QueryResult, SchemaEntry,
 };
 
+/// Case-normalizing table identifier.
+///
+/// Normalizes to lowercase on construction so `HashMap` lookups never miss
+/// due to case differences between sources (PRAGMA results, SQL parsing,
+/// user input, FK references).
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct TableId(String);
+
+impl TableId {
+    pub(crate) fn new(name: impl Into<String>) -> Self {
+        Self(name.into().to_lowercase())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TableId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for TableId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for TableId {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
 /// In-memory cache of schema metadata for autocomplete.
 /// Populated eagerly after schema loads — all columns for all tables/views.
 #[derive(Debug, Clone, Default)]
@@ -28,30 +64,23 @@ pub(crate) struct SchemaCache {
     /// All table and view names from `sqlite_schema`.
     pub(crate) entries: Vec<SchemaEntry>,
     /// Column info keyed by table/view name. Populated via PRAGMA `table_info`.
-    pub(crate) columns: HashMap<String, Vec<ColumnInfo>>,
+    pub(crate) columns: HashMap<TableId, Vec<ColumnInfo>>,
     /// True once all tables have had their columns loaded.
     pub(crate) fully_loaded: bool,
     /// Foreign key info keyed by table name.
-    pub(crate) fk_info: HashMap<String, Vec<ForeignKeyInfo>>,
-    /// Approximate row counts keyed by lowercase table name.
-    pub(crate) row_counts: HashMap<String, u64>,
+    pub(crate) fk_info: HashMap<TableId, Vec<ForeignKeyInfo>>,
+    /// Approximate row counts keyed by table name (normalized via `TableId`).
+    pub(crate) row_counts: HashMap<TableId, u64>,
     /// Custom types from `PRAGMA list_types` (non-base types only).
     pub(crate) custom_types: Vec<CustomTypeInfo>,
     /// Index metadata keyed by table name.
-    pub(crate) index_details: HashMap<String, Vec<IndexDetail>>,
+    pub(crate) index_details: HashMap<TableId, Vec<IndexDetail>>,
 }
 
 impl SchemaCache {
-    /// Case-insensitive column lookup. Tries exact match first, then
-    /// falls back to a linear scan comparing lowercased names.
+    /// Column lookup by table name. Case-insensitive via `TableId` normalization.
     pub(crate) fn get_columns(&self, table: &str) -> Option<&Vec<ColumnInfo>> {
-        self.columns.get(table).or_else(|| {
-            let lower = table.to_lowercase();
-            self.columns
-                .iter()
-                .find(|(k, _)| k.to_lowercase() == lower)
-                .map(|(_, v)| v)
-        })
+        self.columns.get(&TableId::new(table))
     }
 }
 
@@ -69,18 +98,26 @@ pub(crate) struct DdlViewerState {
     pub(crate) scroll: usize,
 }
 
+/// Overlays that are independent of the active database.
+/// Survive database switching -- only dismissed by explicit close.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Overlay {
+pub(crate) enum GlobalOverlay {
     Help,
     History,
-    Export,
-    DmlPreview { submit_enabled: bool },
+    Bookmarks,
     FilePicker,
     GoToObject,
-    DdlViewer,
-    Bookmarks,
-    ERDiagram,
     SchemaDiff,
+}
+
+/// Overlays tied to a specific database context.
+/// Dismissed when switching databases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DbOverlay {
+    Export,
+    DmlPreview,
+    DdlViewer,
+    ERDiagram,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,33 +186,12 @@ pub(crate) struct ObjectRef {
     pub(crate) database_path: String,
 }
 
-/// All state mutations flow through actions.
+/// Administrative / schema / database-info actions.
 #[derive(Debug)]
-pub(crate) enum Action {
-    /// Key was consumed by a component; suppress global fallback.
-    /// Intentionally a no-op in `update()` and `dispatch_action_to_db()` (falls to `_ => {}`).
-    Consumed,
-    SwitchSubTab(SubTab),
-    CycleFocus(Direction),
-    ToggleSidebar,
-    SwitchBottomTab(BottomTab),
-    ToggleTheme,
-    ShowHelp,
-    Quit,
-    ClearEditor,
-    ExecuteQuery {
-        sql: String,
-        source: ExecutionSource,
-        source_table: Option<String>,
-        params: Option<tursotui_db::QueryParams>,
-    },
-    QueryCompleted(QueryResult),
-    QueryFailed(String),
+pub(crate) enum AdminAction {
     SchemaLoaded(Vec<SchemaEntry>),
     ColumnsLoaded(String, Vec<ColumnInfo>),
-    PopulateEditor(String),
     LoadColumns(String),
-    SetTransient(String, bool),
     GenerateExplain(String),
     ExplainCompleted(Vec<Vec<String>>, Vec<String>),
     ExplainFailed(String),
@@ -194,19 +210,99 @@ pub(crate) enum Action {
     IntegrityCheck,
     IntegrityCheckCompleted(String),
     IntegrityCheckFailed(String),
-    HistoryLoaded(Vec<crate::history::HistoryEntry>),
+    IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
+    RequestProfile,
+    ProfileCompleted(tursotui_db::ProfileData),
+    ProfileFailed(String),
+    StddevProbeResult(bool),
+}
+
+/// Navigation / focus / database-switching actions.
+#[derive(Debug)]
+pub(crate) enum NavAction {
+    SwitchDatabase(usize),
+    NextDatabase,
+    PrevDatabase,
+    CloseActiveDatabase,
+    OpenDatabase(std::path::PathBuf),
+    SwitchSubTab(SubTab),
+    SwitchBottomTab(BottomTab),
+    CycleFocus(Direction),
+    ToggleSidebar,
+    GoToObject(ObjectRef),
+    OpenGoToObject,
+    OpenFilePicker,
+}
+
+/// UI overlay / theme / clipboard actions.
+#[derive(Debug)]
+pub(crate) enum UiAction {
+    ToggleTheme,
+    ShowHelp,
     ShowHistory,
-    RecallHistory(String),
+    ShowBookmarks,
+    ShowExport,
+    ExecuteExport,
+    CopyAllResults,
+    ShowDdl { name: String, sql: String },
+    ShowERDiagram,
+    ShowSchemaDiff,
+    CloseSchemaDiff,
+    CopyText(String),
+    ResizeSidebar(i16),
+    ResizeEditor(i16),
+}
+
+/// Query execution / history / bookmark actions.
+#[derive(Debug)]
+pub(crate) enum QueryAction {
+    ExecuteQuery {
+        sql: String,
+        source: ExecutionSource,
+        source_table: Option<String>,
+        params: Option<tursotui_db::QueryParams>,
+    },
+    QueryCompleted(QueryResult),
+    QueryFailed(String),
+    ExecuteFilteredQuery {
+        table: String,
+        where_clause: String,
+    },
     RecallAndExecute(String),
+    RecallAndExecuteBookmark(String),
+    RecallHistory(String),
+    RecallBookmark(String),
+    HistoryLoaded(Vec<crate::history::HistoryEntry>),
     DeleteHistoryEntry(i64),
     HistoryReloadRequested,
+    SaveBookmark {
+        name: String,
+        sql: String,
+        database_path: Option<String>,
+    },
+    BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
+    UpdateBookmark {
+        id: i64,
+        name: String,
+    },
+    DeleteBookmark(i64),
+    BookmarkReloadRequested,
+}
+
+/// Editor content / autocomplete actions.
+#[derive(Debug)]
+pub(crate) enum EditorAction {
+    ClearEditor,
+    PopulateEditor(String),
     TriggerAutocomplete,
     AcceptCompletion(#[allow(dead_code)] String),
     #[allow(dead_code)] // editor handles dismissal internally without emitting this action
     DismissAutocomplete,
-    ShowExport,
-    ExecuteExport,
-    CopyAllResults,
+}
+
+/// Data editor / cell editing / FK navigation actions.
+#[derive(Debug)]
+pub(crate) enum DataAction {
     #[allow(dead_code)] // planned: activated via QueryCompleted detection
     DataEditorActivated {
         table: String,
@@ -230,49 +326,45 @@ pub(crate) enum Action {
     FollowFK,
     FKNavigateBack,
     FKLoaded(String, Vec<tursotui_db::ForeignKeyInfo>),
-    // Multi-database actions
-    SwitchDatabase(usize),
-    NextDatabase,
-    PrevDatabase,
-    CloseActiveDatabase,
-    OpenDatabase(std::path::PathBuf),
-    OpenFilePicker,
-    OpenGoToObject,
-    ResizeSidebar(i16), // delta in percentage points
-    ResizeEditor(i16),  // delta in percentage points
-    GoToObject(ObjectRef),
-    ShowDdl {
-        name: String,
-        sql: String,
-    },
-    ExecuteFilteredQuery {
+}
+
+/// All state mutations flow through actions.
+#[derive(Debug)]
+pub(crate) enum Action {
+    Admin(AdminAction),
+    Nav(NavAction),
+    Ui(UiAction),
+    Query(QueryAction),
+    Editor(EditorAction),
+    Data(DataAction),
+    /// Key was consumed by a component; suppress global fallback.
+    /// Intentionally a no-op in `update()` and `dispatch_action_to_db()` (falls to `_ => {}`).
+    Consumed,
+    SetTransient(String, bool),
+    Quit,
+}
+
+/// Tracks deferred data-editor activation across async boundaries.
+///
+/// `FollowFK` sets `FkNavPending` before the FK query runs so `QueryCompleted`
+/// knows to call `activate_for_fk_nav()` instead of `activate()`.
+///
+/// When `QueryCompleted` fires but columns aren't cached yet, the check defers
+/// to `ColumnsLoaded` as `DeferredForColumns`, carrying the FK flag through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EditActivation {
+    /// The next `QueryCompleted` originated from FK navigation — use `activate_for_fk_nav()`.
+    FkNavPending,
+    /// Columns not yet cached — waiting for `ColumnsLoaded` to complete the check.
+    DeferredForColumns {
+        /// Table being checked for editability.
         table: String,
-        where_clause: String,
-    },
-    ShowBookmarks,
-    ShowERDiagram,
-    SaveBookmark {
-        name: String,
+        /// SQL that produced the result (needed for `data_editor.activate()`).
         sql: String,
-        database_path: Option<String>,
+        /// Whether this activation originated from FK navigation.
+        /// Carried through deferral so the correct activation method is called.
+        is_fk_nav: bool,
     },
-    UpdateBookmark {
-        id: i64,
-        name: String,
-    },
-    RecallBookmark(String),
-    RecallAndExecuteBookmark(String),
-    DeleteBookmark(i64),
-    BookmarksLoaded(Vec<crate::history::BookmarkEntry>),
-    BookmarkReloadRequested,
-    IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
-    RequestProfile,
-    ProfileCompleted(tursotui_db::ProfileData),
-    ProfileFailed(String),
-    StddevProbeResult(bool),
-    ShowSchemaDiff,
-    CloseSchemaDiff,
-    CopyText(String),
 }
 
 /// Per-database workspace.
@@ -313,15 +405,14 @@ pub(crate) struct DatabaseContext {
     pub(crate) profile: ProfileView,
     pub(crate) supports_stddev: bool,
     pub(crate) export_popup: Option<ExportPopup>,
+    pub(crate) db_overlay: Option<DbOverlay>,
+    pub(crate) dml_submit_enabled: bool,
+    pub(crate) ddl_viewer: Option<DdlViewerState>,
     // Layout percentages (adjustable at runtime)
     pub(crate) sidebar_pct: u16,
     pub(crate) editor_pct: u16,
-    #[allow(dead_code)]
-    pub(crate) pending_edit_table: Option<(String, String)>, // (table_name, activating_sql)
-    /// Set to true by `FollowFK` before dispatching `ExecuteQuery`,
-    /// cleared by `QueryCompleted`. Used to distinguish FK navigation
-    /// activations (preserve stack) from manual queries (clear stack).
-    pub(crate) pending_fk_activation: bool,
+    /// Deferred editability check state. See `EditActivation` for the state machine.
+    pub(crate) edit_activation: Option<EditActivation>,
 }
 
 impl DatabaseContext {
@@ -374,10 +465,12 @@ impl DatabaseContext {
             profile: ProfileView::new(),
             supports_stddev: false,
             export_popup: None,
+            db_overlay: None,
+            dml_submit_enabled: false,
+            ddl_viewer: None,
             sidebar_pct: 20,
             editor_pct: 40,
-            pending_edit_table: None,
-            pending_fk_activation: false,
+            edit_activation: None,
         }
     }
 
@@ -449,9 +542,8 @@ pub(crate) struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) transient_message: Option<TransientMessage>,
     pub(crate) should_quit: bool,
-    pub(crate) active_overlay: Option<Overlay>,
+    pub(crate) global_overlay: Option<GlobalOverlay>,
     pub(crate) help_scroll: usize,
-    pub(crate) ddl_viewer: Option<DdlViewerState>,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
     pub(crate) schema_diff_state: Option<schema_diff::SchemaDiffState>,
 }
@@ -507,9 +599,8 @@ impl AppState {
             config,
             transient_message: None,
             should_quit: false,
-            active_overlay: None,
+            global_overlay: None,
             help_scroll: 0,
-            ddl_viewer: None,
             history_db,
             schema_diff_state: None,
         }
@@ -528,34 +619,35 @@ impl AppState {
     /// Process an action targeting a specific database by index.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn update_for_db(&mut self, db_idx: usize, action: &Action) {
+        // Per-database state mutations
         let db = &mut self.databases[db_idx];
         match action {
-            Action::CycleFocus(dir) => db.cycle_focus(*dir),
-            Action::SwitchSubTab(tab) => {
+            Action::Nav(NavAction::CycleFocus(dir)) => db.cycle_focus(*dir),
+            Action::Nav(NavAction::SwitchSubTab(tab)) => {
                 db.sub_tab = *tab;
                 let panels = db.focusable_panels();
                 if let Some(&first) = panels.first() {
                     db.focus = first;
                 }
             }
-            Action::ToggleSidebar => {
+            Action::Nav(NavAction::ToggleSidebar) => {
                 db.sidebar_visible = !db.sidebar_visible;
                 if !db.sidebar_visible && db.focus == PanelId::Schema {
                     db.focus = PanelId::Editor;
                 }
             }
-            Action::SwitchBottomTab(tab) => {
+            Action::Nav(NavAction::SwitchBottomTab(tab)) => {
                 db.bottom_tab = *tab;
             }
-            Action::PopulateEditor(_) => {
+            Action::Editor(EditorAction::PopulateEditor(_)) => {
                 db.focus = PanelId::Editor;
             }
-            Action::ExecuteQuery {
+            Action::Query(QueryAction::ExecuteQuery {
                 sql,
                 source,
                 source_table: _,
                 params,
-            } => {
+            }) => {
                 if !sql.trim().is_empty() {
                     db.executing = true;
                     db.last_execution_source = *source;
@@ -564,7 +656,7 @@ impl AppState {
                         params.as_ref().and_then(|p| params_to_json(p).ok());
                 }
             }
-            Action::QueryCompleted(result) => {
+            Action::Query(QueryAction::QueryCompleted(result)) => {
                 db.executing = false;
                 db.last_execution_time = Some(result.execution_time);
                 db.last_row_count = Some(result.rows.len());
@@ -572,19 +664,21 @@ impl AppState {
                 db.last_query_kind = Some(result.query_kind);
                 db.last_rows_affected = result.rows_affected;
             }
-            Action::QueryFailed(_) => {
+            Action::Query(QueryAction::QueryFailed(_)) => {
                 db.executing = false;
                 db.last_execution_time = None;
                 db.last_row_count = None;
                 db.last_truncated = false;
             }
-            Action::FKLoaded(table, fks) => {
-                db.schema_cache.fk_info.insert(table.clone(), fks.clone());
+            Action::Data(DataAction::FKLoaded(table, fks)) => {
+                db.schema_cache
+                    .fk_info
+                    .insert(TableId::new(table.as_str()), fks.clone());
             }
-            Action::IndexDetailsLoaded(table, indexes) => {
+            Action::Admin(AdminAction::IndexDetailsLoaded(table, indexes)) => {
                 db.schema_cache
                     .index_details
-                    .insert(table.clone(), indexes.clone());
+                    .insert(TableId::new(table.as_str()), indexes.clone());
                 // Refresh results table indicators if it's displaying this table.
                 // Closes the first-query timing gap: IndexDetailsLoaded often arrives
                 // after QueryCompleted, so indicators would be missing on initial display.
@@ -593,7 +687,7 @@ impl AppState {
                     .current_result()
                     .and_then(|r| r.source_table.as_deref())
                     .map(str::to_lowercase);
-                if displaying_table.as_deref() == Some(&table.to_lowercase()) {
+                if displaying_table.as_deref() == Some(TableId::new(table.as_str()).as_str()) {
                     let leading_cols: std::collections::HashSet<String> = indexes
                         .iter()
                         .filter_map(|idx| idx.columns.first().cloned())
@@ -614,7 +708,7 @@ impl AppState {
                     is_error: *is_error,
                 });
             }
-            Action::ToggleTheme => {
+            Action::Ui(UiAction::ToggleTheme) => {
                 if self.theme.bg == DARK_THEME.bg {
                     self.theme = LIGHT_THEME;
                     self.config.theme.mode = ThemeMode::Light;
@@ -623,101 +717,108 @@ impl AppState {
                     self.config.theme.mode = ThemeMode::Dark;
                 }
             }
-            Action::ShowHelp => {
-                self.active_overlay = if let Some(Overlay::Help) = self.active_overlay {
+            Action::Ui(UiAction::ShowHelp) => {
+                self.global_overlay = if matches!(self.global_overlay, Some(GlobalOverlay::Help)) {
                     None
                 } else {
                     self.help_scroll = 0;
-                    Some(Overlay::Help)
+                    Some(GlobalOverlay::Help)
                 };
             }
-            Action::ShowHistory => {
-                self.active_overlay = if let Some(Overlay::History) = self.active_overlay {
+            Action::Ui(UiAction::ShowHistory) => {
+                self.global_overlay = if matches!(self.global_overlay, Some(GlobalOverlay::History))
+                {
                     None
                 } else {
-                    Some(Overlay::History)
+                    Some(GlobalOverlay::History)
                 };
             }
-            Action::ShowBookmarks => {
+            Action::Ui(UiAction::ShowBookmarks) => {
                 if self.history_db.is_none() {
                     return;
                 }
-                self.active_overlay = if let Some(Overlay::Bookmarks) = self.active_overlay {
-                    None
-                } else {
-                    Some(Overlay::Bookmarks)
-                };
+                self.global_overlay =
+                    if matches!(self.global_overlay, Some(GlobalOverlay::Bookmarks)) {
+                        None
+                    } else {
+                        Some(GlobalOverlay::Bookmarks)
+                    };
             }
-            Action::ShowERDiagram => {
-                if self.active_overlay == Some(Overlay::ERDiagram) {
-                    self.active_overlay = None;
+            Action::Ui(UiAction::ShowERDiagram) => {
+                let db = &mut self.databases[db_idx];
+                if db.db_overlay == Some(DbOverlay::ERDiagram) {
+                    db.db_overlay = None;
                 } else {
-                    self.active_overlay = Some(Overlay::ERDiagram);
+                    db.db_overlay = Some(DbOverlay::ERDiagram);
                 }
             }
-            Action::RecallHistory(_)
-            | Action::RecallAndExecute(_)
-            | Action::RecallBookmark(_)
-            | Action::RecallAndExecuteBookmark(_)
-            | Action::DataEditsCommitted
-            | Action::DataEditsFailed(_) => {
-                self.active_overlay = None;
+            Action::Query(
+                QueryAction::RecallHistory(_)
+                | QueryAction::RecallAndExecute(_)
+                | QueryAction::RecallBookmark(_)
+                | QueryAction::RecallAndExecuteBookmark(_),
+            )
+            | Action::Data(DataAction::DataEditsCommitted | DataAction::DataEditsFailed(_)) => {
+                self.global_overlay = None;
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = None;
+                db.ddl_viewer = None;
             }
-            Action::ShowExport => {
-                self.active_overlay = if let Some(Overlay::Export) = self.active_overlay {
+            Action::Ui(UiAction::ShowExport) => {
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = if db.db_overlay == Some(DbOverlay::Export) {
                     None
                 } else {
-                    Some(Overlay::Export)
+                    Some(DbOverlay::Export)
                 };
             }
-            Action::OpenFilePicker => {
-                self.active_overlay = if let Some(Overlay::FilePicker) = self.active_overlay {
-                    None
-                } else {
-                    Some(Overlay::FilePicker)
-                };
+            Action::Nav(NavAction::OpenFilePicker) => {
+                self.global_overlay =
+                    if matches!(self.global_overlay, Some(GlobalOverlay::FilePicker)) {
+                        None
+                    } else {
+                        Some(GlobalOverlay::FilePicker)
+                    };
             }
-            Action::ShowDmlPreview(b) => {
-                self.active_overlay = Some(Overlay::DmlPreview { submit_enabled: *b });
+            Action::Data(DataAction::ShowDmlPreview(b)) => {
+                let db = &mut self.databases[db_idx];
+                db.db_overlay = Some(DbOverlay::DmlPreview);
+                db.dml_submit_enabled = *b;
             }
-            Action::SwitchDatabase(idx) => {
+            Action::Nav(NavAction::SwitchDatabase(idx)) => {
                 if *idx < self.databases.len() && *idx != self.active_db {
                     // Auto-save outgoing tab's editor buffer
                     let db = &self.databases[self.active_db];
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
+                    // Per-db overlay state lives on DatabaseContext; switching away
+                    // naturally stops rendering it. Global overlays survive the switch.
                     self.active_db = *idx;
                 }
             }
-            Action::NextDatabase => {
+            Action::Nav(NavAction::NextDatabase) => {
                 if self.databases.len() > 1 {
                     // Auto-save outgoing tab's editor buffer
                     let db = &self.databases[self.active_db];
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
                     self.active_db = (self.active_db + 1) % self.databases.len();
                 }
             }
-            Action::PrevDatabase => {
+            Action::Nav(NavAction::PrevDatabase) => {
                 if self.databases.len() > 1 {
                     // Auto-save outgoing tab's editor buffer
                     let db = &self.databases[self.active_db];
                     if !db.editor.contents().is_empty() {
                         let _ = crate::persistence::save_buffer(&db.path, &db.editor.contents());
                     }
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
                     self.active_db =
                         (self.active_db + self.databases.len() - 1) % self.databases.len();
                 }
             }
-            Action::CloseActiveDatabase => {
+            Action::Nav(NavAction::CloseActiveDatabase) => {
                 if self.databases.len() <= 1 {
                     self.transient_message = Some(TransientMessage {
                         text: "Cannot close last database".to_string(),
@@ -725,9 +826,8 @@ impl AppState {
                         is_error: false,
                     });
                 } else {
-                    // Clear any open overlay/DDL viewer before removing the database
-                    self.active_overlay = None;
-                    self.ddl_viewer = None;
+                    // Clear global overlays before removing the database
+                    self.global_overlay = None;
                     // Auto-save editor buffer before removal so we target the
                     // correct database (after remove(), active_db points elsewhere).
                     let db = &self.databases[self.active_db];
@@ -740,29 +840,29 @@ impl AppState {
                     }
                 }
             }
-            Action::OpenDatabase(_path) => {
+            Action::Nav(NavAction::OpenDatabase(_path)) => {
                 // Handled in dispatch — requires async DatabaseHandle::open
             }
-            Action::OpenGoToObject => {
-                self.active_overlay = if self.active_overlay == Some(Overlay::GoToObject) {
+            Action::Nav(NavAction::OpenGoToObject) => {
+                self.global_overlay = if self.global_overlay == Some(GlobalOverlay::GoToObject) {
                     None
                 } else {
-                    Some(Overlay::GoToObject)
+                    Some(GlobalOverlay::GoToObject)
                 };
             }
-            Action::ResizeSidebar(delta) => {
+            Action::Ui(UiAction::ResizeSidebar(delta)) => {
                 let db = &mut self.databases[db_idx];
                 #[allow(clippy::cast_possible_wrap)]
                 let current = db.sidebar_pct as i16;
                 db.sidebar_pct = (current + delta).clamp(10, 50) as u16;
             }
-            Action::ResizeEditor(delta) => {
+            Action::Ui(UiAction::ResizeEditor(delta)) => {
                 let db = &mut self.databases[db_idx];
                 #[allow(clippy::cast_possible_wrap)]
                 let current = db.editor_pct as i16;
                 db.editor_pct = (current + delta).clamp(20, 80) as u16;
             }
-            Action::GoToObject(obj_ref) => {
+            Action::Nav(NavAction::GoToObject(obj_ref)) => {
                 // Switch to target database, switch to Query sub-tab
                 if let Some(idx) = self
                     .databases
@@ -790,17 +890,18 @@ impl AppState {
                         }
                     }
                 }
-                self.active_overlay = None;
+                self.global_overlay = None;
             }
-            Action::ShowDdl { name, sql } => {
-                self.ddl_viewer = Some(DdlViewerState {
+            Action::Ui(UiAction::ShowDdl { name, sql }) => {
+                let db = &mut self.databases[db_idx];
+                db.ddl_viewer = Some(DdlViewerState {
                     object_name: name.clone(),
                     sql: sql.clone(),
                     scroll: 0,
                 });
-                self.active_overlay = Some(Overlay::DdlViewer);
+                db.db_overlay = Some(DbOverlay::DdlViewer);
             }
-            Action::ShowSchemaDiff => {
+            Action::Ui(UiAction::ShowSchemaDiff) => {
                 if self.databases.len() < 2 {
                     self.transient_message = Some(TransientMessage {
                         text: "Open 2+ databases to compare schemas".to_string(),
@@ -822,11 +923,11 @@ impl AppState {
                         source_db.label.clone(),
                         target_db.label.clone(),
                     ));
-                    self.active_overlay = Some(Overlay::SchemaDiff);
+                    self.global_overlay = Some(GlobalOverlay::SchemaDiff);
                 }
             }
-            Action::CloseSchemaDiff => {
-                self.active_overlay = None;
+            Action::Ui(UiAction::CloseSchemaDiff) => {
+                self.global_overlay = None;
                 self.schema_diff_state = None;
             }
             _ => {}
@@ -872,23 +973,23 @@ mod tests {
     #[tokio::test]
     async fn update_show_help_toggles_overlay() {
         let mut app = test_app_state().await;
-        assert!(app.active_overlay.is_none());
+        assert!(app.global_overlay.is_none());
 
-        app.update(&Action::ShowHelp);
-        assert_eq!(app.active_overlay, Some(Overlay::Help));
+        app.update(&Action::Ui(UiAction::ShowHelp));
+        assert_eq!(app.global_overlay, Some(GlobalOverlay::Help));
 
-        app.update(&Action::ShowHelp);
-        assert!(app.active_overlay.is_none(), "ShowHelp again should close");
+        app.update(&Action::Ui(UiAction::ShowHelp));
+        assert!(app.global_overlay.is_none(), "ShowHelp again should close");
     }
 
     #[tokio::test]
     async fn update_show_history_toggles_overlay() {
         let mut app = test_app_state().await;
-        app.update(&Action::ShowHistory);
-        assert_eq!(app.active_overlay, Some(Overlay::History));
+        app.update(&Action::Ui(UiAction::ShowHistory));
+        assert_eq!(app.global_overlay, Some(GlobalOverlay::History));
 
-        app.update(&Action::ShowHistory);
-        assert!(app.active_overlay.is_none());
+        app.update(&Action::Ui(UiAction::ShowHistory));
+        assert!(app.global_overlay.is_none());
     }
 
     #[tokio::test]
@@ -911,7 +1012,7 @@ mod tests {
     async fn update_switch_sub_tab() {
         let mut app = test_app_state().await;
         assert_eq!(app.active_db().sub_tab, SubTab::Query);
-        app.update(&Action::SwitchSubTab(SubTab::Admin));
+        app.update(&Action::Nav(NavAction::SwitchSubTab(SubTab::Admin)));
         assert_eq!(app.active_db().sub_tab, SubTab::Admin);
     }
 
@@ -919,7 +1020,7 @@ mod tests {
     async fn update_switch_bottom_tab() {
         let mut app = test_app_state().await;
         assert_eq!(app.active_db().bottom_tab, BottomTab::Results);
-        app.update(&Action::SwitchBottomTab(BottomTab::Explain));
+        app.update(&Action::Nav(NavAction::SwitchBottomTab(BottomTab::Explain)));
         assert_eq!(app.active_db().bottom_tab, BottomTab::Explain);
     }
 
@@ -927,7 +1028,7 @@ mod tests {
     async fn update_toggle_sidebar() {
         let mut app = test_app_state().await;
         let initial = app.active_db().sidebar_visible;
-        app.update(&Action::ToggleSidebar);
+        app.update(&Action::Nav(NavAction::ToggleSidebar));
         assert_ne!(app.active_db().sidebar_visible, initial);
     }
 
@@ -935,7 +1036,7 @@ mod tests {
     async fn update_toggle_theme_changes_theme() {
         let mut app = test_app_state().await;
         let original_bg = app.theme.bg;
-        app.update(&Action::ToggleTheme);
+        app.update(&Action::Ui(UiAction::ToggleTheme));
         assert_ne!(
             original_bg, app.theme.bg,
             "theme background should change after toggle"
@@ -946,8 +1047,8 @@ mod tests {
     async fn update_toggle_theme_round_trips() {
         let mut app = test_app_state().await;
         let original_bg = app.theme.bg;
-        app.update(&Action::ToggleTheme);
-        app.update(&Action::ToggleTheme);
+        app.update(&Action::Ui(UiAction::ToggleTheme));
+        app.update(&Action::Ui(UiAction::ToggleTheme));
         assert_eq!(
             original_bg, app.theme.bg,
             "double toggle should restore original theme"
@@ -958,14 +1059,14 @@ mod tests {
     async fn update_switch_database() {
         let mut app = two_db_app_state().await;
         assert_eq!(app.active_db, 0);
-        app.update(&Action::SwitchDatabase(1));
+        app.update(&Action::Nav(NavAction::SwitchDatabase(1)));
         assert_eq!(app.active_db, 1);
     }
 
     #[tokio::test]
     async fn update_switch_database_out_of_bounds_ignored() {
         let mut app = two_db_app_state().await;
-        app.update(&Action::SwitchDatabase(99));
+        app.update(&Action::Nav(NavAction::SwitchDatabase(99)));
         assert_eq!(app.active_db, 0, "out-of-bounds index should be ignored");
     }
 
@@ -973,7 +1074,7 @@ mod tests {
     async fn update_next_database_wraps() {
         let mut app = two_db_app_state().await;
         app.active_db = 1;
-        app.update(&Action::NextDatabase);
+        app.update(&Action::Nav(NavAction::NextDatabase));
         assert_eq!(app.active_db, 0, "should wrap around to first database");
     }
 
@@ -981,7 +1082,7 @@ mod tests {
     async fn update_prev_database_wraps() {
         let mut app = two_db_app_state().await;
         assert_eq!(app.active_db, 0);
-        app.update(&Action::PrevDatabase);
+        app.update(&Action::Nav(NavAction::PrevDatabase));
         assert_eq!(app.active_db, 1, "should wrap around to last database");
     }
 
@@ -989,7 +1090,7 @@ mod tests {
     async fn update_close_active_database_prevents_closing_last() {
         let mut app = test_app_state().await;
         assert_eq!(app.databases.len(), 1);
-        app.update(&Action::CloseActiveDatabase);
+        app.update(&Action::Nav(NavAction::CloseActiveDatabase));
         assert_eq!(app.databases.len(), 1, "should not close the last database");
         assert!(
             app.transient_message.is_some(),
@@ -1001,7 +1102,7 @@ mod tests {
     async fn update_close_active_database_removes_db() {
         let mut app = two_db_app_state().await;
         assert_eq!(app.databases.len(), 2);
-        app.update(&Action::CloseActiveDatabase);
+        app.update(&Action::Nav(NavAction::CloseActiveDatabase));
         assert_eq!(app.databases.len(), 1);
     }
 
@@ -1011,11 +1112,11 @@ mod tests {
         assert_eq!(app.active_db().sidebar_pct, 20);
 
         // Shrink below minimum (10)
-        app.update(&Action::ResizeSidebar(-50));
+        app.update(&Action::Ui(UiAction::ResizeSidebar(-50)));
         assert_eq!(app.active_db().sidebar_pct, 10, "should clamp at 10");
 
         // Grow above maximum (50)
-        app.update(&Action::ResizeSidebar(100));
+        app.update(&Action::Ui(UiAction::ResizeSidebar(100)));
         assert_eq!(app.active_db().sidebar_pct, 50, "should clamp at 50");
     }
 
@@ -1024,22 +1125,22 @@ mod tests {
         let mut app = test_app_state().await;
         assert_eq!(app.active_db().editor_pct, 40);
 
-        app.update(&Action::ResizeEditor(-100));
+        app.update(&Action::Ui(UiAction::ResizeEditor(-100)));
         assert_eq!(app.active_db().editor_pct, 20, "should clamp at 20");
 
-        app.update(&Action::ResizeEditor(200));
+        app.update(&Action::Ui(UiAction::ResizeEditor(200)));
         assert_eq!(app.active_db().editor_pct, 80, "should clamp at 80");
     }
 
     #[tokio::test]
     async fn update_show_ddl_sets_viewer_and_overlay() {
         let mut app = test_app_state().await;
-        app.update(&Action::ShowDdl {
+        app.update(&Action::Ui(UiAction::ShowDdl {
             name: "users".into(),
             sql: "CREATE TABLE users (id INT)".into(),
-        });
-        assert_eq!(app.active_overlay, Some(Overlay::DdlViewer));
-        let viewer = app.ddl_viewer.as_ref().unwrap();
+        }));
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::DdlViewer));
+        let viewer = app.databases[0].ddl_viewer.as_ref().unwrap();
         assert_eq!(viewer.object_name, "users");
         assert_eq!(viewer.sql, "CREATE TABLE users (id INT)");
         assert_eq!(viewer.scroll, 0);
@@ -1048,19 +1149,258 @@ mod tests {
     #[tokio::test]
     async fn update_recall_history_clears_overlay() {
         let mut app = test_app_state().await;
-        app.active_overlay = Some(Overlay::History);
-        app.update(&Action::RecallHistory("SELECT 1".into()));
-        assert!(app.active_overlay.is_none(), "overlay should be cleared");
+        app.global_overlay = Some(GlobalOverlay::History);
+        app.update(&Action::Query(QueryAction::RecallHistory(
+            "SELECT 1".into(),
+        )));
+        assert!(app.global_overlay.is_none(), "overlay should be cleared");
+    }
+
+    #[tokio::test]
+    async fn update_recall_history_clears_both_overlays() {
+        let mut app = test_app_state().await;
+        app.global_overlay = Some(GlobalOverlay::History);
+        app.databases[0].db_overlay = Some(DbOverlay::Export);
+        app.update(&Action::Query(QueryAction::RecallHistory(
+            "SELECT 1".into(),
+        )));
+        assert!(app.global_overlay.is_none(), "global overlay should clear");
+        assert!(
+            app.databases[0].db_overlay.is_none(),
+            "db overlay should clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_dismiss_all_clears_ddl_viewer() {
+        let mut app = test_app_state().await;
+        app.databases[0].db_overlay = Some(DbOverlay::DdlViewer);
+        app.databases[0].ddl_viewer = Some(DdlViewerState {
+            object_name: "users".into(),
+            sql: "CREATE TABLE users (id INT)".into(),
+            scroll: 0,
+        });
+        app.update(&Action::Query(QueryAction::RecallHistory(
+            "SELECT 1".into(),
+        )));
+        assert!(
+            app.databases[0].db_overlay.is_none(),
+            "db overlay should clear"
+        );
+        assert!(
+            app.databases[0].ddl_viewer.is_none(),
+            "ddl_viewer should clear with the overlay"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_show_er_diagram_toggles_db_overlay() {
+        let mut app = test_app_state().await;
+        assert!(app.databases[0].db_overlay.is_none());
+
+        app.update(&Action::Ui(UiAction::ShowERDiagram));
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::ERDiagram));
+
+        app.update(&Action::Ui(UiAction::ShowERDiagram));
+        assert!(
+            app.databases[0].db_overlay.is_none(),
+            "second toggle should close"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_show_export_toggles_db_overlay() {
+        let mut app = test_app_state().await;
+        app.update(&Action::Ui(UiAction::ShowExport));
+        assert_eq!(app.databases[0].db_overlay, Some(DbOverlay::Export));
+
+        app.update(&Action::Ui(UiAction::ShowExport));
+        assert!(app.databases[0].db_overlay.is_none());
+    }
+
+    #[tokio::test]
+    async fn global_overlay_survives_database_switch() {
+        let mut app = two_db_app_state().await;
+        app.global_overlay = Some(GlobalOverlay::Help);
+        app.update(&Action::Nav(NavAction::SwitchDatabase(1)));
+        assert_eq!(
+            app.global_overlay,
+            Some(GlobalOverlay::Help),
+            "global overlay should survive database switch"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_overlay_preserved_on_switch_away() {
+        let mut app = two_db_app_state().await;
+        app.databases[0].db_overlay = Some(DbOverlay::ERDiagram);
+        app.update(&Action::Nav(NavAction::SwitchDatabase(1)));
+        assert_eq!(app.active_db, 1);
+        // The old db's overlay is preserved — not rendered but still there
+        assert_eq!(
+            app.databases[0].db_overlay,
+            Some(DbOverlay::ERDiagram),
+            "per-db overlay should be preserved on its DatabaseContext"
+        );
+        // The new db has no overlay
+        assert!(app.databases[1].db_overlay.is_none());
     }
 
     #[tokio::test]
     async fn update_show_bookmarks_requires_history_db() {
         let mut app = test_app_state().await;
         // history_db is None in test — ShowBookmarks should be a no-op
-        app.update(&Action::ShowBookmarks);
+        app.update(&Action::Ui(UiAction::ShowBookmarks));
         assert!(
-            app.active_overlay.is_none(),
+            app.global_overlay.is_none(),
             "bookmarks should not open without history_db"
         );
+    }
+
+    // ─── EditActivation state machine tests ────────────────────────
+
+    #[tokio::test]
+    async fn edit_activation_starts_none() {
+        let app = test_app_state().await;
+        assert!(app.active_db().edit_activation.is_none());
+    }
+
+    #[tokio::test]
+    async fn follow_fk_sets_fk_nav_pending() {
+        let mut app = test_app_state().await;
+        app.active_db_mut().edit_activation = Some(EditActivation::FkNavPending);
+        assert_eq!(
+            app.active_db().edit_activation,
+            Some(EditActivation::FkNavPending)
+        );
+    }
+
+    #[tokio::test]
+    async fn fk_nav_pending_promotes_to_deferred_with_flag() {
+        // Simulates the QueryCompleted handler: reads FkNavPending, clears it,
+        // then creates DeferredForColumns carrying is_fk_nav = true.
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+        db.edit_activation = Some(EditActivation::FkNavPending);
+
+        // QueryCompleted reads the flag, then clears
+        let is_fk = matches!(db.edit_activation, Some(EditActivation::FkNavPending));
+        db.edit_activation = None;
+        assert!(is_fk);
+
+        // Defers because columns aren't cached
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "orders".to_string(),
+            sql: "SELECT * FROM orders".to_string(),
+            is_fk_nav: is_fk,
+        });
+
+        // ColumnsLoaded reads the deferred state — flag survived
+        match &db.edit_activation {
+            Some(EditActivation::DeferredForColumns { is_fk_nav, .. }) => {
+                assert!(is_fk_nav, "FK flag must survive deferral to ColumnsLoaded");
+            }
+            other => panic!("expected DeferredForColumns, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn normal_query_defers_without_fk_flag() {
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+        // No FkNavPending — normal query
+        assert!(db.edit_activation.is_none());
+
+        let is_fk = matches!(db.edit_activation, Some(EditActivation::FkNavPending));
+        assert!(!is_fk);
+
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "users".to_string(),
+            sql: "SELECT * FROM users".to_string(),
+            is_fk_nav: is_fk,
+        });
+
+        match &db.edit_activation {
+            Some(EditActivation::DeferredForColumns { is_fk_nav, .. }) => {
+                assert!(!is_fk_nav);
+            }
+            other => panic!("expected DeferredForColumns, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn query_failed_clears_any_activation_state() {
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+
+        // Clear from FkNavPending
+        db.edit_activation = Some(EditActivation::FkNavPending);
+        db.edit_activation = None; // QueryFailed handler
+        assert!(db.edit_activation.is_none());
+
+        // Clear from DeferredForColumns
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "t".to_string(),
+            sql: "s".to_string(),
+            is_fk_nav: true,
+        });
+        db.edit_activation = None; // QueryFailed handler
+        assert!(db.edit_activation.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_query_overwrites_pending_deferred() {
+        // "Only the latest query matters" — a new QueryCompleted clears
+        // any previously deferred check
+        let mut app = test_app_state().await;
+        let db = app.active_db_mut();
+
+        db.edit_activation = Some(EditActivation::DeferredForColumns {
+            table: "old_table".to_string(),
+            sql: "SELECT * FROM old_table".to_string(),
+            is_fk_nav: false,
+        });
+
+        // New QueryCompleted arrives — clears old state
+        db.edit_activation = None;
+        assert!(db.edit_activation.is_none());
+    }
+
+    // ─── TableId tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn table_id_normalizes_case() {
+        let id = TableId::new("MyTable");
+        assert_eq!(id.as_str(), "mytable");
+    }
+
+    #[test]
+    fn table_id_eq_ignores_case() {
+        let a = TableId::new("Users");
+        let b = TableId::new("users");
+        let c = TableId::new("USERS");
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn table_id_hash_consistent() {
+        use std::collections::HashMap;
+        let mut map: HashMap<TableId, i32> = HashMap::new();
+        map.insert(TableId::new("Orders"), 1);
+        assert_eq!(map.get(&TableId::new("orders")), Some(&1));
+        assert_eq!(map.get(&TableId::new("ORDERS")), Some(&1));
+    }
+
+    #[test]
+    fn table_id_from_string() {
+        let id: TableId = "MyTable".into();
+        assert_eq!(id.as_str(), "mytable");
+    }
+
+    #[test]
+    fn table_id_display_shows_normalized() {
+        let id = TableId::new("MyTable");
+        assert_eq!(format!("{id}"), "mytable");
     }
 }

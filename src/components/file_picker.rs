@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::app::Action;
+use crate::app::{Action, NavAction};
 use crate::theme::Theme;
 
 /// Recognized database file extensions for tab-completion filtering.
@@ -54,14 +54,16 @@ impl FilePicker {
         match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 // Dismiss the file picker via toggle
-                Some(Action::OpenFilePicker) // toggle off
+                Some(Action::Nav(NavAction::OpenFilePicker)) // toggle off
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
                 let path_str = self.input.trim();
                 if path_str.is_empty() {
                     return None;
                 }
-                Some(Action::OpenDatabase(PathBuf::from(path_str)))
+                Some(Action::Nav(NavAction::OpenDatabase(PathBuf::from(
+                    path_str,
+                ))))
             }
             (KeyModifiers::NONE, KeyCode::Tab) => {
                 self.complete();

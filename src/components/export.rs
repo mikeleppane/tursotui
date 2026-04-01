@@ -7,7 +7,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph};
 
-use crate::app::Action;
+use crate::app::{Action, UiAction};
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +111,7 @@ impl ExportPopup {
         }
 
         match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::ShowExport), // toggle off
+            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Ui(UiAction::ShowExport)), // toggle off
             (KeyModifiers::NONE, KeyCode::Char('c')) => {
                 self.format = ExportFormat::Csv;
                 self.update_file_extension();
@@ -150,7 +150,7 @@ impl ExportPopup {
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
                 // Signal that export should proceed -- the main loop handles the actual export
-                Some(Action::ExecuteExport)
+                Some(Action::Ui(UiAction::ExecuteExport))
             }
             (KeyModifiers::CONTROL, KeyCode::Char('q')) => Some(Action::Quit),
             _ => None,

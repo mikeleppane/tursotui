@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use tursotui_db::types::value_to_display;
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, Direction, NavAction, QueryAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnDef, QueryResult};
 
@@ -463,10 +463,10 @@ impl Component for ResultsTable {
                             self.filter_input = None;
                             self.filter_cursor = 0;
                         }
-                        return Some(Action::ExecuteFilteredQuery {
+                        return Some(Action::Query(QueryAction::ExecuteFilteredQuery {
                             table: table.clone(),
                             where_clause,
-                        });
+                        }));
                     }
                 }
                 KeyCode::Backspace => {
@@ -613,19 +613,19 @@ impl Component for ResultsTable {
                 self.filter_input = None;
                 self.filter_cursor = 0;
                 if let Some(table) = table {
-                    return Some(Action::ExecuteFilteredQuery {
+                    return Some(Action::Query(QueryAction::ExecuteFilteredQuery {
                         table,
                         where_clause: String::new(), // empty = re-run unfiltered
-                    });
+                    }));
                 }
                 None
             }
 
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
-            (_, KeyCode::BackTab) => Some(Action::CycleFocus(Direction::Backward)),
+            (_, KeyCode::BackTab) => Some(Action::Nav(NavAction::CycleFocus(Direction::Backward))),
 
             _ => None,
         }
@@ -759,14 +759,6 @@ impl Component for ResultsTable {
     }
 }
 
-/// Extract PK values from a row using the given PK column indices.
-fn extract_pk(row: &[Option<String>], pk_columns: &[usize]) -> Vec<Option<String>> {
-    pk_columns
-        .iter()
-        .map(|&i| row.get(i).cloned().flatten())
-        .collect()
-}
-
 /// Build the header row for the visible column range.
 fn build_header_row<'a>(
     columns: &'a [ColumnDef],
@@ -837,8 +829,8 @@ fn build_edited_row<'a>(
     es: &EditRenderState,
     theme: &'a Theme,
 ) -> Row<'a> {
-    let pk = extract_pk(row_vals, &es.pk_columns);
-    match es.row_markers.get(&pk).copied() {
+    let pk = es.extract_pk(row_vals);
+    match es.row_marker_for_pk(&pk) {
         Some(RowMarker::Deleted) => {
             let cells: Vec<Cell<'a>> = row_vals[visible_range.clone()]
                 .iter()
@@ -855,7 +847,7 @@ fn build_edited_row<'a>(
                 .enumerate()
                 .map(|(vis_idx, val)| {
                     let abs_col = visible_range.start + vis_idx;
-                    let is_mod = es.modified_cells.contains(&(pk.clone(), abs_col));
+                    let is_mod = es.is_cell_modified_pk(&pk, abs_col);
                     let mod_style = if is_mod {
                         theme.edit_modified
                     } else {
