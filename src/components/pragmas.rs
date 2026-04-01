@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, AdminAction, Direction, NavAction};
 use crate::theme::Theme;
 use tursotui_db::PragmaEntry;
 
@@ -219,9 +219,11 @@ impl PragmaDashboard {
                     None
                 }
             }
-            (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshPragmas),
+            (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                Some(Action::Admin(AdminAction::RefreshPragmas))
+            }
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
             _ => None,
         }
@@ -298,7 +300,7 @@ impl PragmaDashboard {
                             self.in_flight_index = Some(index);
                             self.editing = None;
                             self.pragma_in_flight = true;
-                            Some(Action::SetPragma(name, value))
+                            Some(Action::Admin(AdminAction::SetPragma(name, value)))
                         }
                         Err(err) => Some(Action::SetTransient(err, true)),
                     }
@@ -464,9 +466,11 @@ impl Component for PragmaDashboard {
         // If pragmas are empty (not yet loaded), only allow r and Esc
         if self.pragmas.is_empty() {
             return match (key.modifiers, key.code) {
-                (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshPragmas),
+                (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                    Some(Action::Admin(AdminAction::RefreshPragmas))
+                }
                 (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                    Some(Action::CycleFocus(Direction::Forward))
+                    Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
                 }
                 _ => None,
             };
@@ -476,7 +480,7 @@ impl Component for PragmaDashboard {
             // `r` during editing cancels the edit and triggers refresh (spec §5)
             if key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Char('r') {
                 self.editing = None;
-                return Some(Action::RefreshPragmas);
+                return Some(Action::Admin(AdminAction::RefreshPragmas));
             }
             self.handle_key_editing(key)
         } else {
@@ -485,7 +489,7 @@ impl Component for PragmaDashboard {
     }
 
     fn update(&mut self, action: &Action) {
-        if let Action::PragmasLoaded(entries) = action {
+        if let Action::Admin(AdminAction::PragmasLoaded(entries)) = action {
             self.set_pragmas(entries.clone());
         }
     }

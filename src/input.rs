@@ -43,14 +43,14 @@ pub(crate) fn handle_key_event(
                     && let Some(action) = picker.handle_key(key)
                 {
                     match &action {
-                        app::Action::OpenDatabase(_) => {
+                        app::Action::Nav(app::NavAction::OpenDatabase(_)) => {
                             // Dispatch OpenDatabase; picker dismissal happens on
                             // success inside dispatch_action_to_db.
                             app.update(&action);
                             app.databases[active_idx].broadcast_update(&action);
                             dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
                         }
-                        app::Action::OpenFilePicker => {
+                        app::Action::Nav(app::NavAction::OpenFilePicker) => {
                             // Esc — toggle off via update()
                             app.update(&action);
                             global_ui.file_picker = None;
@@ -68,7 +68,7 @@ pub(crate) fn handle_key_event(
                     let active_db_path = app.databases[active_idx].path.clone();
                     if let Some(action) = goto.handle_key(key, &app.databases, &active_db_path) {
                         match &action {
-                            app::Action::GoToObject(obj_ref) => {
+                            app::Action::Nav(app::NavAction::GoToObject(obj_ref)) => {
                                 let obj_ref_clone = obj_ref.clone();
                                 app.global_overlay = None;
                                 global_ui.goto_object = None;
@@ -84,7 +84,7 @@ pub(crate) fn handle_key_event(
                                 }
                                 db.focus = PanelId::Schema;
                             }
-                            app::Action::OpenGoToObject => {
+                            app::Action::Nav(app::NavAction::OpenGoToObject) => {
                                 // Toggle off (Esc or Ctrl+P)
                                 app.global_overlay = None;
                                 global_ui.goto_object = None;
@@ -123,7 +123,7 @@ pub(crate) fn handle_key_event(
                 if let Some(ref mut popup) = db.export_popup
                     && let Some(action) = popup.handle_key(key)
                 {
-                    if matches!(&action, app::Action::ExecuteExport) {
+                    if matches!(&action, app::Action::Ui(app::UiAction::ExecuteExport)) {
                         dispatch::execute_export(app, global_ui);
                         app.databases[active_idx].db_overlay = None;
                         app.databases[active_idx].export_popup = None;
@@ -149,7 +149,7 @@ pub(crate) fn handle_key_event(
                         db.data_editor.scroll_preview_up();
                     }
                     KeyCode::Enter if submit_enabled => {
-                        let action = app::Action::SubmitDataEdits;
+                        let action = app::Action::Data(app::DataAction::SubmitDataEdits);
                         app.update(&action);
                         app.databases[active_idx].broadcast_update(&action);
                         dispatch::dispatch_action_to_db(active_idx, &action, app, global_ui);
@@ -289,21 +289,21 @@ fn route_key_to_component(
             }
         }
         match key.code {
-            KeyCode::Char('1') if key.modifiers == KeyModifiers::NONE => {
-                Some(app::Action::SwitchBottomTab(BottomTab::Results))
-            }
-            KeyCode::Char('2') if key.modifiers == KeyModifiers::NONE => {
-                Some(app::Action::SwitchBottomTab(BottomTab::Explain))
-            }
-            KeyCode::Char('3') if key.modifiers == KeyModifiers::NONE => {
-                Some(app::Action::SwitchBottomTab(BottomTab::Detail))
-            }
-            KeyCode::Char('4') if key.modifiers == KeyModifiers::NONE => {
-                Some(app::Action::SwitchBottomTab(BottomTab::ERDiagram))
-            }
-            KeyCode::Char('5') if key.modifiers == KeyModifiers::NONE => {
-                Some(app::Action::SwitchBottomTab(BottomTab::Profile))
-            }
+            KeyCode::Char('1') if key.modifiers == KeyModifiers::NONE => Some(app::Action::Nav(
+                app::NavAction::SwitchBottomTab(BottomTab::Results),
+            )),
+            KeyCode::Char('2') if key.modifiers == KeyModifiers::NONE => Some(app::Action::Nav(
+                app::NavAction::SwitchBottomTab(BottomTab::Explain),
+            )),
+            KeyCode::Char('3') if key.modifiers == KeyModifiers::NONE => Some(app::Action::Nav(
+                app::NavAction::SwitchBottomTab(BottomTab::Detail),
+            )),
+            KeyCode::Char('4') if key.modifiers == KeyModifiers::NONE => Some(app::Action::Nav(
+                app::NavAction::SwitchBottomTab(BottomTab::ERDiagram),
+            )),
+            KeyCode::Char('5') if key.modifiers == KeyModifiers::NONE => Some(app::Action::Nav(
+                app::NavAction::SwitchBottomTab(BottomTab::Profile),
+            )),
             _ => match db.bottom_tab {
                 BottomTab::Results => {
                     // DataEditor intercepts before ResultsTable when active

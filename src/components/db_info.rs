@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, AdminAction, Direction, NavAction};
 use crate::theme::Theme;
 use tursotui_db::DbInfo;
 
@@ -299,9 +299,15 @@ impl Component for DbInfoPanel {
         }
 
         match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RefreshDbInfo),
-            (KeyModifiers::NONE, KeyCode::Char('c')) => Some(Action::WalCheckpoint),
-            (KeyModifiers::NONE, KeyCode::Char('i')) => Some(Action::IntegrityCheck),
+            (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                Some(Action::Admin(AdminAction::RefreshDbInfo))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('c')) => {
+                Some(Action::Admin(AdminAction::WalCheckpoint))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('i')) => {
+                Some(Action::Admin(AdminAction::IntegrityCheck))
+            }
             (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
                 None
@@ -319,14 +325,14 @@ impl Component for DbInfoPanel {
                 None
             }
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
             _ => None,
         }
     }
 
     fn update(&mut self, action: &Action) {
-        if let Action::DbInfoLoaded(info) = action {
+        if let Action::Admin(AdminAction::DbInfoLoaded(info)) = action {
             self.set_info(info.clone());
         }
     }

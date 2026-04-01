@@ -9,7 +9,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::Action;
+use crate::app::{Action, QueryAction, UiAction};
 use crate::highlight;
 use crate::history::BookmarkEntry;
 use crate::theme::Theme;
@@ -124,15 +124,17 @@ impl BookmarkPanel {
                 }
                 if let Some(id) = self.editing_id.take() {
                     // Rename existing bookmark
-                    Some(Action::UpdateBookmark {
+                    Some(Action::Query(QueryAction::UpdateBookmark {
                         id,
                         name: name.trim().to_string(),
-                    })
+                    }))
                 } else {
-                    self.pending_sql.take().map(|sql| Action::SaveBookmark {
-                        name: name.trim().to_string(),
-                        sql,
-                        database_path: self.database_path.clone(),
+                    self.pending_sql.take().map(|sql| {
+                        Action::Query(QueryAction::SaveBookmark {
+                            name: name.trim().to_string(),
+                            sql,
+                            database_path: self.database_path.clone(),
+                        })
                     })
                 }
             }
@@ -253,12 +255,14 @@ impl BookmarkPanel {
             }
 
             // Recall into editor
-            (KeyModifiers::NONE, KeyCode::Enter) => self.selected_sql().map(Action::RecallBookmark),
+            (KeyModifiers::NONE, KeyCode::Enter) => self
+                .selected_sql()
+                .map(|s| Action::Query(QueryAction::RecallBookmark(s))),
 
             // Recall and execute
-            (KeyModifiers::NONE, KeyCode::Char('x')) => {
-                self.selected_sql().map(Action::RecallAndExecuteBookmark)
-            }
+            (KeyModifiers::NONE, KeyCode::Char('x')) => self
+                .selected_sql()
+                .map(|s| Action::Query(QueryAction::RecallAndExecuteBookmark(s))),
 
             // New bookmark from editor content
             (KeyModifiers::NONE, KeyCode::Char('n')) => {
@@ -290,9 +294,9 @@ impl BookmarkPanel {
             }
 
             // Delete
-            (KeyModifiers::NONE, KeyCode::Char('d') | KeyCode::Delete) => {
-                self.selected_entry().map(|e| Action::DeleteBookmark(e.id))
-            }
+            (KeyModifiers::NONE, KeyCode::Char('d') | KeyCode::Delete) => self
+                .selected_entry()
+                .map(|e| Action::Query(QueryAction::DeleteBookmark(e.id))),
 
             // Search mode
             (KeyModifiers::NONE, KeyCode::Char('/')) => {
@@ -301,7 +305,9 @@ impl BookmarkPanel {
             }
 
             // Dismiss
-            (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(3)) => Some(Action::ShowBookmarks),
+            (KeyModifiers::NONE, KeyCode::Esc | KeyCode::F(3)) => {
+                Some(Action::Ui(UiAction::ShowBookmarks))
+            }
 
             // Preview scroll
             (KeyModifiers::CONTROL, KeyCode::Down) => {

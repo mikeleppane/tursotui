@@ -7,7 +7,7 @@ use tursotui_sql::quoting::{format_value, quote_identifier, quote_literal};
 
 use super::Component;
 use super::cell_editor::CellEditor;
-use crate::app::Action;
+use crate::app::{Action, DataAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnInfo, ForeignKeyInfo, QueryResult, SchemaEntry};
 
@@ -913,26 +913,36 @@ impl Component for DataEditor {
 
         // Edit-mode keys
         match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Char('e') | KeyCode::F(2)) => Some(Action::StartCellEdit),
-            (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::AddRow),
-            (KeyModifiers::NONE, KeyCode::Char('d')) => Some(Action::ToggleDeleteRow),
+            (KeyModifiers::NONE, KeyCode::Char('e') | KeyCode::F(2)) => {
+                Some(Action::Data(DataAction::StartCellEdit))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('a')) => Some(Action::Data(DataAction::AddRow)),
+            (KeyModifiers::NONE, KeyCode::Char('d')) => {
+                Some(Action::Data(DataAction::ToggleDeleteRow))
+            }
             (KeyModifiers::NONE, KeyCode::Char('c')) => {
                 // Signal: main.rs will read actual row data and call clone_row()
-                Some(Action::CloneRow)
+                Some(Action::Data(DataAction::CloneRow))
             }
-            (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::RevertCell),
+            (KeyModifiers::NONE, KeyCode::Char('u')) => Some(Action::Data(DataAction::RevertCell)),
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char('U')) => {
-                Some(Action::RevertRow)
+                Some(Action::Data(DataAction::RevertRow))
             }
-            (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::RevertAll),
-            (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ShowDmlPreview(false)),
-            (KeyModifiers::CONTROL, KeyCode::Char('s')) => Some(Action::ShowDmlPreview(true)),
-            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::FollowFK),
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
+                Some(Action::Data(DataAction::RevertAll))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
+                Some(Action::Data(DataAction::ShowDmlPreview(false)))
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
+                Some(Action::Data(DataAction::ShowDmlPreview(true)))
+            }
+            (KeyModifiers::NONE, KeyCode::Char('f')) => Some(Action::Data(DataAction::FollowFK)),
             (KeyModifiers::ALT, KeyCode::Left) => {
                 if self.fk_nav_stack.is_empty() {
                     None // fall through to ResultsTable
                 } else {
-                    Some(Action::FKNavigateBack)
+                    Some(Action::Data(DataAction::FKNavigateBack))
                 }
             }
             _ => None, // fall through to ResultsTable
@@ -941,13 +951,13 @@ impl Component for DataEditor {
 
     fn update(&mut self, action: &Action) {
         match action {
-            Action::ConfirmCellEdit(value) => {
+            Action::Data(DataAction::ConfirmCellEdit(value)) => {
                 self.confirm_edit(value.clone());
             }
-            Action::CancelCellEdit => {
+            Action::Data(DataAction::CancelCellEdit) => {
                 self.cancel_edit();
             }
-            Action::AddRow => {
+            Action::Data(DataAction::AddRow) => {
                 self.add_row();
             }
             _ => {}

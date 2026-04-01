@@ -11,7 +11,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::Action;
+use crate::app::{Action, QueryAction, UiAction};
 use crate::highlight;
 use crate::history::HistoryEntry;
 use crate::theme::Theme;
@@ -203,16 +203,18 @@ impl QueryHistoryPanel {
             }
 
             // Recall into editor
-            (KeyModifiers::NONE, KeyCode::Enter) => self.selected_sql().map(Action::RecallHistory),
+            (KeyModifiers::NONE, KeyCode::Enter) => self
+                .selected_sql()
+                .map(|s| Action::Query(QueryAction::RecallHistory(s))),
 
             // Recall and execute
-            (KeyModifiers::SHIFT, KeyCode::Enter) => {
-                self.selected_sql().map(Action::RecallAndExecute)
-            }
+            (KeyModifiers::SHIFT, KeyCode::Enter) => self
+                .selected_sql()
+                .map(|s| Action::Query(QueryAction::RecallAndExecute(s))),
 
             // Dismiss
             (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('h')) => {
-                Some(Action::ShowHistory)
+                Some(Action::Ui(UiAction::ShowHistory))
             }
 
             // Search mode
@@ -252,7 +254,7 @@ impl QueryHistoryPanel {
             // Delete entry
             (KeyModifiers::NONE, KeyCode::Char('d')) => self.selected_entry().map(|e| {
                 let id = e.id;
-                Action::DeleteHistoryEntry(id)
+                Action::Query(QueryAction::DeleteHistoryEntry(id))
             }),
 
             // Copy SQL to clipboard

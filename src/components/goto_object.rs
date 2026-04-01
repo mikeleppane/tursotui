@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::app::{Action, DatabaseContext, ObjectKind, ObjectRef};
+use crate::app::{Action, DatabaseContext, NavAction, ObjectKind, ObjectRef};
 use crate::theme::Theme;
 
 /// Maximum number of results to display.
@@ -79,7 +79,7 @@ impl GoToObject {
         match (key.modifiers, key.code) {
             // Dismiss: Esc or Ctrl+P toggle
             (KeyModifiers::NONE, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
-                Some(Action::OpenGoToObject) // toggles overlay off via update()
+                Some(Action::Nav(NavAction::OpenGoToObject)) // toggles overlay off via update()
             }
 
             // Navigate results
@@ -102,11 +102,11 @@ impl GoToObject {
 
             // Select result
             (KeyModifiers::NONE, KeyCode::Enter) => self.results.get(self.selected).map(|m| {
-                Action::GoToObject(ObjectRef {
+                Action::Nav(NavAction::GoToObject(ObjectRef {
                     name: m.name.clone(),
                     kind: m.kind,
                     database_path: m.database_path.clone(),
-                })
+                }))
             }),
 
             // Backspace: delete char before cursor

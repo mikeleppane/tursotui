@@ -2,7 +2,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
-use crate::app::{Action, Direction, ObjectKind};
+use crate::app::{Action, AdminAction, Direction, EditorAction, NavAction, ObjectKind, UiAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnInfo, CustomTypeInfo, SchemaEntry};
 
@@ -371,7 +371,7 @@ impl SchemaExplorer {
                     if columns_loaded {
                         None
                     } else {
-                        Some(Action::LoadColumns(name))
+                        Some(Action::Admin(AdminAction::LoadColumns(name)))
                     }
                 }
             }
@@ -764,7 +764,7 @@ impl Component for SchemaExplorer {
                     TreeNode::Table { name, .. } => {
                         let quoted = name.replace('"', "\"\"");
                         let sql = format!("SELECT * FROM \"{quoted}\" LIMIT 100;");
-                        Some(Action::PopulateEditor(sql))
+                        Some(Action::Editor(EditorAction::PopulateEditor(sql)))
                     }
                     _ => None, // no-op for Category, Index, Trigger, Column
                 }
@@ -779,10 +779,10 @@ impl Component for SchemaExplorer {
                 ) = self.visible.get(self.selected)
                 {
                     if let Some(sql) = self.get_ddl_sql(name) {
-                        return Some(Action::ShowDdl {
+                        return Some(Action::Ui(UiAction::ShowDdl {
                             name: name.clone(),
                             sql,
-                        });
+                        }));
                     }
                     return Some(Action::SetTransient(
                         "No DDL available for this object".to_string(),
@@ -868,9 +868,9 @@ impl Component for SchemaExplorer {
 
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
-            (_, KeyCode::BackTab) => Some(Action::CycleFocus(Direction::Backward)),
+            (_, KeyCode::BackTab) => Some(Action::Nav(NavAction::CycleFocus(Direction::Backward))),
 
             _ => None,
         }
@@ -1333,7 +1333,7 @@ mod tests {
         // First expand: columns not loaded -> returns LoadColumns action.
         let action = explorer.toggle_expand();
         assert!(
-            matches!(action, Some(Action::LoadColumns(ref name)) if name == "users"),
+            matches!(action, Some(Action::Admin(AdminAction::LoadColumns(ref name))) if name == "users"),
             "Expected LoadColumns(\"users\"), got {action:?}"
         );
 
@@ -1636,7 +1636,7 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
         let action = explorer.handle_key(key);
         assert!(
-            matches!(action, Some(Action::PopulateEditor(ref sql)) if sql.contains("\"users\"")),
+            matches!(action, Some(Action::Editor(EditorAction::PopulateEditor(ref sql))) if sql.contains("\"users\"")),
             "Expected PopulateEditor with quoted table name, got {action:?}"
         );
     }
@@ -1652,7 +1652,7 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE);
         let action = explorer.handle_key(key);
         assert!(
-            matches!(action, Some(Action::PopulateEditor(ref sql)) if sql.contains("\"my\"\"table\"")),
+            matches!(action, Some(Action::Editor(EditorAction::PopulateEditor(ref sql))) if sql.contains("\"my\"\"table\"")),
             "Expected escaped double quotes, got {action:?}"
         );
     }
@@ -1796,7 +1796,10 @@ mod tests {
         explorer.selected = 1;
         let action = explorer.handle_key(key);
         assert!(
-            matches!(action, Some(Action::PopulateEditor(_))),
+            matches!(
+                action,
+                Some(Action::Editor(EditorAction::PopulateEditor(_)))
+            ),
             "o on table should produce PopulateEditor"
         );
 
@@ -2263,7 +2266,7 @@ mod tests {
         // Press Esc again -> now should cycle focus
         let action = explorer.handle_key(esc);
         assert!(
-            matches!(action, Some(Action::CycleFocus(_))),
+            matches!(action, Some(Action::Nav(NavAction::CycleFocus(_)))),
             "Second Esc should cycle focus"
         );
     }

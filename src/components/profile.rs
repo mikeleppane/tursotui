@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::Action;
+use crate::app::{Action, AdminAction, DataAction, NavAction};
 use crate::theme::Theme;
 use tursotui_db::ProfileData;
 
@@ -118,21 +118,23 @@ impl Component for ProfileView {
             }
             (KeyModifiers::NONE, KeyCode::Enter) => {
                 if self.stale || self.data.is_none() {
-                    Some(Action::RequestProfile)
+                    Some(Action::Admin(AdminAction::RequestProfile))
                 } else {
                     None
                 }
             }
-            (KeyModifiers::NONE, KeyCode::Char('r')) => Some(Action::RequestProfile),
-            (KeyModifiers::NONE, KeyCode::Esc) => {
-                Some(Action::CycleFocus(crate::app::Direction::Forward))
+            (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                Some(Action::Admin(AdminAction::RequestProfile))
             }
+            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Nav(NavAction::CycleFocus(
+                crate::app::Direction::Forward,
+            ))),
             _ => None,
         }
     }
 
     fn update(&mut self, action: &Action) {
-        if let Action::DataEditsCommitted = action {
+        if let Action::Data(DataAction::DataEditsCommitted) = action {
             self.mark_stale();
         }
     }

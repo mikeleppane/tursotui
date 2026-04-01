@@ -14,34 +14,72 @@ use tursotui_sql::parser::parse_foreign_keys;
 /// Convert a `QueryMessage` from the database worker into an `Action`.
 pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
     match msg {
-        QueryMessage::Completed(result) => app::Action::QueryCompleted(result),
-        QueryMessage::Failed(err) => app::Action::QueryFailed(err),
+        QueryMessage::Completed(result) => {
+            app::Action::Query(app::QueryAction::QueryCompleted(result))
+        }
+        QueryMessage::Failed(err) => app::Action::Query(app::QueryAction::QueryFailed(err)),
         QueryMessage::SchemaFailed(err) => app::Action::SetTransient(err, true),
-        QueryMessage::TransactionFailed(err) => app::Action::DataEditsFailed(err),
-        QueryMessage::SchemaLoaded(entries) => app::Action::SchemaLoaded(entries),
-        QueryMessage::ColumnsLoaded(table, cols) => app::Action::ColumnsLoaded(table, cols),
+        QueryMessage::TransactionFailed(err) => {
+            app::Action::Data(app::DataAction::DataEditsFailed(err))
+        }
+        QueryMessage::SchemaLoaded(entries) => {
+            app::Action::Admin(app::AdminAction::SchemaLoaded(entries))
+        }
+        QueryMessage::ColumnsLoaded(table, cols) => {
+            app::Action::Admin(app::AdminAction::ColumnsLoaded(table, cols))
+        }
         QueryMessage::ExplainCompleted(bytecode, plan) => {
-            app::Action::ExplainCompleted(bytecode, plan)
+            app::Action::Admin(app::AdminAction::ExplainCompleted(bytecode, plan))
         }
-        QueryMessage::ExplainFailed(err) => app::Action::ExplainFailed(err),
-        QueryMessage::DbInfoLoaded(info) => app::Action::DbInfoLoaded(info),
-        QueryMessage::DbInfoFailed(err) => app::Action::DbInfoFailed(err),
-        QueryMessage::PragmasLoaded(entries) => app::Action::PragmasLoaded(entries),
-        QueryMessage::PragmasFailed(err) => app::Action::PragmasFailed(err),
-        QueryMessage::PragmaSet(name, val) => app::Action::PragmaSet(name, val),
-        QueryMessage::PragmaFailed(name, err) => app::Action::PragmaFailed(name, err),
-        QueryMessage::WalCheckpointed(msg) => app::Action::WalCheckpointed(msg),
-        QueryMessage::WalCheckpointFailed(err) => app::Action::WalCheckpointFailed(err),
-        QueryMessage::IntegrityCheckCompleted(msg) => app::Action::IntegrityCheckCompleted(msg),
-        QueryMessage::IntegrityCheckFailed(msg) => app::Action::IntegrityCheckFailed(msg),
-        QueryMessage::TransactionCommitted => app::Action::DataEditsCommitted,
-        QueryMessage::ForeignKeysLoaded(table, fks) => app::Action::FKLoaded(table, fks),
+        QueryMessage::ExplainFailed(err) => {
+            app::Action::Admin(app::AdminAction::ExplainFailed(err))
+        }
+        QueryMessage::DbInfoLoaded(info) => {
+            app::Action::Admin(app::AdminAction::DbInfoLoaded(info))
+        }
+        QueryMessage::DbInfoFailed(err) => app::Action::Admin(app::AdminAction::DbInfoFailed(err)),
+        QueryMessage::PragmasLoaded(entries) => {
+            app::Action::Admin(app::AdminAction::PragmasLoaded(entries))
+        }
+        QueryMessage::PragmasFailed(err) => {
+            app::Action::Admin(app::AdminAction::PragmasFailed(err))
+        }
+        QueryMessage::PragmaSet(name, val) => {
+            app::Action::Admin(app::AdminAction::PragmaSet(name, val))
+        }
+        QueryMessage::PragmaFailed(name, err) => {
+            app::Action::Admin(app::AdminAction::PragmaFailed(name, err))
+        }
+        QueryMessage::WalCheckpointed(msg) => {
+            app::Action::Admin(app::AdminAction::WalCheckpointed(msg))
+        }
+        QueryMessage::WalCheckpointFailed(err) => {
+            app::Action::Admin(app::AdminAction::WalCheckpointFailed(err))
+        }
+        QueryMessage::IntegrityCheckCompleted(msg) => {
+            app::Action::Admin(app::AdminAction::IntegrityCheckCompleted(msg))
+        }
+        QueryMessage::IntegrityCheckFailed(msg) => {
+            app::Action::Admin(app::AdminAction::IntegrityCheckFailed(msg))
+        }
+        QueryMessage::TransactionCommitted => {
+            app::Action::Data(app::DataAction::DataEditsCommitted)
+        }
+        QueryMessage::ForeignKeysLoaded(table, fks) => {
+            app::Action::Data(app::DataAction::FKLoaded(table, fks))
+        }
         QueryMessage::IndexDetailsLoaded(table, indexes) => {
-            app::Action::IndexDetailsLoaded(table, indexes)
+            app::Action::Admin(app::AdminAction::IndexDetailsLoaded(table, indexes))
         }
-        QueryMessage::ProfileCompleted(data) => app::Action::ProfileCompleted(data),
-        QueryMessage::ProfileFailed(err) => app::Action::ProfileFailed(err),
-        QueryMessage::StddevProbeResult(supported) => app::Action::StddevProbeResult(supported),
+        QueryMessage::ProfileCompleted(data) => {
+            app::Action::Admin(app::AdminAction::ProfileCompleted(data))
+        }
+        QueryMessage::ProfileFailed(err) => {
+            app::Action::Admin(app::AdminAction::ProfileFailed(err))
+        }
+        QueryMessage::StddevProbeResult(supported) => {
+            app::Action::Admin(app::AdminAction::StddevProbeResult(supported))
+        }
         QueryMessage::RowCount(..) | QueryMessage::CustomTypesLoaded(..) => {
             // These are handled directly in the drain loop (main.rs) and should
             // never reach here. Panic in debug builds to catch the invariant
@@ -58,14 +96,22 @@ pub(crate) fn map_query_message(msg: QueryMessage) -> app::Action {
 /// Convert a `HistoryMessage` from the history worker into an `Action`.
 pub(crate) fn map_history_message(msg: history::HistoryMessage) -> app::Action {
     match msg {
-        history::HistoryMessage::Loaded(entries) => app::Action::HistoryLoaded(entries),
+        history::HistoryMessage::Loaded(entries) => {
+            app::Action::Query(app::QueryAction::HistoryLoaded(entries))
+        }
         history::HistoryMessage::LoadFailed(err)
         | history::HistoryMessage::BookmarkSaveFailed(err) => app::Action::SetTransient(err, true),
-        history::HistoryMessage::Deleted(_) => app::Action::HistoryReloadRequested,
-        history::HistoryMessage::BookmarksLoaded(entries) => app::Action::BookmarksLoaded(entries),
+        history::HistoryMessage::Deleted(_) => {
+            app::Action::Query(app::QueryAction::HistoryReloadRequested)
+        }
+        history::HistoryMessage::BookmarksLoaded(entries) => {
+            app::Action::Query(app::QueryAction::BookmarksLoaded(entries))
+        }
         history::HistoryMessage::BookmarkSaved(_)
         | history::HistoryMessage::BookmarkDeleted(_)
-        | history::HistoryMessage::BookmarkUpdated(_) => app::Action::BookmarkReloadRequested,
+        | history::HistoryMessage::BookmarkUpdated(_) => {
+            app::Action::Query(app::QueryAction::BookmarkReloadRequested)
+        }
     }
 }
 
@@ -128,12 +174,12 @@ pub(crate) fn dispatch_action_to_db(
     global_ui: &mut GlobalFeatures,
 ) {
     match action {
-        app::Action::ExecuteQuery {
+        app::Action::Query(app::QueryAction::ExecuteQuery {
             sql,
             source: _,
             source_table,
             params,
-        } => {
+        }) => {
             if !sql.trim().is_empty() {
                 app.databases[db_idx].handle.execute(
                     sql.clone(),
@@ -142,10 +188,10 @@ pub(crate) fn dispatch_action_to_db(
                 );
             }
         }
-        app::Action::ExecuteFilteredQuery {
+        app::Action::Query(app::QueryAction::ExecuteFilteredQuery {
             table,
             where_clause,
-        } => {
+        }) => {
             let db = &mut app.databases[db_idx];
             let sql = if where_clause.is_empty() {
                 // Empty where_clause = clear filter, re-run unfiltered
@@ -195,13 +241,13 @@ pub(crate) fn dispatch_action_to_db(
                 }
             }
         }
-        app::Action::LoadColumns(table_name) => {
+        app::Action::Admin(app::AdminAction::LoadColumns(table_name)) => {
             app.databases[db_idx]
                 .handle
                 .load_columns(table_name.clone());
         }
         // PopulateEditor, RecallHistory, RecallBookmark handled by editor.update() via broadcast
-        app::Action::QueryCompleted(result) => {
+        app::Action::Query(app::QueryAction::QueryCompleted(result)) => {
             let db = &mut app.databases[db_idx];
             db.last_filter_query = false;
             // Enrich source_table if not provided (Tier 2: parse from SQL)
@@ -362,7 +408,7 @@ pub(crate) fn dispatch_action_to_db(
                 app.databases[db_idx].data_editor.deactivate();
             }
         }
-        app::Action::QueryFailed(err) => {
+        app::Action::Query(app::QueryAction::QueryFailed(err)) => {
             // Clear any pending deferred editability check — the query failed
             app.databases[db_idx].edit_activation = None;
             app.transient_message = Some(app::TransientMessage {
@@ -393,7 +439,7 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
-        app::Action::SchemaLoaded(entries) => {
+        app::Action::Admin(app::AdminAction::SchemaLoaded(entries)) => {
             let db = &mut app.databases[db_idx];
             db.schema.set_schema(entries);
             // Populate schema cache and trigger eager column loading for autocomplete
@@ -414,7 +460,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_indexes(entry.name.clone());
             }
         }
-        app::Action::ColumnsLoaded(table_name, columns) => {
+        app::Action::Admin(app::AdminAction::ColumnsLoaded(table_name, columns)) => {
             let db = &mut app.databases[db_idx];
             db.schema.set_columns(table_name, columns.clone());
             // Update schema cache for autocomplete
@@ -523,7 +569,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.edit_activation = None;
             }
         }
-        app::Action::SwitchBottomTab(BottomTab::Detail) => {
+        app::Action::Nav(app::NavAction::SwitchBottomTab(BottomTab::Detail)) => {
             // Populate record detail with the currently selected row
             let db = &mut app.databases[db_idx];
             if let Some(selected) = db.results.selected_row() {
@@ -536,7 +582,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.record_detail.clear();
             }
         }
-        app::Action::SwitchBottomTab(BottomTab::ERDiagram) => {
+        app::Action::Nav(app::NavAction::SwitchBottomTab(BottomTab::ERDiagram)) => {
             // Note: Tab key inside the ER Diagram emits this action to consume the
             // key event (preventing global CycleFocus) while cycling focused_table
             // internally. The dispatch here is a no-op when already loaded.
@@ -547,7 +593,7 @@ pub(crate) fn dispatch_action_to_db(
                     .build_from_schema(&db.schema_cache.entries, &db.schema_cache.columns);
             }
         }
-        app::Action::SwitchSubTab(SubTab::Admin) => {
+        app::Action::Nav(app::NavAction::SwitchSubTab(SubTab::Admin)) => {
             // Lazy initial load for Admin components
             let db = &mut app.databases[db_idx];
             if db.db_info.try_start_load() {
@@ -558,7 +604,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_pragmas();
             }
         }
-        app::Action::ExplainCompleted(bytecode, plan) => {
+        app::Action::Admin(app::AdminAction::ExplainCompleted(bytecode, plan)) => {
             let db = &mut app.databases[db_idx];
             let sql = db.explain.last_query_ref().unwrap_or_default().to_owned();
             db.explain.set_results(
@@ -569,7 +615,7 @@ pub(crate) fn dispatch_action_to_db(
                 &db.schema_cache.index_details,
             );
         }
-        app::Action::ExplainFailed(err) => {
+        app::Action::Admin(app::AdminAction::ExplainFailed(err)) => {
             app.databases[db_idx].explain.set_loading_failed();
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
@@ -578,7 +624,7 @@ pub(crate) fn dispatch_action_to_db(
             });
         }
         // DbInfoLoaded handled by db_info.update() via broadcast
-        app::Action::DbInfoFailed(err) => {
+        app::Action::Admin(app::AdminAction::DbInfoFailed(err)) => {
             app.databases[db_idx].db_info.set_loading_failed();
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
@@ -587,7 +633,7 @@ pub(crate) fn dispatch_action_to_db(
             });
         }
         // PragmasLoaded handled by pragmas.update() via broadcast
-        app::Action::PragmasFailed(err) => {
+        app::Action::Admin(app::AdminAction::PragmasFailed(err)) => {
             app.databases[db_idx].pragmas.set_loading_failed();
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
@@ -595,7 +641,7 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: true,
             });
         }
-        app::Action::PragmaSet(name, value) => {
+        app::Action::Admin(app::AdminAction::PragmaSet(name, value)) => {
             app.databases[db_idx]
                 .pragmas
                 .confirm_edit(name, value.clone());
@@ -605,7 +651,7 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: false,
             });
         }
-        app::Action::PragmaFailed(name, err) => {
+        app::Action::Admin(app::AdminAction::PragmaFailed(name, err)) => {
             app.databases[db_idx].pragmas.cancel_edit();
             app.transient_message = Some(app::TransientMessage {
                 text: format!("{name}: {err}"),
@@ -614,7 +660,7 @@ pub(crate) fn dispatch_action_to_db(
             });
         }
         // WAL checkpoint result delivery
-        app::Action::WalCheckpointed(msg) => {
+        app::Action::Admin(app::AdminAction::WalCheckpointed(msg)) => {
             app.databases[db_idx].db_info.set_checkpointing(false);
             app.transient_message = Some(app::TransientMessage {
                 text: msg.clone(),
@@ -628,7 +674,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_db_info(path);
             }
         }
-        app::Action::WalCheckpointFailed(err) => {
+        app::Action::Admin(app::AdminAction::WalCheckpointFailed(err)) => {
             app.databases[db_idx].db_info.set_checkpointing(false);
             app.transient_message = Some(app::TransientMessage {
                 text: err.clone(),
@@ -637,14 +683,14 @@ pub(crate) fn dispatch_action_to_db(
             });
         }
         // I/O triggers
-        app::Action::RefreshDbInfo => {
+        app::Action::Admin(app::AdminAction::RefreshDbInfo) => {
             let db = &mut app.databases[db_idx];
             if db.db_info.try_start_refresh() {
                 let path = db.path.clone();
                 db.handle.load_db_info(path);
             }
         }
-        app::Action::RefreshPragmas => {
+        app::Action::Admin(app::AdminAction::RefreshPragmas) => {
             // Only clear the edit buffer — don't clear pragma_in_flight.
             let db = &mut app.databases[db_idx];
             db.pragmas.clear_editing();
@@ -652,16 +698,16 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.load_pragmas();
             }
         }
-        app::Action::GenerateExplain(sql) => {
+        app::Action::Admin(app::AdminAction::GenerateExplain(sql)) => {
             app.databases[db_idx].explain.set_loading();
             app.databases[db_idx].handle.explain(sql.clone());
         }
-        app::Action::SetPragma(name, val) => {
+        app::Action::Admin(app::AdminAction::SetPragma(name, val)) => {
             app.databases[db_idx]
                 .handle
                 .set_pragma(name.clone(), val.clone());
         }
-        app::Action::IntegrityCheck => {
+        app::Action::Admin(app::AdminAction::IntegrityCheck) => {
             // Guard: info must be loaded, not already running an integrity check
             let info = app.databases[db_idx].db_info.info();
             if info.is_none() {
@@ -674,26 +720,26 @@ pub(crate) fn dispatch_action_to_db(
                 app.databases[db_idx].handle.integrity_check();
             }
         }
-        app::Action::IntegrityCheckCompleted(msg) => {
+        app::Action::Admin(app::AdminAction::IntegrityCheckCompleted(msg)) => {
             app.transient_message = Some(app::TransientMessage {
                 text: msg.clone(),
                 created_at: std::time::Instant::now(),
                 is_error: false,
             });
         }
-        app::Action::IntegrityCheckFailed(msg) => {
+        app::Action::Admin(app::AdminAction::IntegrityCheckFailed(msg)) => {
             app.transient_message = Some(app::TransientMessage {
                 text: format!("Integrity check failed: {msg}"),
                 created_at: std::time::Instant::now(),
                 is_error: true,
             });
         }
-        app::Action::ClearEditor => {
+        app::Action::Editor(app::EditorAction::ClearEditor) => {
             app.databases[db_idx].editor.clear();
             let path = app.databases[db_idx].path.clone();
             let _ = persistence::delete_buffer(&path);
         }
-        app::Action::ShowHistory => {
+        app::Action::Ui(app::UiAction::ShowHistory) => {
             if app.global_overlay == Some(app::GlobalOverlay::History) {
                 if let Some(ref history_db) = app.history_db {
                     global_ui.history.set_loading();
@@ -709,15 +755,18 @@ pub(crate) fn dispatch_action_to_db(
                 }
             }
         }
-        app::Action::HistoryLoaded(entries) => {
+        app::Action::Query(app::QueryAction::HistoryLoaded(entries)) => {
             global_ui.history.set_entries(entries.clone());
         }
-        app::Action::RecallAndExecute(sql) | app::Action::RecallAndExecuteBookmark(sql) => {
+        app::Action::Query(
+            app::QueryAction::RecallAndExecute(sql)
+            | app::QueryAction::RecallAndExecuteBookmark(sql),
+        ) => {
             let db = &mut app.databases[db_idx];
             db.editor.set_contents(sql);
             begin_execution(db, sql, app::ExecutionSource::FullBuffer);
         }
-        app::Action::DeleteHistoryEntry(id) => {
+        app::Action::Query(app::QueryAction::DeleteHistoryEntry(id)) => {
             if let Some(ref history_db) = app.history_db {
                 history_db.request_delete(*id);
                 // Reload triggered by HistoryReloadRequested when Deleted confirmation arrives
@@ -730,7 +779,7 @@ pub(crate) fn dispatch_action_to_db(
                 );
             }
         }
-        app::Action::HistoryReloadRequested => {
+        app::Action::Query(app::QueryAction::HistoryReloadRequested) => {
             // Reload history after a confirmed delete (separate from DeleteHistoryEntry
             // to avoid re-triggering request_delete in a loop)
             if let Some(ref history_db) = app.history_db {
@@ -743,7 +792,7 @@ pub(crate) fn dispatch_action_to_db(
                 );
             }
         }
-        app::Action::ShowBookmarks => {
+        app::Action::Ui(app::UiAction::ShowBookmarks) => {
             if app.history_db.is_none() {
                 let action =
                     app::Action::SetTransient("Bookmark database unavailable".to_string(), true);
@@ -758,35 +807,35 @@ pub(crate) fn dispatch_action_to_db(
                 hdb.load_bookmarks(Some(db_path));
             }
         }
-        app::Action::SaveBookmark {
+        app::Action::Query(app::QueryAction::SaveBookmark {
             name,
             sql,
             database_path,
-        } => {
+        }) => {
             if let Some(ref hdb) = app.history_db {
                 hdb.save_bookmark(name.clone(), sql.clone(), database_path.clone());
             }
         }
-        app::Action::UpdateBookmark { id, name } => {
+        app::Action::Query(app::QueryAction::UpdateBookmark { id, name }) => {
             if let Some(ref hdb) = app.history_db {
                 hdb.update_bookmark(*id, name.clone());
             }
         }
-        app::Action::DeleteBookmark(id) => {
+        app::Action::Query(app::QueryAction::DeleteBookmark(id)) => {
             if let Some(ref hdb) = app.history_db {
                 hdb.delete_bookmark(*id);
             }
         }
-        app::Action::BookmarksLoaded(entries) => {
+        app::Action::Query(app::QueryAction::BookmarksLoaded(entries)) => {
             global_ui.bookmarks.set_entries(entries.clone());
         }
-        app::Action::BookmarkReloadRequested => {
+        app::Action::Query(app::QueryAction::BookmarkReloadRequested) => {
             if let Some(ref hdb) = app.history_db {
                 let db_path = &app.databases[db_idx].path;
                 hdb.load_bookmarks(Some(db_path));
             }
         }
-        app::Action::ToggleTheme => {
+        app::Action::Ui(app::UiAction::ToggleTheme) => {
             if let Err(e) = crate::config::save_config(&app.config) {
                 app.transient_message = Some(app::TransientMessage {
                     text: format!("Config save failed: {e}"),
@@ -795,7 +844,7 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
-        app::Action::WalCheckpoint => {
+        app::Action::Admin(app::AdminAction::WalCheckpoint) => {
             // Guard: info must be loaded, journal mode must be WAL, not already checkpointing
             let db = &mut app.databases[db_idx];
             let info = db.db_info.info();
@@ -822,12 +871,12 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.wal_checkpoint();
             }
         }
-        app::Action::TriggerAutocomplete => {
+        app::Action::Editor(app::EditorAction::TriggerAutocomplete) => {
             let db = &mut app.databases[db_idx];
             let schema = &db.schema_cache;
             db.editor.trigger_autocomplete(schema);
         }
-        app::Action::ShowExport => {
+        app::Action::Ui(app::UiAction::ShowExport) => {
             if app.databases[db_idx].db_overlay == Some(app::DbOverlay::Export) {
                 let db = &mut app.databases[db_idx];
                 // Create the popup with current result data
@@ -852,7 +901,7 @@ pub(crate) fn dispatch_action_to_db(
                 app.databases[db_idx].export_popup = None;
             }
         }
-        app::Action::CopyAllResults => {
+        app::Action::Ui(app::UiAction::CopyAllResults) => {
             let db = &mut app.databases[db_idx];
             if let Some((columns, rows)) = db.results.export_data() {
                 let tsv = export::format_tsv(columns, rows);
@@ -886,7 +935,7 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
-        app::Action::CopyText(text) => {
+        app::Action::Ui(app::UiAction::CopyText(text)) => {
             match global_ui
                 .clipboard
                 .as_mut()
@@ -911,7 +960,7 @@ pub(crate) fn dispatch_action_to_db(
         }
         // ConfirmCellEdit, CancelCellEdit, AddRow handled by data_editor.update() via broadcast
         // Data editor cell edit actions (requiring cross-component coordination)
-        app::Action::StartCellEdit => {
+        app::Action::Data(app::DataAction::StartCellEdit) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -952,7 +1001,7 @@ pub(crate) fn dispatch_action_to_db(
             db.data_editor
                 .start_cell_edit(pk, row_idx, col, value, notnull, original_row);
         }
-        app::Action::ToggleDeleteRow => {
+        app::Action::Data(app::DataAction::ToggleDeleteRow) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -975,7 +1024,7 @@ pub(crate) fn dispatch_action_to_db(
             let original: Vec<Option<String>> = row_vals.to_vec();
             db.data_editor.toggle_delete_row(&pk, &original);
         }
-        app::Action::CloneRow => {
+        app::Action::Data(app::DataAction::CloneRow) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -989,7 +1038,7 @@ pub(crate) fn dispatch_action_to_db(
             let values: Vec<Option<String>> = row_vals.to_vec();
             db.data_editor.clone_row(values);
         }
-        app::Action::RevertCell => {
+        app::Action::Data(app::DataAction::RevertCell) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -1008,7 +1057,7 @@ pub(crate) fn dispatch_action_to_db(
                 .collect();
             db.data_editor.revert_cell_edit(&pk, col);
         }
-        app::Action::RevertRow => {
+        app::Action::Data(app::DataAction::RevertRow) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -1026,10 +1075,10 @@ pub(crate) fn dispatch_action_to_db(
                 .collect();
             db.data_editor.revert_row_edit(&pk);
         }
-        app::Action::RevertAll => {
+        app::Action::Data(app::DataAction::RevertAll) => {
             app.databases[db_idx].data_editor.revert_all_edits();
         }
-        app::Action::ShowDmlPreview(_submit_enabled) => {
+        app::Action::Data(app::DataAction::ShowDmlPreview(_submit_enabled)) => {
             let db = &mut app.databases[db_idx];
             // AppState::update() already set the overlay. Here we generate DML and store it.
             if db.data_editor.changes().is_empty() {
@@ -1052,7 +1101,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.data_editor.set_preview_dml(stmts);
             }
         }
-        app::Action::SubmitDataEdits => {
+        app::Action::Data(app::DataAction::SubmitDataEdits) => {
             let db = &mut app.databases[db_idx];
             let stmts = db.data_editor.preview_dml().to_vec();
             db.db_overlay = None;
@@ -1060,7 +1109,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.handle.execute_transaction(stmts);
             }
         }
-        app::Action::DataEditsCommitted => {
+        app::Action::Data(app::DataAction::DataEditsCommitted) => {
             let db = &mut app.databases[db_idx];
             // AppState::update() already cleared the overlay.
             db.data_editor.revert_all_edits();
@@ -1078,7 +1127,7 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: false,
             });
         }
-        app::Action::DataEditsFailed(err) => {
+        app::Action::Data(app::DataAction::DataEditsFailed(err)) => {
             // AppState::update() already cleared the overlay.
             app.transient_message = Some(app::TransientMessage {
                 text: format!("Transaction failed: {err}"),
@@ -1087,7 +1136,7 @@ pub(crate) fn dispatch_action_to_db(
             });
             // Changes remain staged — user can inspect and retry
         }
-        app::Action::RequestProfile => {
+        app::Action::Admin(app::AdminAction::RequestProfile) => {
             let db = &mut app.databases[db_idx];
             // Determine which table to profile from the last query result
             let source_table = db
@@ -1121,11 +1170,11 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
-        app::Action::ProfileCompleted(data) => {
+        app::Action::Admin(app::AdminAction::ProfileCompleted(data)) => {
             let db = &mut app.databases[db_idx];
             db.profile.set_data(data.clone());
         }
-        app::Action::ProfileFailed(err) => {
+        app::Action::Admin(app::AdminAction::ProfileFailed(err)) => {
             app.databases[db_idx].profile.mark_stale();
             app.transient_message = Some(app::TransientMessage {
                 text: format!("Profile failed: {err}"),
@@ -1133,10 +1182,10 @@ pub(crate) fn dispatch_action_to_db(
                 is_error: true,
             });
         }
-        app::Action::StddevProbeResult(supported) => {
+        app::Action::Admin(app::AdminAction::StddevProbeResult(supported)) => {
             app.databases[db_idx].supports_stddev = *supported;
         }
-        app::Action::FKLoaded(table, fks) => {
+        app::Action::Data(app::DataAction::FKLoaded(table, fks)) => {
             // AppState::update() already stored the FK info in schema_cache.fk_info.
             // If DataEditor is active and targets this table, update its fk_columns.
             let db = &mut app.databases[db_idx];
@@ -1144,7 +1193,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.data_editor.update_fk_columns(fks);
             }
         }
-        app::Action::FollowFK => {
+        app::Action::Data(app::DataAction::FollowFK) => {
             let db = &mut app.databases[db_idx];
             if !db.data_editor.is_active() {
                 return;
@@ -1219,16 +1268,16 @@ pub(crate) fn dispatch_action_to_db(
             // Signal that the next QueryCompleted is from FK navigation
             // (so activate_for_fk_nav is used instead of activate)
             app.databases[db_idx].edit_activation = Some(EditActivation::FkNavPending);
-            let execute_action = app::Action::ExecuteQuery {
+            let execute_action = app::Action::Query(app::QueryAction::ExecuteQuery {
                 sql,
                 source: app::ExecutionSource::FullBuffer,
                 source_table: Some(target_table),
                 params: None,
-            };
+            });
             app.update(&execute_action);
             dispatch_action_to_db(db_idx, &execute_action, app, global_ui);
         }
-        app::Action::FKNavigateBack => {
+        app::Action::Data(app::DataAction::FKNavigateBack) => {
             let db = &mut app.databases[db_idx];
             let Some(entry) = db.data_editor.pop_fk_state() else {
                 return;
@@ -1249,7 +1298,7 @@ pub(crate) fn dispatch_action_to_db(
                 db.data_editor.update_fk_columns(&fks);
             }
         }
-        app::Action::OpenFilePicker => {
+        app::Action::Nav(app::NavAction::OpenFilePicker) => {
             if app.global_overlay == Some(app::GlobalOverlay::FilePicker) {
                 // Create the file picker with the active database path
                 let active_path = app.databases[app.active_db].path.clone();
@@ -1260,7 +1309,7 @@ pub(crate) fn dispatch_action_to_db(
                 global_ui.file_picker = None;
             }
         }
-        app::Action::OpenDatabase(path) => {
+        app::Action::Nav(app::NavAction::OpenDatabase(path)) => {
             let path_str = path.to_string_lossy().to_string();
 
             // Check if this database is already open (compare canonical paths)
@@ -1283,7 +1332,7 @@ pub(crate) fn dispatch_action_to_db(
 
             if let Some(idx) = existing_idx {
                 // Already open — switch to that tab
-                let switch_action = app::Action::SwitchDatabase(idx);
+                let switch_action = app::Action::Nav(app::NavAction::SwitchDatabase(idx));
                 app.update(&switch_action);
                 app.transient_message = Some(app::TransientMessage {
                     text: format!("Switched to already-open database: {path_str}"),
@@ -1326,7 +1375,7 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
-        app::Action::OpenGoToObject => {
+        app::Action::Nav(app::NavAction::OpenGoToObject) => {
             if app.global_overlay == Some(app::GlobalOverlay::GoToObject) {
                 // Create the Go to Object popup with all databases' schemas
                 let active_path = app.databases[app.active_db].path.clone();
@@ -1431,7 +1480,7 @@ pub(crate) fn execute_export(app: &mut AppState, global_ui: &mut GlobalFeatures)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::Action;
+    use crate::app::{Action, AdminAction, DataAction, QueryAction};
     use std::time::Duration;
     use tursotui_db::{
         ColumnDef, ColumnInfo, DbInfo, ForeignKeyInfo, IndexDetail, PragmaEntry, SchemaEntry,
@@ -1460,7 +1509,7 @@ mod tests {
         let qr = dummy_query_result();
         let action = map_query_message(QueryMessage::Completed(qr));
         assert!(
-            matches!(action, Action::QueryCompleted(_)),
+            matches!(action, Action::Query(QueryAction::QueryCompleted(_))),
             "Completed should map to QueryCompleted"
         );
     }
@@ -1469,7 +1518,7 @@ mod tests {
     fn map_query_message_failed_preserves_error_message() {
         let action = map_query_message(QueryMessage::Failed("timeout".into()));
         match action {
-            Action::QueryFailed(msg) => assert_eq!(msg, "timeout"),
+            Action::Query(QueryAction::QueryFailed(msg)) => assert_eq!(msg, "timeout"),
             other => panic!("expected QueryFailed, got: {other:?}"),
         }
     }
@@ -1484,7 +1533,7 @@ mod tests {
         }];
         let action = map_query_message(QueryMessage::SchemaLoaded(entries));
         match action {
-            Action::SchemaLoaded(e) => assert_eq!(e.len(), 1),
+            Action::Admin(AdminAction::SchemaLoaded(e)) => assert_eq!(e.len(), 1),
             other => panic!("expected SchemaLoaded, got: {other:?}"),
         }
     }
@@ -1505,7 +1554,7 @@ mod tests {
     fn map_query_message_transaction_failed_becomes_data_edits_failed() {
         let action = map_query_message(QueryMessage::TransactionFailed("constraint".into()));
         match action {
-            Action::DataEditsFailed(msg) => assert_eq!(msg, "constraint"),
+            Action::Data(DataAction::DataEditsFailed(msg)) => assert_eq!(msg, "constraint"),
             other => panic!("expected DataEditsFailed, got: {other:?}"),
         }
     }
@@ -1521,7 +1570,7 @@ mod tests {
         }];
         let action = map_query_message(QueryMessage::ColumnsLoaded("users".into(), cols));
         match action {
-            Action::ColumnsLoaded(table, c) => {
+            Action::Admin(AdminAction::ColumnsLoaded(table, c)) => {
                 assert_eq!(table, "users");
                 assert_eq!(c.len(), 1);
             }
@@ -1538,7 +1587,7 @@ mod tests {
             plan.clone(),
         ));
         match action {
-            Action::ExplainCompleted(bc, pl) => {
+            Action::Admin(AdminAction::ExplainCompleted(bc, pl)) => {
                 assert_eq!(bc, bytecode);
                 assert_eq!(pl, plan);
             }
@@ -1550,7 +1599,7 @@ mod tests {
     fn map_query_message_explain_failed() {
         let action = map_query_message(QueryMessage::ExplainFailed("syntax error".into()));
         match action {
-            Action::ExplainFailed(msg) => assert_eq!(msg, "syntax error"),
+            Action::Admin(AdminAction::ExplainFailed(msg)) => assert_eq!(msg, "syntax error"),
             other => panic!("expected ExplainFailed, got: {other:?}"),
         }
     }
@@ -1570,14 +1619,17 @@ mod tests {
             wal_frames: None,
         };
         let action = map_query_message(QueryMessage::DbInfoLoaded(info));
-        assert!(matches!(action, Action::DbInfoLoaded(_)));
+        assert!(matches!(
+            action,
+            Action::Admin(AdminAction::DbInfoLoaded(_))
+        ));
     }
 
     #[test]
     fn map_query_message_db_info_failed() {
         let action = map_query_message(QueryMessage::DbInfoFailed("no access".into()));
         match action {
-            Action::DbInfoFailed(msg) => assert_eq!(msg, "no access"),
+            Action::Admin(AdminAction::DbInfoFailed(msg)) => assert_eq!(msg, "no access"),
             other => panic!("expected DbInfoFailed, got: {other:?}"),
         }
     }
@@ -1592,7 +1644,7 @@ mod tests {
         }];
         let action = map_query_message(QueryMessage::PragmasLoaded(entries));
         match action {
-            Action::PragmasLoaded(e) => assert_eq!(e.len(), 1),
+            Action::Admin(AdminAction::PragmasLoaded(e)) => assert_eq!(e.len(), 1),
             other => panic!("expected PragmasLoaded, got: {other:?}"),
         }
     }
@@ -1601,7 +1653,7 @@ mod tests {
     fn map_query_message_pragmas_failed() {
         let action = map_query_message(QueryMessage::PragmasFailed("error".into()));
         match action {
-            Action::PragmasFailed(msg) => assert_eq!(msg, "error"),
+            Action::Admin(AdminAction::PragmasFailed(msg)) => assert_eq!(msg, "error"),
             other => panic!("expected PragmasFailed, got: {other:?}"),
         }
     }
@@ -1610,7 +1662,7 @@ mod tests {
     fn map_query_message_pragma_set_preserves_name_and_value() {
         let action = map_query_message(QueryMessage::PragmaSet("cache_size".into(), "4000".into()));
         match action {
-            Action::PragmaSet(name, val) => {
+            Action::Admin(AdminAction::PragmaSet(name, val)) => {
                 assert_eq!(name, "cache_size");
                 assert_eq!(val, "4000");
             }
@@ -1625,7 +1677,7 @@ mod tests {
             "invalid value".into(),
         ));
         match action {
-            Action::PragmaFailed(name, err) => {
+            Action::Admin(AdminAction::PragmaFailed(name, err)) => {
                 assert_eq!(name, "cache_size");
                 assert_eq!(err, "invalid value");
             }
@@ -1637,7 +1689,7 @@ mod tests {
     fn map_query_message_wal_checkpointed() {
         let action = map_query_message(QueryMessage::WalCheckpointed("ok".into()));
         match action {
-            Action::WalCheckpointed(msg) => assert_eq!(msg, "ok"),
+            Action::Admin(AdminAction::WalCheckpointed(msg)) => assert_eq!(msg, "ok"),
             other => panic!("expected WalCheckpointed, got: {other:?}"),
         }
     }
@@ -1646,7 +1698,7 @@ mod tests {
     fn map_query_message_wal_checkpoint_failed() {
         let action = map_query_message(QueryMessage::WalCheckpointFailed("busy".into()));
         match action {
-            Action::WalCheckpointFailed(msg) => assert_eq!(msg, "busy"),
+            Action::Admin(AdminAction::WalCheckpointFailed(msg)) => assert_eq!(msg, "busy"),
             other => panic!("expected WalCheckpointFailed, got: {other:?}"),
         }
     }
@@ -1655,7 +1707,7 @@ mod tests {
     fn map_query_message_integrity_check_completed() {
         let action = map_query_message(QueryMessage::IntegrityCheckCompleted("ok".into()));
         match action {
-            Action::IntegrityCheckCompleted(msg) => assert_eq!(msg, "ok"),
+            Action::Admin(AdminAction::IntegrityCheckCompleted(msg)) => assert_eq!(msg, "ok"),
             other => panic!("expected IntegrityCheckCompleted, got: {other:?}"),
         }
     }
@@ -1664,7 +1716,7 @@ mod tests {
     fn map_query_message_integrity_check_failed() {
         let action = map_query_message(QueryMessage::IntegrityCheckFailed("corrupt".into()));
         match action {
-            Action::IntegrityCheckFailed(msg) => assert_eq!(msg, "corrupt"),
+            Action::Admin(AdminAction::IntegrityCheckFailed(msg)) => assert_eq!(msg, "corrupt"),
             other => panic!("expected IntegrityCheckFailed, got: {other:?}"),
         }
     }
@@ -1673,7 +1725,7 @@ mod tests {
     fn map_query_message_transaction_committed_becomes_data_edits_committed() {
         let action = map_query_message(QueryMessage::TransactionCommitted);
         assert!(
-            matches!(action, Action::DataEditsCommitted),
+            matches!(action, Action::Data(DataAction::DataEditsCommitted)),
             "TransactionCommitted should map to DataEditsCommitted"
         );
     }
@@ -1687,7 +1739,7 @@ mod tests {
         }];
         let action = map_query_message(QueryMessage::ForeignKeysLoaded("orders".into(), fks));
         match action {
-            Action::FKLoaded(table, f) => {
+            Action::Data(DataAction::FKLoaded(table, f)) => {
                 assert_eq!(table, "orders");
                 assert_eq!(f.len(), 1);
             }
@@ -1742,9 +1794,9 @@ mod tests {
         };
         let action = map_query_message(QueryMessage::IndexDetailsLoaded("t".into(), vec![detail]));
         assert!(
-            matches!(action, Action::IndexDetailsLoaded(ref table, ref indexes)
+            matches!(action, Action::Admin(AdminAction::IndexDetailsLoaded(ref table, ref indexes))
                 if table == "t" && indexes.len() == 1),
-            "IndexDetailsLoaded should map to Action::IndexDetailsLoaded"
+            "IndexDetailsLoaded should map to Action::Admin(AdminAction::IndexDetailsLoaded)"
         );
     }
 
@@ -1753,7 +1805,10 @@ mod tests {
     #[test]
     fn map_history_message_loaded_returns_history_loaded() {
         let action = map_history_message(history::HistoryMessage::Loaded(vec![]));
-        assert!(matches!(action, Action::HistoryLoaded(_)));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::HistoryLoaded(_))
+        ));
     }
 
     #[test]
@@ -1771,31 +1826,46 @@ mod tests {
     #[test]
     fn map_history_message_deleted_returns_reload_requested() {
         let action = map_history_message(history::HistoryMessage::Deleted(42));
-        assert!(matches!(action, Action::HistoryReloadRequested));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::HistoryReloadRequested)
+        ));
     }
 
     #[test]
     fn map_history_message_bookmarks_loaded() {
         let action = map_history_message(history::HistoryMessage::BookmarksLoaded(vec![]));
-        assert!(matches!(action, Action::BookmarksLoaded(_)));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::BookmarksLoaded(_))
+        ));
     }
 
     #[test]
     fn map_history_message_bookmark_saved_returns_reload() {
         let action = map_history_message(history::HistoryMessage::BookmarkSaved(1));
-        assert!(matches!(action, Action::BookmarkReloadRequested));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::BookmarkReloadRequested)
+        ));
     }
 
     #[test]
     fn map_history_message_bookmark_deleted_returns_reload() {
         let action = map_history_message(history::HistoryMessage::BookmarkDeleted(1));
-        assert!(matches!(action, Action::BookmarkReloadRequested));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::BookmarkReloadRequested)
+        ));
     }
 
     #[test]
     fn map_history_message_bookmark_updated_returns_reload() {
         let action = map_history_message(history::HistoryMessage::BookmarkUpdated(1));
-        assert!(matches!(action, Action::BookmarkReloadRequested));
+        assert!(matches!(
+            action,
+            Action::Query(QueryAction::BookmarkReloadRequested)
+        ));
     }
 
     #[test]

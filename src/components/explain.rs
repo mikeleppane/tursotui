@@ -3,7 +3,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, BottomTab, Direction, TableId};
+use crate::app::{Action, AdminAction, BottomTab, Direction, EditorAction, NavAction, TableId};
 use crate::theme::Theme;
 
 use super::Component;
@@ -810,7 +810,7 @@ impl Component for ExplainView {
                 // Must return Some to consume Tab and prevent global focus cycling
                 // (event.rs maps bare Tab → CycleFocus). SwitchBottomTab(Explain)
                 // is idempotent since we're already on this tab.
-                Some(Action::SwitchBottomTab(BottomTab::Explain))
+                Some(Action::Nav(NavAction::SwitchBottomTab(BottomTab::Explain)))
             }
             // Enter: generate EXPLAIN when stale, or populate editor with suggestion
             (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -819,13 +819,13 @@ impl Component for ExplainView {
                     && let Some(sql) = self.last_query.clone()
                 {
                     // loading flag set by dispatch calling set_loading()
-                    return Some(Action::GenerateExplain(sql));
+                    return Some(Action::Admin(AdminAction::GenerateExplain(sql)));
                 }
                 // If on a suggestion line in QueryPlan mode, populate editor
                 if self.mode == ExplainMode::QueryPlan
                     && let Some(suggestion) = self.selected_suggestion()
                 {
-                    return Some(Action::PopulateEditor(suggestion));
+                    return Some(Action::Editor(EditorAction::PopulateEditor(suggestion)));
                 }
                 None
             }
@@ -852,7 +852,9 @@ impl Component for ExplainView {
                 None
             }
             // Esc releases focus.
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CycleFocus(Direction::Forward)),
+            (KeyModifiers::NONE, KeyCode::Esc) => {
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
+            }
             // Navigation: j/Down scroll down
             (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
                 let count = self.row_count();

@@ -2,7 +2,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::app::{Action, Direction, ExecutionSource, SchemaCache};
+use crate::app::{
+    Action, Direction, EditorAction, ExecutionSource, NavAction, QueryAction, SchemaCache, UiAction,
+};
 use crate::autocomplete;
 use crate::components::autocomplete::AutocompletePopup;
 use crate::highlight;
@@ -693,7 +695,7 @@ impl Component for QueryEditor {
                 }
                 (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Enter) => {
                     if let Some(text) = self.accept_completion() {
-                        return Some(Action::AcceptCompletion(text));
+                        return Some(Action::Editor(EditorAction::AcceptCompletion(text)));
                     }
                     // No completion to accept — dismiss and fall through.
                     self.dismiss_autocomplete();
@@ -717,33 +719,35 @@ impl Component for QueryEditor {
             // Trigger autocomplete — Ctrl+Space arrives as Char(' ') with CONTROL
             // in kitty-protocol terminals, but as Char('\0') (NUL) in traditional
             // terminals that send ^@ for Ctrl+Space.
-            (KeyModifiers::CONTROL, KeyCode::Char(' ' | '\0')) => Some(Action::TriggerAutocomplete),
+            (KeyModifiers::CONTROL, KeyCode::Char(' ' | '\0')) => {
+                Some(Action::Editor(EditorAction::TriggerAutocomplete))
+            }
 
             // Execute selection or statement at cursor: Ctrl+Shift+Enter
             (m, KeyCode::Enter) if m == KeyModifiers::CONTROL | KeyModifiers::SHIFT => {
                 let (text, source) = self.text_to_execute();
-                Some(Action::ExecuteQuery {
+                Some(Action::Query(QueryAction::ExecuteQuery {
                     sql: text,
                     source,
                     source_table: None,
                     params: build_query_params(&self.param_fields),
-                })
+                }))
             }
 
             // Execute full buffer: F5 or Ctrl+Enter
             (_, KeyCode::F(5)) | (KeyModifiers::CONTROL, KeyCode::Enter) => {
-                Some(Action::ExecuteQuery {
+                Some(Action::Query(QueryAction::ExecuteQuery {
                     sql: self.contents(),
                     source: ExecutionSource::FullBuffer,
                     source_table: None,
                     params: build_query_params(&self.param_fields),
-                })
+                }))
             }
 
             // Release focus
             (KeyModifiers::NONE, KeyCode::Esc) => {
                 self.clear_selection();
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
 
             // Undo / redo
@@ -763,7 +767,9 @@ impl Component for QueryEditor {
             }
 
             // Clear buffer
-            (KeyModifiers::CONTROL, KeyCode::Char('l')) => Some(Action::ClearEditor),
+            (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                Some(Action::Editor(EditorAction::ClearEditor))
+            }
 
             // Shift+Arrow: extend selection
             (KeyModifiers::SHIFT, KeyCode::Up) => {
@@ -857,7 +863,7 @@ impl Component for QueryEditor {
             // Ctrl+E: open export popup (not end-of-line — use End key or Home/End instead).
             // Traditional terminals can't distinguish Ctrl+E from Ctrl+Shift+E,
             // so Ctrl+E triggers export even from the editor.
-            (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::ShowExport),
+            (KeyModifiers::CONTROL, KeyCode::Char('e')) => Some(Action::Ui(UiAction::ShowExport)),
 
             // Enter → replace selection or newline
             (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -915,9 +921,8 @@ impl Component for QueryEditor {
 
     fn update(&mut self, action: &Action) {
         match action {
-            Action::PopulateEditor(sql)
-            | Action::RecallHistory(sql)
-            | Action::RecallBookmark(sql) => {
+            Action::Editor(EditorAction::PopulateEditor(sql))
+            | Action::Query(QueryAction::RecallHistory(sql) | QueryAction::RecallBookmark(sql)) => {
                 self.set_contents(sql);
             }
             _ => {}
@@ -1173,12 +1178,12 @@ mod tests {
         let action = editor.handle_key(press(KeyCode::F(5)));
         assert!(matches!(
             action,
-            Some(Action::ExecuteQuery {
+            Some(Action::Query(QueryAction::ExecuteQuery {
                 ref sql,
                 source: ExecutionSource::FullBuffer,
                 source_table: None,
                 params: None,
-            }) if sql == "SELECT 1"
+            })) if sql == "SELECT 1"
         ));
     }
 
@@ -1212,7 +1217,7 @@ mod tests {
         assert_eq!(editor.buf.cursor, (0, 0));
         // Ctrl+E now opens export popup (not end-of-line)
         let action = editor.handle_key(ctrl_press(KeyCode::Char('e')));
-        assert!(matches!(action, Some(Action::ShowExport)));
+        assert!(matches!(action, Some(Action::Ui(UiAction::ShowExport))));
         // Cursor stays at 0 since Ctrl+E no longer moves it
         assert_eq!(editor.buf.cursor, (0, 0));
     }
@@ -1760,7 +1765,9 @@ mod tests {
         editor.trigger_autocomplete(&schema);
         let action = editor.handle_key(press(KeyCode::Tab));
 
-        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert!(
+            matches!(action, Some(Action::Editor(EditorAction::AcceptCompletion(ref t))) if t == "users")
+        );
         assert!(editor.autocomplete_popup.is_none());
         assert_eq!(editor.contents(), "SELECT * FROM users");
     }
@@ -1849,7 +1856,9 @@ mod tests {
         editor.trigger_autocomplete(&schema);
         let action = editor.handle_key(press(KeyCode::Enter));
 
-        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert!(
+            matches!(action, Some(Action::Editor(EditorAction::AcceptCompletion(ref t))) if t == "users")
+        );
         assert!(editor.autocomplete_popup.is_none());
     }
 
@@ -2076,7 +2085,9 @@ mod tests {
 
         // 4. Accept via Tab
         let action = editor.handle_key(press(KeyCode::Tab));
-        assert!(matches!(action, Some(Action::AcceptCompletion(ref t)) if t == "users"));
+        assert!(
+            matches!(action, Some(Action::Editor(EditorAction::AcceptCompletion(ref t))) if t == "users")
+        );
         assert_eq!(editor.contents(), "SELECT * FROM users");
         assert!(editor.autocomplete_popup.is_none());
     }
@@ -2153,10 +2164,10 @@ mod tests {
 
         let action = editor.handle_key(press(KeyCode::F(5)));
         match action {
-            Some(Action::ExecuteQuery {
+            Some(Action::Query(QueryAction::ExecuteQuery {
                 params: Some(tursotui_db::QueryParams::Positional(vals)),
                 ..
-            }) => {
+            })) => {
                 assert_eq!(vals.len(), 1);
                 assert!(matches!(vals[0], tursotui_db::Value::Integer(99)));
             }
@@ -2171,7 +2182,10 @@ mod tests {
         let action = editor.handle_key(press(KeyCode::F(5)));
         assert!(matches!(
             action,
-            Some(Action::ExecuteQuery { params: None, .. })
+            Some(Action::Query(QueryAction::ExecuteQuery {
+                params: None,
+                ..
+            }))
         ));
     }
 }

@@ -7,7 +7,7 @@ use tursotui_db::{ColumnInfo, SchemaEntry};
 use tursotui_sql::quoting::quote_identifier;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, TableId};
+use crate::app::{Action, TableId, UiAction};
 use crate::theme::Theme;
 
 /// Classification of schema objects for diffing.
@@ -713,7 +713,7 @@ pub(crate) fn handle_key(state: &mut SchemaDiffState, key: KeyEvent) -> Option<A
 
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Esc) => {
-            return Some(Action::CloseSchemaDiff);
+            return Some(Action::Ui(UiAction::CloseSchemaDiff));
         }
         (KeyModifiers::NONE, KeyCode::Char('j') | KeyCode::Down) => {
             if visible_len > 0 {
@@ -765,14 +765,14 @@ pub(crate) fn handle_key(state: &mut SchemaDiffState, key: KeyEvent) -> Option<A
                     .as_deref()
                     .or(diff.source_ddl.as_deref())
                     .unwrap_or("-- No DDL available");
-                return Some(Action::CopyText(ddl.to_string()));
+                return Some(Action::Ui(UiAction::CopyText(ddl.to_string())));
             }
         }
         (KeyModifiers::NONE, KeyCode::Char('m')) => {
             // Copy migration SQL
             if let Some(&diff_idx) = visible.get(state.selected) {
                 let migration = generate_migration(&state.diffs[diff_idx]);
-                return Some(Action::CopyText(migration));
+                return Some(Action::Ui(UiAction::CopyText(migration)));
             }
         }
         _ => {}

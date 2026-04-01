@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use tursotui_db::types::value_to_display;
 
-use crate::app::{Action, Direction};
+use crate::app::{Action, Direction, NavAction, QueryAction};
 use crate::theme::Theme;
 use tursotui_db::{ColumnDef, QueryResult};
 
@@ -463,10 +463,10 @@ impl Component for ResultsTable {
                             self.filter_input = None;
                             self.filter_cursor = 0;
                         }
-                        return Some(Action::ExecuteFilteredQuery {
+                        return Some(Action::Query(QueryAction::ExecuteFilteredQuery {
                             table: table.clone(),
                             where_clause,
-                        });
+                        }));
                     }
                 }
                 KeyCode::Backspace => {
@@ -613,19 +613,19 @@ impl Component for ResultsTable {
                 self.filter_input = None;
                 self.filter_cursor = 0;
                 if let Some(table) = table {
-                    return Some(Action::ExecuteFilteredQuery {
+                    return Some(Action::Query(QueryAction::ExecuteFilteredQuery {
                         table,
                         where_clause: String::new(), // empty = re-run unfiltered
-                    });
+                    }));
                 }
                 None
             }
 
             // Focus cycling
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
-                Some(Action::CycleFocus(Direction::Forward))
+                Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
-            (_, KeyCode::BackTab) => Some(Action::CycleFocus(Direction::Backward)),
+            (_, KeyCode::BackTab) => Some(Action::Nav(NavAction::CycleFocus(Direction::Backward))),
 
             _ => None,
         }

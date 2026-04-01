@@ -270,7 +270,7 @@ fn drain_async_messages(app: &mut AppState, global_ui: &mut GlobalFeatures) {
                 let new_db = DatabaseContext::new(handle, path_str.clone(), &app.config);
                 app.databases.push(new_db);
                 let new_idx = app.databases.len() - 1;
-                let switch = app::Action::SwitchDatabase(new_idx);
+                let switch = app::Action::Nav(app::NavAction::SwitchDatabase(new_idx));
                 app.update(&switch);
                 app.databases[new_idx].handle.load_schema();
                 // Restore saved editor buffer if available

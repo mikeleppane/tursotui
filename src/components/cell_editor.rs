@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::Action;
+use crate::app::{Action, DataAction};
 use crate::theme::Theme;
 
 /// Inline/modal cell editor widget for data editing.
@@ -224,11 +224,13 @@ impl CellEditor {
                 self.insert_char(c);
                 None
             }
-            (KeyModifiers::NONE, KeyCode::Enter) => {
-                Some(Action::ConfirmCellEdit(Some(self.buffer.clone())))
+            (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Data(
+                DataAction::ConfirmCellEdit(Some(self.buffer.clone())),
+            )),
+            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Data(DataAction::CancelCellEdit)),
+            (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                Some(Action::Data(DataAction::ConfirmCellEdit(None)))
             }
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CancelCellEdit),
-            (KeyModifiers::CONTROL, KeyCode::Char('n')) => Some(Action::ConfirmCellEdit(None)),
             _ => None,
         }
     }
@@ -269,11 +271,13 @@ impl CellEditor {
                 None
             }
             // Ctrl+Enter or F10 confirms
-            (KeyModifiers::CONTROL, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::F(10)) => {
-                Some(Action::ConfirmCellEdit(Some(self.buffer.clone())))
+            (KeyModifiers::CONTROL, KeyCode::Enter) | (KeyModifiers::NONE, KeyCode::F(10)) => Some(
+                Action::Data(DataAction::ConfirmCellEdit(Some(self.buffer.clone()))),
+            ),
+            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Data(DataAction::CancelCellEdit)),
+            (KeyModifiers::CONTROL, KeyCode::Char('n')) => {
+                Some(Action::Data(DataAction::ConfirmCellEdit(None)))
             }
-            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::CancelCellEdit),
-            (KeyModifiers::CONTROL, KeyCode::Char('n')) => Some(Action::ConfirmCellEdit(None)),
             // Up/Down line navigation in modal mode
             (KeyModifiers::NONE, KeyCode::Up) => {
                 self.move_up();
@@ -404,7 +408,7 @@ mod tests {
         let mut ed = inline_editor("foo");
         let action = ed.handle_key(make_key(KeyModifiers::NONE, KeyCode::Enter));
         assert!(
-            matches!(action, Some(Action::ConfirmCellEdit(Some(ref s))) if s == "foo"),
+            matches!(action, Some(Action::Data(DataAction::ConfirmCellEdit(Some(ref s)))) if s == "foo"),
             "expected ConfirmCellEdit(Some(\"foo\")), got {action:?}"
         );
     }
@@ -413,7 +417,10 @@ mod tests {
     fn test_esc_cancels() {
         let mut ed = inline_editor("foo");
         let action = ed.handle_key(make_key(KeyModifiers::NONE, KeyCode::Esc));
-        assert!(matches!(action, Some(Action::CancelCellEdit)));
+        assert!(matches!(
+            action,
+            Some(Action::Data(DataAction::CancelCellEdit))
+        ));
     }
 
     #[test]
@@ -421,7 +428,10 @@ mod tests {
         let mut ed = inline_editor("foo");
         let action = ed.handle_key(make_key(KeyModifiers::CONTROL, KeyCode::Char('n')));
         assert!(
-            matches!(action, Some(Action::ConfirmCellEdit(None))),
+            matches!(
+                action,
+                Some(Action::Data(DataAction::ConfirmCellEdit(None)))
+            ),
             "expected ConfirmCellEdit(None), got {action:?}"
         );
     }
@@ -467,7 +477,10 @@ mod tests {
         let mut ed = modal_editor("line1\nline2");
         let action = ed.handle_key(make_key(KeyModifiers::CONTROL, KeyCode::Enter));
         assert!(
-            matches!(action, Some(Action::ConfirmCellEdit(Some(_)))),
+            matches!(
+                action,
+                Some(Action::Data(DataAction::ConfirmCellEdit(Some(_))))
+            ),
             "expected ConfirmCellEdit, got {action:?}"
         );
     }
@@ -477,7 +490,10 @@ mod tests {
         let mut ed = modal_editor("text");
         let action = ed.handle_key(make_key(KeyModifiers::NONE, KeyCode::F(10)));
         assert!(
-            matches!(action, Some(Action::ConfirmCellEdit(Some(_)))),
+            matches!(
+                action,
+                Some(Action::Data(DataAction::ConfirmCellEdit(Some(_))))
+            ),
             "expected ConfirmCellEdit, got {action:?}"
         );
     }
