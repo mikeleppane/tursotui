@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn run_query_select_returns_rows() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        let result = DatabaseHandle::run_query(&db, "SELECT 1 AS num, 'hello' AS greeting")
+        let result = DatabaseHandle::run_query(&db, "SELECT 1 AS num, 'hello' AS greeting", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Select));
@@ -245,11 +245,11 @@ mod tests {
     async fn run_query_insert_returns_rows_affected() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
         // Create table first
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)", None)
             .await
             .unwrap();
         // Insert
-        let result = DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1), (2), (3)")
+        let result = DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1), (2), (3)", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Insert));
@@ -261,10 +261,13 @@ mod tests {
     #[tokio::test]
     async fn run_query_ddl_returns_zero_rows() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        let result =
-            DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-                .await
-                .unwrap();
+        let result = DatabaseHandle::run_query(
+            &db,
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)",
+            None,
+        )
+        .await
+        .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Ddl));
         assert!(result.columns.is_empty());
         assert!(result.rows.is_empty());
@@ -273,13 +276,17 @@ mod tests {
     #[tokio::test]
     async fn run_query_update_returns_rows_affected() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER, val TEXT)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER, val TEXT)", None)
             .await
             .unwrap();
-        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')")
-            .await
-            .unwrap();
-        let result = DatabaseHandle::run_query(&db, "UPDATE t SET val = 'x' WHERE id > 1")
+        DatabaseHandle::run_query(
+            &db,
+            "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')",
+            None,
+        )
+        .await
+        .unwrap();
+        let result = DatabaseHandle::run_query(&db, "UPDATE t SET val = 'x' WHERE id > 1", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Update));
@@ -289,13 +296,13 @@ mod tests {
     #[tokio::test]
     async fn run_query_delete_returns_rows_affected() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)", None)
             .await
             .unwrap();
-        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1), (2), (3)")
+        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1), (2), (3)", None)
             .await
             .unwrap();
-        let result = DatabaseHandle::run_query(&db, "DELETE FROM t WHERE id = 2")
+        let result = DatabaseHandle::run_query(&db, "DELETE FROM t WHERE id = 2", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Delete));
@@ -305,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn run_batch_dml_only() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)", None)
             .await
             .unwrap();
         let stmts = vec![
@@ -323,7 +330,7 @@ mod tests {
         ));
         assert!(result.rows.is_empty());
         // Verify the inserts actually worked
-        let check = DatabaseHandle::run_query(&db, "SELECT COUNT(*) FROM t")
+        let check = DatabaseHandle::run_query(&db, "SELECT COUNT(*) FROM t", None)
             .await
             .unwrap();
         assert_eq!(check.rows.len(), 1);
@@ -332,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn run_batch_with_trailing_select() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER, name TEXT)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER, name TEXT)", None)
             .await
             .unwrap();
         let stmts = vec![
@@ -358,10 +365,10 @@ mod tests {
     #[tokio::test]
     async fn run_batch_rollback_on_error() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY)", None)
             .await
             .unwrap();
-        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1)")
+        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1)", None)
             .await
             .unwrap();
         let stmts = vec![
@@ -372,7 +379,7 @@ mod tests {
         let err = DatabaseHandle::run_batch(&db, &stmts).await;
         assert!(err.is_err());
         // Verify rollback: only the original row (1) should exist, row (2) rolled back
-        let check = DatabaseHandle::run_query(&db, "SELECT id FROM t ORDER BY id")
+        let check = DatabaseHandle::run_query(&db, "SELECT id FROM t ORDER BY id", None)
             .await
             .unwrap();
         assert_eq!(
@@ -385,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn run_query_explain() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        let result = DatabaseHandle::run_query(&db, "EXPLAIN SELECT 1")
+        let result = DatabaseHandle::run_query(&db, "EXPLAIN SELECT 1", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Explain));
@@ -396,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn run_query_pragma() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        let result = DatabaseHandle::run_query(&db, "PRAGMA page_size")
+        let result = DatabaseHandle::run_query(&db, "PRAGMA page_size", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Pragma));
@@ -406,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn run_batch_with_trailing_explain() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)", None)
             .await
             .unwrap();
         let stmts = vec!["INSERT INTO t VALUES (1)", "EXPLAIN SELECT * FROM t"];
@@ -445,10 +452,10 @@ mod tests {
     #[tokio::test]
     async fn run_batch_rollback_preserves_only_original_data() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER PRIMARY KEY)", None)
             .await
             .unwrap();
-        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1)")
+        DatabaseHandle::run_query(&db, "INSERT INTO t VALUES (1)", None)
             .await
             .unwrap();
         let stmts = vec![
@@ -459,7 +466,7 @@ mod tests {
         let err = DatabaseHandle::run_batch(&db, &stmts).await;
         assert!(err.is_err());
         // Verify exact count: only original row (1) remains
-        let check = DatabaseHandle::run_query(&db, "SELECT id FROM t ORDER BY id")
+        let check = DatabaseHandle::run_query(&db, "SELECT id FROM t ORDER BY id", None)
             .await
             .unwrap();
         assert_eq!(
@@ -472,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn run_query_vacuum_other_kind() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        let result = DatabaseHandle::run_query(&db, "SELECT typeof(1)")
+        let result = DatabaseHandle::run_query(&db, "SELECT typeof(1)", None)
             .await
             .unwrap();
         assert!(matches!(result.query_kind, QueryKind::Select));
@@ -484,7 +491,7 @@ mod tests {
     #[tokio::test]
     async fn run_batch_with_user_transaction() {
         let db = turso::Builder::new_local(":memory:").build().await.unwrap();
-        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)")
+        DatabaseHandle::run_query(&db, "CREATE TABLE t (id INTEGER)", None)
             .await
             .unwrap();
         // User provides their own BEGIN/COMMIT -- should not double-wrap
@@ -500,7 +507,7 @@ mod tests {
             "should not error on user-provided transaction"
         );
         // Verify data was committed
-        let check = DatabaseHandle::run_query(&db, "SELECT COUNT(*) FROM t")
+        let check = DatabaseHandle::run_query(&db, "SELECT COUNT(*) FROM t", None)
             .await
             .unwrap();
         assert_eq!(check.rows.len(), 1);
