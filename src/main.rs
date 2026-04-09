@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config::ConfigLoadResult {
         config: cfg,
         error: config_err,
-        was_created: _was_created,
+        was_created,
     } = config::load_config();
 
     // Open all databases from CLI args, deduplicating canonical paths.
@@ -127,6 +127,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else if let Some(warn_msg) = duplicate_warning {
         app.transient_message = Some(app::TransientMessage {
             text: warn_msg,
+            created_at: std::time::Instant::now(),
+            is_error: false,
+        });
+    }
+
+    // First-run hint — lowest priority, only shown when no other startup message exists.
+    // was_created == true implies no prior session, so no saved buffer to restore either.
+    if app.transient_message.is_none() && was_created {
+        app.transient_message = Some(app::TransientMessage {
+            text: "Press F1 for help".to_string(),
             created_at: std::time::Instant::now(),
             is_error: false,
         });
