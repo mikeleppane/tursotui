@@ -93,17 +93,17 @@ pub(crate) const TRANSIENT_TTL: Duration = Duration::from_secs(3);
 
 /// Classify execution time relative to the slow-query threshold.
 ///
-/// Returns a color for the execution time display:
-/// - `> 5× threshold`: error (red) — severely slow
-/// - `> threshold`: warning (yellow) — slow
-/// - otherwise: dim — normal
-fn time_color(ms: u64, slow_threshold: u64, theme: &Theme) -> Color {
+/// Returns a color and symbol prefix for the execution time display:
+/// - `> 5× threshold`: error (red) + "!! " — severely slow
+/// - `> threshold`: warning (yellow) + "! " — slow
+/// - otherwise: dim + "" — normal
+fn time_style(ms: u64, slow_threshold: u64, theme: &Theme) -> (Color, &'static str) {
     if ms > slow_threshold.saturating_mul(5) {
-        theme.error
+        (theme.error, "!! ")
     } else if ms > slow_threshold {
-        theme.warning
+        (theme.warning, "! ")
     } else {
-        theme.dim
+        (theme.dim, "")
     }
 }
 
@@ -167,45 +167,58 @@ pub(crate) fn render(
             .last_execution_time
             .map(format_duration)
             .unwrap_or_default();
-        let tc = db.last_execution_time.map(|d| {
+        let (tc, time_symbol) = db.last_execution_time.map_or((None, ""), |d| {
             let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
-            time_color(ms, slow_ms, theme)
+            let (color, symbol) = time_style(ms, slow_ms, theme);
+            (Some(color), symbol)
         });
         let text = match kind {
             QueryKind::Select => {
                 let count = db.last_row_count.unwrap_or(0);
                 if db.last_truncated {
-                    format!("{}+ rows in {} (truncated)", format_count(count), time)
+                    format!(
+                        "{time_symbol}{}+ rows in {} (truncated)",
+                        format_count(count),
+                        time
+                    )
                 } else {
-                    format!("{} rows in {}", format_count(count), time)
+                    format!("{time_symbol}{} rows in {}", format_count(count), time)
                 }
             }
             QueryKind::Explain => {
                 let count = db.last_row_count.unwrap_or(0);
-                format!("EXPLAIN: {} rows ({})", format_count(count), time)
+                format!(
+                    "{time_symbol}EXPLAIN: {} rows ({})",
+                    format_count(count),
+                    time
+                )
             }
             QueryKind::Insert => {
                 let n = db.last_rows_affected;
                 let word = if n == 1 { "row" } else { "rows" };
-                format!("{n} {word} inserted ({time})")
+                format!("{time_symbol}{n} {word} inserted ({time})")
             }
             QueryKind::Update => {
                 let n = db.last_rows_affected;
                 let word = if n == 1 { "row" } else { "rows" };
-                format!("{n} {word} updated ({time})")
+                format!("{time_symbol}{n} {word} updated ({time})")
             }
             QueryKind::Delete => {
                 let n = db.last_rows_affected;
                 let word = if n == 1 { "row" } else { "rows" };
-                format!("{n} {word} deleted ({time})")
+                format!("{time_symbol}{n} {word} deleted ({time})")
             }
-            QueryKind::Ddl => format!("DDL executed ({time})"),
+            QueryKind::Ddl => format!("{time_symbol}DDL executed ({time})"),
             QueryKind::Pragma => {
                 let count = db.last_row_count.unwrap_or(0);
                 if count > 0 {
-                    format!("PRAGMA: {} rows ({})", format_count(count), time)
+                    format!(
+                        "{time_symbol}PRAGMA: {} rows ({})",
+                        format_count(count),
+                        time
+                    )
                 } else {
-                    format!("PRAGMA executed ({time})")
+                    format!("{time_symbol}PRAGMA executed ({time})")
                 }
             }
             QueryKind::Batch {
@@ -215,17 +228,17 @@ pub(crate) fn render(
                 if *has_trailing_select {
                     let n = statement_count - 1;
                     let word = if n == 1 { "statement" } else { "statements" };
-                    format!("Batch: {n} {word} + SELECT ({time})")
+                    format!("{time_symbol}Batch: {n} {word} + SELECT ({time})")
                 } else {
                     let word = if *statement_count == 1 {
                         "statement"
                     } else {
                         "statements"
                     };
-                    format!("Batch: {statement_count} {word} executed ({time})")
+                    format!("{time_symbol}Batch: {statement_count} {word} executed ({time})")
                 }
             }
-            QueryKind::Other => format!("Query executed ({time})"),
+            QueryKind::Other => format!("{time_symbol}Query executed ({time})"),
         };
         (text, tc)
     } else {
@@ -523,6 +536,7 @@ fn compose_status_line(left: &str, center: &str, right: &str, width: usize) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::DARK_THEME;
 
     // --- format_duration tests ---
 
@@ -669,5 +683,45 @@ mod tests {
         assert_eq!(result.width(), 20);
         assert!(result.starts_with("LEFT"));
         assert!(result.ends_with("RIGHT"));
+    }
+
+    // --- time_style tests ---
+
+    #[test]
+    fn time_style_normal() {
+        let theme = &DARK_THEME;
+        let threshold = 500;
+        // Below threshold
+        let (color, symbol) = time_style(499, threshold, theme);
+        assert_eq!(color, theme.dim);
+        assert_eq!(symbol, "");
+        // At threshold (still normal — only > threshold is slow)
+        let (color, symbol) = time_style(500, threshold, theme);
+        assert_eq!(color, theme.dim);
+        assert_eq!(symbol, "");
+    }
+
+    #[test]
+    fn time_style_slow() {
+        let theme = &DARK_THEME;
+        let threshold = 500;
+        // Just above threshold
+        let (color, symbol) = time_style(501, threshold, theme);
+        assert_eq!(color, theme.warning);
+        assert_eq!(symbol, "! ");
+        // At 5x threshold (still slow, not severely slow)
+        let (color, symbol) = time_style(2500, threshold, theme);
+        assert_eq!(color, theme.warning);
+        assert_eq!(symbol, "! ");
+    }
+
+    #[test]
+    fn time_style_severely_slow() {
+        let theme = &DARK_THEME;
+        let threshold = 500;
+        // Above 5x threshold
+        let (color, symbol) = time_style(2501, threshold, theme);
+        assert_eq!(color, theme.error);
+        assert_eq!(symbol, "!! ");
     }
 }

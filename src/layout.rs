@@ -42,9 +42,12 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
 
     // Minimum terminal size check
     if area.width < 80 || area.height < 24 {
-        let msg = Paragraph::new("Terminal too small (min 80x24)")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(theme.error));
+        let msg = Paragraph::new(format!(
+            "Terminal is {}x{}, minimum is 80x24",
+            area.width, area.height
+        ))
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(theme.error));
         let [_, center, _] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),

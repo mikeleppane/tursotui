@@ -76,7 +76,11 @@ impl GlobalFeatures {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let (cfg, config_err) = config::load_config();
+    let config::ConfigLoadResult {
+        config: cfg,
+        error: config_err,
+        was_created: _was_created,
+    } = config::load_config();
 
     // Open all databases from CLI args, deduplicating canonical paths.
     let mut databases = Vec::new();

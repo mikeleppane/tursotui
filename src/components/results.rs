@@ -697,7 +697,14 @@ impl Component for ResultsTable {
                 ]);
                 frame.render_widget(Paragraph::new(line), filter_area);
             } else {
-                let line = Line::from(vec![prefix, Span::raw(filter_text.as_str())]);
+                let mut spans = vec![prefix, Span::raw(filter_text.as_str())];
+                if !filter_text.is_empty() {
+                    spans.push(Span::styled(
+                        " (Esc to clear)",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
+                let line = Line::from(spans);
                 frame.render_widget(Paragraph::new(line), filter_area);
             }
             remaining
