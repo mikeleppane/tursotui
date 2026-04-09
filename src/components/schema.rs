@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
@@ -892,6 +894,39 @@ impl Component for SchemaExplorer {
             }
             (_, KeyCode::BackTab) => Some(Action::Nav(NavAction::CycleFocus(Direction::Backward))),
 
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_up();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_down();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let inner = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                if mouse.row < inner.y || mouse.row >= inner.y + inner.height {
+                    return None;
+                }
+                let rel_y = (mouse.row - inner.y) as usize;
+                let target_idx = self.scroll_offset + rel_y;
+
+                if target_idx < self.visible.len() {
+                    self.selected = target_idx;
+                    return self.toggle_expand();
+                }
+                None
+            }
             _ => None,
         }
     }

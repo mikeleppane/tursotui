@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -1085,6 +1087,20 @@ impl Component for ERDiagram {
                 Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
             }
 
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.viewport.1 -= PAN_STEP;
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                self.viewport.1 += PAN_STEP;
+                Some(Action::Consumed)
+            }
             _ => None,
         }
     }

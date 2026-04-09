@@ -844,6 +844,30 @@ pub(crate) fn dispatch_action_to_db(
                 });
             }
         }
+        app::Action::Ui(app::UiAction::ToggleMouseMode) => {
+            use ratatui::crossterm::execute;
+            if app.config.mouse.mouse_mode {
+                let _ = execute!(
+                    std::io::stdout(),
+                    ratatui::crossterm::event::EnableMouseCapture
+                );
+            } else {
+                let _ = execute!(
+                    std::io::stdout(),
+                    ratatui::crossterm::event::DisableMouseCapture
+                );
+            }
+            let state = if app.config.mouse.mouse_mode {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            app.transient_message = Some(app::TransientMessage {
+                text: format!("Mouse mode {state}"),
+                created_at: std::time::Instant::now(),
+                is_error: false,
+            });
+        }
         app::Action::Admin(app::AdminAction::WalCheckpoint) => {
             // Guard: info must be loaded, journal mode must be WAL, not already checkpointing
             let db = &mut app.databases[db_idx];

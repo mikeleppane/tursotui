@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Wrap};
 
@@ -915,6 +917,20 @@ impl Component for QueryEditor {
                 Some(Action::Consumed)
             }
 
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_cursor_up();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_cursor_down();
+                Some(Action::Consumed)
+            }
             _ => None,
         }
     }

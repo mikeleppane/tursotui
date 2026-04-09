@@ -16,10 +16,44 @@ use crate::components::schema::SchemaExplorer;
 use crate::components::schema_diff;
 use crate::config::{AppConfig, ThemeMode};
 use crate::theme::{DARK_THEME, LIGHT_THEME, Theme};
+use ratatui::layout::Rect;
 use tursotui_db::{
     ColumnInfo, CustomTypeInfo, DatabaseHandle, DbInfo, ForeignKeyInfo, IndexDetail, PragmaEntry,
     QueryKind, QueryResult, SchemaEntry,
 };
+
+/// Screen rectangles for each panel, populated during render.
+/// Used by the mouse handler to map click coordinates to panels.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct LayoutRects {
+    pub(crate) sidebar: Option<Rect>,
+    pub(crate) editor: Rect,
+    pub(crate) bottom: Rect,
+    pub(crate) bottom_tabs: Rect,
+    pub(crate) sub_tabs: Rect,
+    pub(crate) status_bar: Rect,
+    pub(crate) db_tabs: Option<Rect>,
+    /// Admin tab panel rects (`DbInfo` left, `Pragmas` right).
+    pub(crate) admin_left: Rect,
+    pub(crate) admin_right: Rect,
+}
+
+/// What is being dragged — panel border or column header.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DragTarget {
+    SidebarBorder,
+    EditorBorder,
+    #[allow(dead_code)] // handle_drag handles this variant; start detection not yet wired
+    ColumnHeader(usize),
+}
+
+/// Active drag operation state.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DragState {
+    pub(crate) target: DragTarget,
+    pub(crate) start_pos: u16,
+    pub(crate) start_value: u16,
+}
 
 /// Case-normalizing table identifier.
 ///
@@ -251,6 +285,7 @@ pub(crate) enum UiAction {
     CopyText(String),
     ResizeSidebar(i16),
     ResizeEditor(i16),
+    ToggleMouseMode,
 }
 
 /// Query execution / history / bookmark actions.
@@ -546,6 +581,8 @@ pub(crate) struct AppState {
     pub(crate) help_scroll: usize,
     pub(crate) history_db: Option<crate::history::HistoryDb>,
     pub(crate) schema_diff_state: Option<schema_diff::SchemaDiffState>,
+    pub(crate) layout_rects: LayoutRects,
+    pub(crate) drag_state: Option<DragState>,
 }
 
 /// Serialize `QueryParams` to a compact JSON string for history storage.
@@ -603,6 +640,8 @@ impl AppState {
             help_scroll: 0,
             history_db,
             schema_diff_state: None,
+            layout_rects: LayoutRects::default(),
+            drag_state: None,
         }
     }
 
@@ -861,6 +900,10 @@ impl AppState {
                 #[allow(clippy::cast_possible_wrap)]
                 let current = db.editor_pct as i16;
                 db.editor_pct = (current + delta).clamp(20, 80) as u16;
+            }
+            Action::Ui(UiAction::ToggleMouseMode) => {
+                self.config.mouse.mouse_mode = !self.config.mouse.mouse_mode;
+                let _ = crate::config::save_config(&self.config);
             }
             Action::Nav(NavAction::GoToObject(obj_ref)) => {
                 // Switch to target database, switch to Query sub-tab

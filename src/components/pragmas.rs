@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
@@ -485,6 +487,23 @@ impl Component for PragmaDashboard {
             self.handle_key_editing(key)
         } else {
             self.handle_key_normal(key)
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.selected = self.selected.saturating_sub(1);
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                let last = self.pragmas.len().saturating_sub(1);
+                if self.selected < last {
+                    self.selected += 1;
+                }
+                Some(Action::Consumed)
+            }
+            _ => None,
         }
     }
 

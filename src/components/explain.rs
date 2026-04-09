@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
@@ -882,6 +884,23 @@ impl Component for ExplainView {
                 }
                 // scroll_offset adjusted by clamp_scroll() on next render()
                 None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.selected_row = self.selected_row.saturating_sub(1);
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                let count = self.row_count();
+                if count > 0 && self.selected_row < count - 1 {
+                    self.selected_row += 1;
+                }
+                Some(Action::Consumed)
             }
             _ => None,
         }

@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
@@ -460,6 +462,25 @@ impl Component for RecordDetail {
             }
             (KeyModifiers::NONE, KeyCode::Tab | KeyCode::Esc) => {
                 Some(Action::Nav(NavAction::CycleFocus(Direction::Forward)))
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.selected_field > 0 {
+                    self.selected_field -= 1;
+                }
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                let last = self.columns.len().saturating_sub(1);
+                if self.selected_field < last {
+                    self.selected_field += 1;
+                }
+                Some(Action::Consumed)
             }
             _ => None,
         }

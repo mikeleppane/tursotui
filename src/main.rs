@@ -9,6 +9,7 @@ mod highlight;
 mod history;
 mod input;
 mod layout;
+mod mouse;
 mod persistence;
 mod theme;
 
@@ -150,12 +151,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install panic hook to restore terminal before printing the panic message
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        use ratatui::crossterm::event::DisableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
         ratatui::restore();
         prev_hook(info);
     }));
 
     let mut terminal = ratatui::init();
+    if app.config.mouse.mouse_mode {
+        use ratatui::crossterm::event::EnableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    }
     let result = run_loop(&mut terminal, &mut app);
+    {
+        use ratatui::crossterm::event::DisableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
 
     result
@@ -193,10 +207,14 @@ fn run_loop(
         drain_async_messages(app, &mut global_ui);
 
         // 2. Poll events (16ms ~ 60fps)
-        if let Some(Event::Key(key)) = event::poll_event(Duration::from_millis(16))?
-            && key.kind == KeyEventKind::Press
-        {
-            input::handle_key_event(key, app, &mut global_ui);
+        match event::poll_event(Duration::from_millis(16))? {
+            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                input::handle_key_event(key, app, &mut global_ui);
+            }
+            Some(Event::Mouse(mouse_event)) if app.config.mouse.mouse_mode => {
+                mouse::handle_mouse_event(mouse_event, app, &mut global_ui);
+            }
+            _ => {}
         }
 
         // 3. Auto-save editor buffer (debounced, 1s) for all databases.

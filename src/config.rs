@@ -233,6 +233,24 @@ impl Default for ProfileConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct MouseConfig {
+    #[serde(default = "default_mouse_mode")]
+    pub(crate) mouse_mode: bool,
+}
+
+fn default_mouse_mode() -> bool {
+    true
+}
+
+impl Default for MouseConfig {
+    fn default() -> Self {
+        Self {
+            mouse_mode: default_mouse_mode(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
     #[serde(default)]
@@ -247,6 +265,8 @@ pub(crate) struct AppConfig {
     pub(crate) performance: PerformanceConfig,
     #[serde(default)]
     pub(crate) profile: ProfileConfig,
+    #[serde(default)]
+    pub(crate) mouse: MouseConfig,
 }
 
 #[cfg(test)]
