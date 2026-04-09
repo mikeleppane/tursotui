@@ -161,6 +161,7 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
             app.layout_rects.sidebar = None;
             app.layout_rects.editor = Rect::default();
             app.layout_rects.bottom = Rect::default();
+            app.layout_rects.bottom_content = Rect::default();
             app.layout_rects.bottom_tabs = Rect::default();
             render_admin_tab(
                 frame,
@@ -429,6 +430,7 @@ pub(crate) fn render_bottom_panel(
     let [bottom_tabs_area, bottom_content_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(bottom_area);
     rects.bottom_tabs = bottom_tabs_area;
+    rects.bottom_content = bottom_content_area;
 
     // Render bottom sub-tab bar
     let tab_index = match bottom_tab {

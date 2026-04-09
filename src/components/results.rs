@@ -184,6 +184,32 @@ impl ResultsTable {
         }
     }
 
+    /// Map an absolute x-coordinate to a column index, accounting for
+    /// the highlight symbol, column widths, spacing, and horizontal scroll.
+    fn x_to_column(&self, abs_x: u16, inner: Rect) -> Option<usize> {
+        if self.column_widths.is_empty() {
+            return None;
+        }
+        let highlight_symbol_width: u16 = 2;
+        let col_spacing: u16 = 1;
+        let content_start = inner.x + highlight_symbol_width;
+        if abs_x < content_start {
+            return Some(self.col_offset);
+        }
+        let mut x = content_start;
+        for (i, &w) in self.column_widths.iter().enumerate().skip(self.col_offset) {
+            let col_end = x + w + col_spacing;
+            if abs_x < col_end {
+                return Some(i);
+            }
+            x = col_end;
+            if x > inner.x + inner.width {
+                break;
+            }
+        }
+        None
+    }
+
     pub(crate) fn selected_col_index(&self) -> usize {
         self.selected_col
     }
@@ -693,9 +719,14 @@ impl Component for ResultsTable {
                     return Some(Action::Consumed);
                 }
 
+                // Map click x to column index
+                if let Some(clicked_col) = self.x_to_column(mouse.column, inner) {
+                    self.selected_col = clicked_col;
+                }
+
                 let data_start_y = filter_rows + 1; // +1 for header row
                 if rel_y < data_start_y {
-                    // Click on header — cycle sort on current selected column
+                    // Click on header — cycle sort on clicked column
                     self.cycle_sort();
                     return Some(Action::Consumed);
                 }

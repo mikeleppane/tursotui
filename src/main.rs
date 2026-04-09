@@ -193,8 +193,9 @@ fn run_loop(
             db.editor.mark_saved();
         }
     }
-    // Show restore message only if active db had a buffer
-    if !app.active_db().editor.contents().is_empty() {
+    // Show restore message only if active db had a buffer and no higher-priority
+    // message is already set (e.g., first-run hint, config error).
+    if app.transient_message.is_none() && !app.active_db().editor.contents().is_empty() {
         app.transient_message = Some(app::TransientMessage {
             text: "Restored editor buffer".to_string(),
             created_at: std::time::Instant::now(),

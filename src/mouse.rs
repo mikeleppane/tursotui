@@ -105,7 +105,7 @@ fn handle_click(
                 }
             })
             .collect();
-        if let Some(idx) = resolve_tab_click(col, db_tab_rect, &labels) {
+        if let Some(idx) = resolve_tab_click(col, db_tab_rect, &labels, 0, 2) {
             // Last label is the [+] button
             if idx < app.databases.len() {
                 let action = Action::Nav(NavAction::SwitchDatabase(idx));
@@ -118,7 +118,7 @@ fn handle_click(
     // Check sub-tabs
     if contains(rects.sub_tabs, col, row) {
         let labels = [" Query ".to_string(), " Admin ".to_string()];
-        if let Some(idx) = resolve_tab_click(col, rects.sub_tabs, &labels) {
+        if let Some(idx) = resolve_tab_click(col, rects.sub_tabs, &labels, 3, 2) {
             let tab = if idx == 0 {
                 SubTab::Query
             } else {
@@ -159,7 +159,7 @@ fn handle_click(
             " 4:ER ".to_string(),
             " 5:Profile ".to_string(),
         ];
-        if let Some(idx) = resolve_tab_click(col, rects.bottom_tabs, &labels) {
+        if let Some(idx) = resolve_tab_click(col, rects.bottom_tabs, &labels, 1, 2) {
             let tab = match idx {
                 0 => BottomTab::Results,
                 1 => BottomTab::Explain,
@@ -171,6 +171,12 @@ fn handle_click(
             app.update(&action);
             app.databases[active_idx].focus = PanelId::Bottom;
         }
+        return;
+    }
+
+    // Check drag hit zones on panel borders BEFORE panel containment,
+    // since border pixels overlap with adjacent panel rects.
+    if check_drag_start(col, row, app, rects) {
         return;
     }
 
@@ -192,17 +198,13 @@ fn handle_click(
         return;
     }
 
-    // Check bottom panel
-    if contains(rects.bottom, col, row) {
+    // Check bottom panel (use bottom_content to exclude the tab bar row)
+    if contains(rects.bottom_content, col, row) {
         app.databases[active_idx].focus = PanelId::Bottom;
-        if let Some(action) = dispatch_to_bottom_tab(app, active_idx, mouse, rects.bottom) {
+        if let Some(action) = dispatch_to_bottom_tab(app, active_idx, mouse, rects.bottom_content) {
             app.update(&action);
         }
-        return;
     }
-
-    // Check drag hit zones on panel borders
-    check_drag_start(col, row, app, rects);
 }
 
 fn handle_scroll(
@@ -244,8 +246,8 @@ fn handle_scroll(
         return;
     }
 
-    if contains(rects.bottom, col, row)
-        && let Some(action) = dispatch_to_bottom_tab(app, active_idx, mouse, rects.bottom)
+    if contains(rects.bottom_content, col, row)
+        && let Some(action) = dispatch_to_bottom_tab(app, active_idx, mouse, rects.bottom_content)
     {
         app.update(&action);
     }
@@ -324,7 +326,13 @@ fn handle_drag(mouse: MouseEvent, app: &mut AppState) {
     }
 }
 
-fn check_drag_start(col: u16, row: u16, app: &mut AppState, rects: &crate::app::LayoutRects) {
+/// Returns `true` if a drag was initiated (caller should skip panel routing).
+fn check_drag_start(
+    col: u16,
+    row: u16,
+    app: &mut AppState,
+    rects: &crate::app::LayoutRects,
+) -> bool {
     // Sidebar border: vertical line at sidebar.right()
     if let Some(ref sidebar) = rects.sidebar {
         let border_x = sidebar.x + sidebar.width;
@@ -339,7 +347,7 @@ fn check_drag_start(col: u16, row: u16, app: &mut AppState, rects: &crate::app::
                 start_pos: col,
                 start_value: app.databases[active_idx].sidebar_pct,
             });
-            return;
+            return true;
         }
     }
 
@@ -356,19 +364,35 @@ fn check_drag_start(col: u16, row: u16, app: &mut AppState, rects: &crate::app::
             start_pos: row,
             start_value: app.databases[active_idx].editor_pct,
         });
+        return true;
     }
+
+    false
 }
 
 /// Resolve a click x-coordinate within a tab bar rect to a tab index.
-fn resolve_tab_click(col: u16, rect: Rect, labels: &[String]) -> Option<usize> {
+/// `divider_width` accounts for the rendered divider between tabs.
+/// `padding` accounts for ratatui's per-tab padding (default 1 char each side = 2).
+fn resolve_tab_click(
+    col: u16,
+    rect: Rect,
+    labels: &[String],
+    divider_width: usize,
+    padding: usize,
+) -> Option<usize> {
     let relative_x = col.saturating_sub(rect.x) as usize;
     let mut cumulative = 0;
     for (i, label) in labels.iter().enumerate() {
-        let label_width = label.width();
-        if relative_x < cumulative + label_width {
+        let tab_width = label.width() + padding;
+        if relative_x < cumulative + tab_width {
             return Some(i);
         }
-        cumulative += label_width;
+        cumulative += tab_width;
+        // Clicks on the divider area map to the preceding tab
+        if relative_x < cumulative + divider_width {
+            return Some(i);
+        }
+        cumulative += divider_width;
     }
     None
 }

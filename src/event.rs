@@ -114,10 +114,8 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
             Some(Action::Nav(NavAction::CloseActiveDatabase))
         }
 
-        // Mouse mode toggle — kitty keyboard protocol only.
-        // In standard VT terminals, Ctrl+M sends \r (same as Enter) and is not
-        // distinguishable. crossterm maps it to KeyCode::Enter, not Char('m').
-        (KeyModifiers::CONTROL, KeyCode::Char('m')) => Some(Action::Ui(UiAction::ToggleMouseMode)),
+        // Mouse mode toggle
+        (KeyModifiers::NONE, KeyCode::F(8)) => Some(Action::Ui(UiAction::ToggleMouseMode)),
 
         _ => None,
     }

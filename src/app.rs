@@ -29,6 +29,8 @@ pub(crate) struct LayoutRects {
     pub(crate) sidebar: Option<Rect>,
     pub(crate) editor: Rect,
     pub(crate) bottom: Rect,
+    /// Bottom panel content area (excludes the tab bar row).
+    pub(crate) bottom_content: Rect,
     pub(crate) bottom_tabs: Rect,
     pub(crate) sub_tabs: Rect,
     pub(crate) status_bar: Rect,
