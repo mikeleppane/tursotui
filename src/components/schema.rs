@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 
@@ -52,6 +54,11 @@ enum TreeNode {
     CustomType {
         name: String,
         parent_type: String,
+    },
+    /// Placeholder shown beneath an expanded table whose columns have not yet
+    /// loaded. Selectable but inert (no actions fire on it).
+    LoadingPlaceholder {
+        table_name: String,
     },
 }
 
@@ -305,7 +312,7 @@ impl SchemaExplorer {
             TreeNode::Index { .. } => Some(CategoryKind::Indexes),
             TreeNode::Trigger { .. } => Some(CategoryKind::Triggers),
             TreeNode::CustomType { .. } => Some(CategoryKind::CustomTypes),
-            TreeNode::Column { table_name, .. } => {
+            TreeNode::Column { table_name, .. } | TreeNode::LoadingPlaceholder { table_name } => {
                 // Find which category this table's column belongs to
                 for (header, children) in &self.categories {
                     if let TreeNode::Category { kind, .. } = header {
@@ -384,6 +391,10 @@ impl SchemaExplorer {
                 // Leaf nodes: no-op (use h/Left to navigate to parent)
                 None
             }
+            TreeNode::LoadingPlaceholder { .. } => {
+                // Inert placeholder: do nothing.
+                None
+            }
         }
     }
 
@@ -424,18 +435,26 @@ impl SchemaExplorer {
                         if child_matches {
                             matched_children.push(child.clone());
                             // If child is an expanded table, push its columns
+                            // (or a Loading placeholder if columns haven't loaded yet).
                             if let TreeNode::Table {
                                 name,
                                 expanded: table_expanded,
                                 columns,
+                                columns_loaded,
                                 ..
                             } = child
                                 && *table_expanded
                             {
-                                for col in columns {
-                                    matched_children.push(TreeNode::Column {
+                                if *columns_loaded {
+                                    for col in columns {
+                                        matched_children.push(TreeNode::Column {
+                                            table_name: name.clone(),
+                                            col: col.clone(),
+                                        });
+                                    }
+                                } else {
+                                    matched_children.push(TreeNode::LoadingPlaceholder {
                                         table_name: name.clone(),
-                                        col: col.clone(),
                                     });
                                 }
                             }
@@ -825,7 +844,10 @@ impl Component for SchemaExplorer {
                         }
                         None
                     }
-                    Some(TreeNode::Column { table_name, .. }) => {
+                    Some(
+                        TreeNode::Column { table_name, .. }
+                        | TreeNode::LoadingPlaceholder { table_name },
+                    ) => {
                         self.collapse_table_to_parent(&table_name);
                         None
                     }
@@ -872,6 +894,39 @@ impl Component for SchemaExplorer {
             }
             (_, KeyCode::BackTab) => Some(Action::Nav(NavAction::CycleFocus(Direction::Backward))),
 
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.move_up();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                self.move_down();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let inner = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                if mouse.row < inner.y || mouse.row >= inner.y + inner.height {
+                    return None;
+                }
+                let rel_y = (mouse.row - inner.y) as usize;
+                let target_idx = self.scroll_offset + rel_y;
+
+                if target_idx < self.visible.len() {
+                    self.selected = target_idx;
+                    return self.toggle_expand();
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -1126,6 +1181,18 @@ impl Component for SchemaExplorer {
                         Paragraph::new(Line::from(spans))
                     };
 
+                    frame.render_widget(widget, row_area);
+                }
+                TreeNode::LoadingPlaceholder { .. } => {
+                    let cw = content_width as usize;
+                    // Match the indentation used by Column rows ("    " + 2-char pk gutter).
+                    let text = format!("    {no_pk}Loading...");
+                    let display = truncate_str(&text, cw);
+                    let widget = if is_selected {
+                        Paragraph::new(display).style(theme.selected_style)
+                    } else {
+                        Paragraph::new(Line::from(vec![Span::styled(display, dim_style)]))
+                    };
                     frame.render_widget(widget, row_area);
                 }
             }

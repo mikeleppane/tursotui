@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{
     Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
@@ -64,6 +66,11 @@ pub(crate) struct ResultsTable {
     filter_cursor: usize,
     /// Columns that are the leading key of at least one index on the current source table.
     indexed_columns: HashSet<String>,
+    /// Per-column width overrides from mouse drag. `None` = auto-calculated.
+    column_width_overrides: Vec<Option<u16>>,
+    /// X-coordinates of column right edges, populated during render.
+    #[allow(dead_code)] // reserved for future column drag hit-testing
+    last_rendered_col_boundaries: Vec<u16>,
 }
 
 impl ResultsTable {
@@ -87,6 +94,8 @@ impl ResultsTable {
             filter_bar_active: false,
             filter_cursor: 0,
             indexed_columns: HashSet::new(),
+            column_width_overrides: Vec::new(),
+            last_rendered_col_boundaries: Vec::new(),
         }
     }
 
@@ -132,6 +141,14 @@ impl ResultsTable {
             self.max_col_width,
             &self.null_display,
         );
+        // Apply mouse drag overrides
+        if self.columns.len() == self.column_width_overrides.len() {
+            for (i, override_width) in self.column_width_overrides.iter().enumerate() {
+                if let Some(w) = override_width {
+                    self.column_widths[i] = *w;
+                }
+            }
+        }
         self.min_widths = self
             .columns
             .iter()
@@ -149,12 +166,48 @@ impl ResultsTable {
             self.rows.iter().all(|r| r.len() == self.columns.len()),
             "row/column count mismatch"
         );
+        // Reset column width overrides when column count changes
+        if self.columns.len() != self.column_width_overrides.len() {
+            self.column_width_overrides = vec![None; self.columns.len()];
+        }
         // Select first row when there are results
         if self.rows.is_empty() {
             self.state.select(None);
         } else {
             self.state.select(Some(0));
         }
+    }
+
+    pub(crate) fn set_column_width_override(&mut self, col: usize, width: u16) {
+        if col < self.column_width_overrides.len() {
+            self.column_width_overrides[col] = Some(width.max(MIN_COL_WIDTH));
+        }
+    }
+
+    /// Map an absolute x-coordinate to a column index, accounting for
+    /// the highlight symbol, column widths, spacing, and horizontal scroll.
+    fn x_to_column(&self, abs_x: u16, inner: Rect) -> Option<usize> {
+        if self.column_widths.is_empty() {
+            return None;
+        }
+        let highlight_symbol_width: u16 = 2;
+        let col_spacing: u16 = 1;
+        let content_start = inner.x + highlight_symbol_width;
+        if abs_x < content_start {
+            return Some(self.col_offset);
+        }
+        let mut x = content_start;
+        for (i, &w) in self.column_widths.iter().enumerate().skip(self.col_offset) {
+            let col_end = x + w + col_spacing;
+            if abs_x < col_end {
+                return Some(i);
+            }
+            x = col_end;
+            if x > inner.x + inner.width {
+                break;
+            }
+        }
+        None
     }
 
     pub(crate) fn selected_col_index(&self) -> usize {
@@ -631,6 +684,65 @@ impl Component for ResultsTable {
         }
     }
 
+    fn handle_mouse(&mut self, mouse: MouseEvent, area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.prev_row();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                self.next_row();
+                Some(Action::Consumed)
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Translate to inner area (inside border)
+                let inner = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                if mouse.column < inner.x
+                    || mouse.column >= inner.x + inner.width
+                    || mouse.row < inner.y
+                    || mouse.row >= inner.y + inner.height
+                {
+                    return None;
+                }
+                let rel_y = (mouse.row - inner.y) as usize;
+
+                // Account for filter bar
+                let filter_rows = usize::from(self.filter_input.is_some());
+
+                if rel_y < filter_rows {
+                    self.filter_bar_active = true;
+                    return Some(Action::Consumed);
+                }
+
+                // Map click x to column index
+                if let Some(clicked_col) = self.x_to_column(mouse.column, inner) {
+                    self.selected_col = clicked_col;
+                }
+
+                let data_start_y = filter_rows + 1; // +1 for header row
+                if rel_y < data_start_y {
+                    // Click on header — cycle sort on clicked column
+                    self.cycle_sort();
+                    return Some(Action::Consumed);
+                }
+
+                // Data row
+                let data_row = rel_y - data_start_y + self.state.offset();
+                if data_row < self.rows.len() {
+                    self.state.select(Some(data_row));
+                    return Some(Action::Consumed);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         // When edit mode is active, pending inserts count as additional rows.
@@ -697,7 +809,14 @@ impl Component for ResultsTable {
                 ]);
                 frame.render_widget(Paragraph::new(line), filter_area);
             } else {
-                let line = Line::from(vec![prefix, Span::raw(filter_text.as_str())]);
+                let mut spans = vec![prefix, Span::raw(filter_text.as_str())];
+                if !filter_text.is_empty() {
+                    spans.push(Span::styled(
+                        " (Esc to clear)",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
+                let line = Line::from(spans);
                 frame.render_widget(Paragraph::new(line), filter_area);
             }
             remaining

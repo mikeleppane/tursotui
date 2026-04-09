@@ -42,9 +42,12 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
 
     // Minimum terminal size check
     if area.width < 80 || area.height < 24 {
-        let msg = Paragraph::new("Terminal too small (min 80x24)")
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(theme.error));
+        let msg = Paragraph::new(format!(
+            "Terminal is {}x{}, minimum is 80x24",
+            area.width, area.height
+        ))
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(theme.error));
         let [_, center, _] = Layout::vertical([
             Constraint::Fill(1),
             Constraint::Length(1),
@@ -80,6 +83,11 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
         .areas(area);
         (None, sub_tabs, content, status)
     };
+
+    // Store layout rects for mouse hit-testing
+    app.layout_rects.status_bar = status_area;
+    app.layout_rects.sub_tabs = sub_tabs_area;
+    app.layout_rects.db_tabs = db_tabs_area;
 
     // Database tab bar (only when multiple databases open)
     if let Some(db_tabs_area) = db_tabs_area {
@@ -145,15 +153,23 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
                 sidebar_visible,
                 bottom_tab,
                 &mut app.databases[active_idx],
+                &mut app.layout_rects,
             );
         }
         SubTab::Admin => {
+            // Reset layout rects for admin tab (no sidebar/editor/bottom)
+            app.layout_rects.sidebar = None;
+            app.layout_rects.editor = Rect::default();
+            app.layout_rects.bottom = Rect::default();
+            app.layout_rects.bottom_content = Rect::default();
+            app.layout_rects.bottom_tabs = Rect::default();
             render_admin_tab(
                 frame,
                 &theme,
                 content_area,
                 focus,
                 &mut app.databases[active_idx],
+                &mut app.layout_rects,
             );
         }
     }
@@ -321,6 +337,7 @@ pub(crate) fn render_ui(frame: &mut Frame, app: &mut AppState, global_ui: &mut G
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_query_tab(
     frame: &mut Frame,
     theme: &Theme,
@@ -329,6 +346,7 @@ pub(crate) fn render_query_tab(
     sidebar_visible: bool,
     bottom_tab: BottomTab,
     db: &mut DatabaseContext,
+    rects: &mut crate::app::LayoutRects,
 ) {
     if sidebar_visible {
         let [sidebar_area, main_area] = Layout::horizontal([
@@ -336,6 +354,8 @@ pub(crate) fn render_query_tab(
             Constraint::Percentage(100 - db.sidebar_pct),
         ])
         .areas(area);
+
+        rects.sidebar = Some(sidebar_area);
 
         db.schema.set_row_counts(&db.schema_cache.row_counts);
         db.schema
@@ -347,21 +367,29 @@ pub(crate) fn render_query_tab(
         ])
         .areas(main_area);
 
+        rects.editor = editor_area;
+        rects.bottom = bottom_area;
+
         db.editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
         render_autocomplete_popup(frame, &db.editor, editor_area, theme);
-        render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, db);
+        render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, db, rects);
     } else {
+        rects.sidebar = None;
+
         let [editor_area, bottom_area] = Layout::vertical([
             Constraint::Percentage(db.editor_pct),
             Constraint::Percentage(100 - db.editor_pct),
         ])
         .areas(area);
 
+        rects.editor = editor_area;
+        rects.bottom = bottom_area;
+
         db.editor
             .render(frame, editor_area, focus == PanelId::Editor, theme);
         render_autocomplete_popup(frame, &db.editor, editor_area, theme);
-        render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, db);
+        render_bottom_panel(frame, theme, bottom_area, focus, bottom_tab, db, rects);
     }
 }
 
@@ -397,9 +425,12 @@ pub(crate) fn render_bottom_panel(
     focus: PanelId,
     bottom_tab: BottomTab,
     db: &mut DatabaseContext,
+    rects: &mut crate::app::LayoutRects,
 ) {
     let [bottom_tabs_area, bottom_content_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(bottom_area);
+    rects.bottom_tabs = bottom_tabs_area;
+    rects.bottom_content = bottom_content_area;
 
     // Render bottom sub-tab bar
     let tab_index = match bottom_tab {
@@ -472,9 +503,13 @@ pub(crate) fn render_admin_tab(
     area: Rect,
     focus: PanelId,
     db: &mut DatabaseContext,
+    rects: &mut crate::app::LayoutRects,
 ) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(area);
+
+    rects.admin_left = left;
+    rects.admin_right = right;
 
     db.db_info
         .render(frame, left, focus == PanelId::DbInfo, theme);

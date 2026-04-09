@@ -1,4 +1,6 @@
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
@@ -129,6 +131,29 @@ impl Component for ProfileView {
             (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Nav(NavAction::CycleFocus(
                 crate::app::Direction::Forward,
             ))),
+            _ => None,
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, _area: Rect) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                if self.selected_col > 0 {
+                    self.selected_col -= 1;
+                    self.detail_scroll = 0;
+                }
+                Some(Action::Consumed)
+            }
+            MouseEventKind::ScrollDown => {
+                if let Some(ref data) = self.data {
+                    let max = data.columns.len().saturating_sub(1);
+                    if self.selected_col < max {
+                        self.selected_col += 1;
+                        self.detail_scroll = 0;
+                    }
+                }
+                Some(Action::Consumed)
+            }
             _ => None,
         }
     }

@@ -76,9 +76,9 @@ pub(crate) trait Component {
     /// Returns `Some(Action)` if the key produced a state change, `None` if ignored.
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action>;
 
-    /// Handle a mouse event. Default: ignore.
-    #[allow(dead_code)]
-    fn handle_mouse(&mut self, _mouse: MouseEvent) -> Option<Action> {
+    /// Handle a mouse event. `area` is the component's rendered bounds
+    /// for coordinate translation. Default: ignore.
+    fn handle_mouse(&mut self, _mouse: MouseEvent, _area: Rect) -> Option<Action> {
         None
     }
 

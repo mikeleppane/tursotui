@@ -23,6 +23,10 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     lines.push(Line::from("  F3              Bookmarks"));
     lines.push(Line::from("  Ctrl+Shift+E    Export results popup"));
     lines.push(Line::from("  Ctrl+Shift+C    Quick copy results (TSV)"));
+    lines.push(Line::from("  F8              Toggle mouse mode"));
+    lines.push(Line::from(
+        "  Shift+Click     Terminal text selection (when mouse enabled)",
+    ));
     lines.push(Line::from(""));
 
     // --- Query Editor ---

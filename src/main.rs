@@ -9,6 +9,7 @@ mod highlight;
 mod history;
 mod input;
 mod layout;
+mod mouse;
 mod persistence;
 mod theme;
 
@@ -76,7 +77,11 @@ impl GlobalFeatures {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    let (cfg, config_err) = config::load_config();
+    let config::ConfigLoadResult {
+        config: cfg,
+        error: config_err,
+        was_created,
+    } = config::load_config();
 
     // Open all databases from CLI args, deduplicating canonical paths.
     let mut databases = Vec::new();
@@ -128,6 +133,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // First-run hint — lowest priority, only shown when no other startup message exists.
+    // was_created == true implies no prior session, so no saved buffer to restore either.
+    if app.transient_message.is_none() && was_created {
+        app.transient_message = Some(app::TransientMessage {
+            text: "Press F1 for help".to_string(),
+            created_at: std::time::Instant::now(),
+            is_error: false,
+        });
+    }
+
     // Trigger schema load on all databases at startup
     for db in &mut app.databases {
         db.handle.load_schema();
@@ -136,12 +151,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Install panic hook to restore terminal before printing the panic message
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        use ratatui::crossterm::event::DisableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
         ratatui::restore();
         prev_hook(info);
     }));
 
     let mut terminal = ratatui::init();
+    if app.config.mouse.mouse_mode {
+        use ratatui::crossterm::event::EnableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), EnableMouseCapture);
+    }
     let result = run_loop(&mut terminal, &mut app);
+    {
+        use ratatui::crossterm::event::DisableMouseCapture;
+        use ratatui::crossterm::execute;
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
     ratatui::restore();
 
     result
@@ -165,8 +193,9 @@ fn run_loop(
             db.editor.mark_saved();
         }
     }
-    // Show restore message only if active db had a buffer
-    if !app.active_db().editor.contents().is_empty() {
+    // Show restore message only if active db had a buffer and no higher-priority
+    // message is already set (e.g., first-run hint, config error).
+    if app.transient_message.is_none() && !app.active_db().editor.contents().is_empty() {
         app.transient_message = Some(app::TransientMessage {
             text: "Restored editor buffer".to_string(),
             created_at: std::time::Instant::now(),
@@ -179,10 +208,14 @@ fn run_loop(
         drain_async_messages(app, &mut global_ui);
 
         // 2. Poll events (16ms ~ 60fps)
-        if let Some(Event::Key(key)) = event::poll_event(Duration::from_millis(16))?
-            && key.kind == KeyEventKind::Press
-        {
-            input::handle_key_event(key, app, &mut global_ui);
+        match event::poll_event(Duration::from_millis(16))? {
+            Some(Event::Key(key)) if key.kind == KeyEventKind::Press => {
+                input::handle_key_event(key, app, &mut global_ui);
+            }
+            Some(Event::Mouse(mouse_event)) if app.config.mouse.mouse_mode => {
+                mouse::handle_mouse_event(mouse_event, app, &mut global_ui);
+            }
+            _ => {}
         }
 
         // 3. Auto-save editor buffer (debounced, 1s) for all databases.

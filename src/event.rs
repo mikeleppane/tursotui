@@ -114,6 +114,9 @@ pub(crate) fn map_global_key(key: KeyEvent) -> Option<Action> {
             Some(Action::Nav(NavAction::CloseActiveDatabase))
         }
 
+        // Mouse mode toggle
+        (KeyModifiers::NONE, KeyCode::F(8)) => Some(Action::Ui(UiAction::ToggleMouseMode)),
+
         _ => None,
     }
 }

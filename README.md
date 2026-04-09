@@ -112,6 +112,8 @@
 
 **Admin Tab** — database info (file stats, WAL status, journal mode), PRAGMA dashboard with inline editing, WAL checkpoint, and integrity checks.
 
+**Mouse Support** — click-to-focus panels, click-to-select rows and columns, click-to-expand schema tree nodes, mousewheel scroll on all panels, drag panel borders to resize, click tab bars to switch. Toggle with `F8`. Hold `Shift+Click` for native terminal text selection when mouse mode is enabled.
+
 **Theming** — Catppuccin Mocha (dark) and Catppuccin Latte (light) themes with rounded borders, toggled at runtime.
 
 ## Turso Compatibility
@@ -124,7 +126,7 @@ tursotui is **Turso-first** — all features are tested and designed to work wit
 - Foreign key metadata parsed from `CREATE TABLE` SQL (works around Turso's missing `PRAGMA foreign_key_list`)
 - Syntax highlighting and autocomplete include Turso-specific functions: UUID (`uuid4()`, `uuid7()`), vector search (`vector_distance_cos()`, `vector_top_k()`), FTS (`fts_match()`, `fts_score()`), time functions, regexp, and more
 - DB Info panel recognizes MVCC journal mode with Turso-specific labeling
-- Data editor uses `PRAGMA defer_foreign_keys` inside transactions for safe FK handling
+- Data editor generates FK-aware DML ordering (parent inserts before child, child deletes before parent)
 
 **Known Turso limitations** (not tursotui bugs — these are upstream gaps):
 
@@ -183,6 +185,7 @@ tursotui db1.db db2.db
 | `F3` | Bookmarks overlay |
 | `Ctrl+Shift+E` | Export results |
 | `Ctrl+Shift+C` | Quick copy results (TSV) |
+| `F8` | Toggle mouse mode |
 
 ### Query Editor
 
@@ -245,7 +248,7 @@ tursotui db1.db db2.db
 
 | Key | Action |
 |-----|--------|
-| `1` / `2` / `3` / `4` | Results / Explain / Detail / ER Diagram |
+| `1` / `2` / `3` / `4` / `5` | Results / Explain / Detail / ER Diagram / Profile |
 | `Tab` (Explain) | Toggle Bytecode / Query Plan |
 | `Enter` (Explain) | Generate EXPLAIN |
 | `Tab` (ER Diagram) | Cycle focus between tables |
@@ -285,6 +288,9 @@ max_entries = 5000
 
 [theme]
 mode = "dark"    # "dark" or "light"
+
+[mouse]
+mouse_mode = true  # enable mouse capture (click, scroll, drag)
 ```
 
 ## Architecture
@@ -444,7 +450,7 @@ sequenceDiagram
 - **Async queries** — `tokio::spawn` with fresh connections per query, results delivered via `mpsc` channel. No shared connection state between tasks.
 - **Component trait** — each panel implements `handle_key`, `update`, `render` with consistent `panel_block` / `overlay_block` helpers for styled borders.
 - **Catppuccin theme system** — full Mocha (dark) and Latte (light) palettes with semantic color roles for schema types, editor highlighting, and data editing states.
-- **Transactional data editing** — change log with one-entry-per-PK invariant, DML generation, and `PRAGMA defer_foreign_keys` for safe FK handling.
+- **Transactional data editing** — change log with one-entry-per-PK invariant, DML generation, and FK-aware statement ordering for safe transactional submission.
 - **No unsafe code** — `#[forbid(unsafe_code)]` enforced project-wide.
 
 ## Tech Stack
