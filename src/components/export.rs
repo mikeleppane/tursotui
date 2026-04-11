@@ -18,7 +18,7 @@ pub(crate) enum ExportFormat {
 }
 
 impl ExportFormat {
-    pub(crate) fn extension(self) -> &'static str {
+    pub(crate) const fn extension(self) -> &'static str {
         match self {
             Self::Csv => "csv",
             Self::Json => "json",
@@ -26,7 +26,7 @@ impl ExportFormat {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Csv => "CSV",
             Self::Json => "JSON",

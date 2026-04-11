@@ -54,7 +54,7 @@ pub(crate) fn handle_mouse_event(
     }
 }
 
-fn handle_global_overlay_mouse(
+const fn handle_global_overlay_mouse(
     mouse: MouseEvent,
     app: &mut AppState,
     overlay: crate::app::GlobalOverlay,
@@ -397,6 +397,6 @@ fn resolve_tab_click(
     None
 }
 
-fn contains(rect: Rect, col: u16, row: u16) -> bool {
+const fn contains(rect: Rect, col: u16, row: u16) -> bool {
     rect.contains(Position::new(col, row))
 }

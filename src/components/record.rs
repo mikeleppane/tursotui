@@ -193,7 +193,7 @@ pub(crate) struct RecordDetail {
 }
 
 impl RecordDetail {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             columns: Vec::new(),
             values: Vec::new(),
@@ -224,7 +224,7 @@ impl RecordDetail {
     }
 
     /// Ensure `scroll_offset` keeps `selected_field` visible within `viewport_height` rows.
-    fn clamp_scroll(&mut self, viewport_height: usize) {
+    const fn clamp_scroll(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
         }
@@ -317,7 +317,7 @@ impl RecordDetail {
     }
 
     /// Returns true if the JSON overlay is active and should be rendered on top.
-    pub(crate) fn has_overlay(&self) -> bool {
+    pub(crate) const fn has_overlay(&self) -> bool {
         self.json_overlay.is_some()
     }
 

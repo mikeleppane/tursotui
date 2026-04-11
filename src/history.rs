@@ -18,7 +18,7 @@ pub(crate) struct HistoryEntry {
 }
 
 impl HistoryEntry {
-    pub(crate) fn is_error(&self) -> bool {
+    pub(crate) const fn is_error(&self) -> bool {
         self.error_message.is_some()
     }
 }

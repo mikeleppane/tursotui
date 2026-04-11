@@ -485,7 +485,7 @@ pub(crate) fn score_and_sort(candidates: &mut Vec<ObjectMatch>, query: &str, act
 }
 
 /// Get the single-character icon for an object kind.
-fn kind_icon(kind: ObjectKind) -> char {
+const fn kind_icon(kind: ObjectKind) -> char {
     match kind {
         ObjectKind::Table => 'T',
         ObjectKind::Index => 'I',
@@ -497,7 +497,7 @@ fn kind_icon(kind: ObjectKind) -> char {
 }
 
 /// Get the type label for display.
-fn kind_label(kind: ObjectKind) -> &'static str {
+const fn kind_label(kind: ObjectKind) -> &'static str {
     match kind {
         ObjectKind::Table => "table",
         ObjectKind::Index => "index",
@@ -509,7 +509,7 @@ fn kind_label(kind: ObjectKind) -> &'static str {
 }
 
 /// Get the color for an object kind icon.
-fn kind_color(kind: ObjectKind, theme: &Theme) -> Color {
+const fn kind_color(kind: ObjectKind, theme: &Theme) -> Color {
     match kind {
         ObjectKind::Table => theme.schema_table,
         ObjectKind::Index => theme.schema_index,

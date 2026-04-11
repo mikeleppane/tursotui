@@ -266,11 +266,11 @@ mod tests {
     #[test]
     fn test_case_insensitive_keywords() {
         let tokens = tokenize("select from WHERE");
-        let keywords: Vec<_> = tokens
+        let keyword_count = tokens
             .iter()
             .filter(|t| t.kind == TokenKind::Keyword)
-            .collect();
-        assert_eq!(keywords.len(), 3);
+            .count();
+        assert_eq!(keyword_count, 3);
     }
 
     #[test]
@@ -387,12 +387,12 @@ mod tests {
     fn test_double_quoted_identifier() {
         // "FROM" should be Default, not Keyword
         let tokens = tokenize(r#"SELECT "FROM" FROM t"#);
-        let keywords: Vec<_> = tokens
+        let keyword_count = tokens
             .iter()
             .filter(|t| t.kind == TokenKind::Keyword)
-            .collect();
+            .count();
         // SELECT and the bare FROM are keywords; "FROM" is Default
-        assert_eq!(keywords.len(), 2);
+        assert_eq!(keyword_count, 2);
         let quoted = tokens.iter().find(|t| t.text == r#""FROM""#).unwrap();
         assert_eq!(quoted.kind, TokenKind::Default);
     }

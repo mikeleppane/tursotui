@@ -54,7 +54,7 @@ fn format_count(n: usize) -> String {
 }
 
 /// Short label for the currently focused panel.
-fn panel_label(sub_tab: SubTab, focus: PanelId, bottom_tab: BottomTab) -> &'static str {
+const fn panel_label(sub_tab: SubTab, focus: PanelId, bottom_tab: BottomTab) -> &'static str {
     match (sub_tab, focus) {
         (SubTab::Query, PanelId::Editor) => "Editor",
         (SubTab::Query, PanelId::Schema) => "Schema",
@@ -97,7 +97,7 @@ pub(crate) const TRANSIENT_TTL: Duration = Duration::from_secs(3);
 /// - `> 5× threshold`: error (red) + "!! " — severely slow
 /// - `> threshold`: warning (yellow) + "! " — slow
 /// - otherwise: dim + "" — normal
-fn time_style(ms: u64, slow_threshold: u64, theme: &Theme) -> (Color, &'static str) {
+const fn time_style(ms: u64, slow_threshold: u64, theme: &Theme) -> (Color, &'static str) {
     if ms > slow_threshold.saturating_mul(5) {
         (theme.error, "!! ")
     } else if ms > slow_threshold {

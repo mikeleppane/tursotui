@@ -133,7 +133,7 @@ impl TextBuffer {
         self.dirty = false;
     }
 
-    pub(crate) fn is_dirty(&self) -> bool {
+    pub(crate) const fn is_dirty(&self) -> bool {
         self.dirty
     }
 
@@ -146,7 +146,7 @@ impl TextBuffer {
         self.last_save.elapsed()
     }
 
-    pub(crate) fn cursor_position(&self) -> (usize, usize) {
+    pub(crate) const fn cursor_position(&self) -> (usize, usize) {
         self.cursor
     }
 
@@ -154,11 +154,11 @@ impl TextBuffer {
         &self.buffer
     }
 
-    pub(crate) fn scroll_offset(&self) -> usize {
+    pub(crate) const fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
-    pub(crate) fn selection(&self) -> Option<Selection> {
+    pub(crate) const fn selection(&self) -> Option<Selection> {
         self.selection
     }
 
@@ -350,7 +350,7 @@ impl TextBuffer {
         }
     }
 
-    pub(crate) fn move_home(&mut self) {
+    pub(crate) const fn move_home(&mut self) {
         self.cursor.1 = 0;
     }
 
@@ -406,11 +406,11 @@ impl TextBuffer {
 
     // ─── Selection ────────────────────────────────────────────────────
 
-    pub(crate) fn clear_selection(&mut self) {
+    pub(crate) const fn clear_selection(&mut self) {
         self.selection = None;
     }
 
-    pub(crate) fn start_or_extend_selection(&mut self) {
+    pub(crate) const fn start_or_extend_selection(&mut self) {
         if self.selection.is_none() {
             self.selection = Some(Selection {
                 anchor: self.cursor,

@@ -160,7 +160,7 @@ pub(crate) struct ChangeLog {
 
 #[allow(dead_code)] // methods used in tests; will be called by editor UI in a later task
 impl ChangeLog {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { edits: Vec::new() }
     }
 
@@ -337,7 +337,7 @@ impl ChangeLog {
         (updates, inserts, deletes)
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
@@ -582,7 +582,7 @@ impl DataEditor {
         self.fk_column_set.clear();
     }
 
-    pub(crate) fn is_active(&self) -> bool {
+    pub(crate) const fn is_active(&self) -> bool {
         self.active
     }
 
@@ -600,7 +600,7 @@ impl DataEditor {
     }
 
     #[allow(dead_code)] // used by status bar in later tasks
-    pub(crate) fn fk_depth(&self) -> usize {
+    pub(crate) const fn fk_depth(&self) -> usize {
         self.fk_nav_stack.len()
     }
 
@@ -615,7 +615,7 @@ impl DataEditor {
     }
 
     #[allow(dead_code)] // used by DML preview in later tasks
-    pub(crate) fn changes(&self) -> &ChangeLog {
+    pub(crate) const fn changes(&self) -> &ChangeLog {
         &self.changes
     }
 
@@ -626,12 +626,12 @@ impl DataEditor {
 
     /// Returns `true` if a cell editor is currently open.
     #[allow(dead_code)] // used in tests and future inline rendering
-    pub(crate) fn has_cell_editor(&self) -> bool {
+    pub(crate) const fn has_cell_editor(&self) -> bool {
         self.cell_editor.is_some()
     }
 
     /// Access the active cell editor (for rendering in main.rs).
-    pub(crate) fn cell_editor(&self) -> Option<&CellEditor> {
+    pub(crate) const fn cell_editor(&self) -> Option<&CellEditor> {
         self.cell_editor.as_ref()
     }
 
@@ -763,7 +763,7 @@ impl DataEditor {
     }
 
     /// Current scroll offset for the DML preview popup.
-    pub(crate) fn preview_scroll(&self) -> usize {
+    pub(crate) const fn preview_scroll(&self) -> usize {
         self.preview_scroll
     }
 
@@ -774,12 +774,12 @@ impl DataEditor {
     }
 
     /// Scroll the preview down by one line.
-    pub(crate) fn scroll_preview_down(&mut self) {
+    pub(crate) const fn scroll_preview_down(&mut self) {
         self.preview_scroll = self.preview_scroll.saturating_add(1);
     }
 
     /// Scroll the preview up by one line.
-    pub(crate) fn scroll_preview_up(&mut self) {
+    pub(crate) const fn scroll_preview_up(&mut self) {
         self.preview_scroll = self.preview_scroll.saturating_sub(1);
     }
 

@@ -34,7 +34,7 @@ pub(crate) struct AutocompletePopup {
 
 impl AutocompletePopup {
     /// Create a new empty popup with the given typing prefix.
-    pub(crate) fn new(prefix: String) -> Self {
+    pub(crate) const fn new(prefix: String) -> Self {
         Self {
             candidates: Vec::new(),
             selected: 0,
@@ -52,7 +52,7 @@ impl AutocompletePopup {
     }
 
     /// Returns `true` when there are no candidates to show.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
 
@@ -62,7 +62,7 @@ impl AutocompletePopup {
     }
 
     /// Move selection up by one, wrapping around to the bottom.
-    pub(crate) fn move_up(&mut self) {
+    pub(crate) const fn move_up(&mut self) {
         if self.candidates.is_empty() {
             return;
         }
@@ -75,7 +75,7 @@ impl AutocompletePopup {
     }
 
     /// Move selection down by one, wrapping around to the top.
-    pub(crate) fn move_down(&mut self) {
+    pub(crate) const fn move_down(&mut self) {
         if self.candidates.is_empty() {
             return;
         }
@@ -84,7 +84,7 @@ impl AutocompletePopup {
     }
 
     /// Ensure the selected item is within the visible scroll window.
-    fn adjust_scroll(&mut self) {
+    const fn adjust_scroll(&mut self) {
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + MAX_VISIBLE {
@@ -266,7 +266,7 @@ impl AutocompletePopup {
 }
 
 /// Return the single-character icon for a candidate kind.
-fn kind_icon(kind: CandidateKind) -> char {
+const fn kind_icon(kind: CandidateKind) -> char {
     match kind {
         CandidateKind::Table => 'T',
         CandidateKind::View => 'V',

@@ -53,7 +53,7 @@ pub(crate) struct PragmaDashboard {
 }
 
 impl PragmaDashboard {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             pragmas: Vec::new(),
             selected: 0,
@@ -68,7 +68,7 @@ impl PragmaDashboard {
     /// Attempt initial load. Returns true (and sets `loading = true`) only if
     /// pragmas haven't been loaded yet and no load is in progress.
     /// Used by `SwitchSubTab(Admin)` for lazy one-time initialization.
-    pub(crate) fn try_start_load(&mut self) -> bool {
+    pub(crate) const fn try_start_load(&mut self) -> bool {
         if self.loading || !self.pragmas.is_empty() {
             return false;
         }
@@ -79,7 +79,7 @@ impl PragmaDashboard {
     /// Force a refresh even when data is already loaded. Returns true (and sets
     /// `loading = true`) if no load is already in progress.
     /// Used by the `r` key (`RefreshPragmas` action).
-    pub(crate) fn try_start_refresh(&mut self) -> bool {
+    pub(crate) const fn try_start_refresh(&mut self) -> bool {
         if self.loading {
             return false;
         }
@@ -115,7 +115,7 @@ impl PragmaDashboard {
 
     /// Clear only the in-flight guard without touching edit state.
     #[allow(dead_code)] // available for future use; confirm_edit/cancel_edit cover current needs
-    pub(crate) fn clear_in_flight(&mut self) {
+    pub(crate) const fn clear_in_flight(&mut self) {
         self.pragma_in_flight = false;
         self.in_flight_index = None;
     }
@@ -128,12 +128,12 @@ impl PragmaDashboard {
     }
 
     /// Clear loading flag on failure (pragmas stay empty or stale).
-    pub(crate) fn set_loading_failed(&mut self) {
+    pub(crate) const fn set_loading_failed(&mut self) {
         self.loading = false;
     }
 
     /// Ensure `scroll_offset` keeps `selected` visible within `viewport_height` rows.
-    fn clamp_scroll(&mut self, viewport_height: usize) {
+    const fn clamp_scroll(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
         }

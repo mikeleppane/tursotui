@@ -15,6 +15,9 @@ unicode-width = "0.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
 
 [workspace.lints.clippy]
 # Enable pedantic, then selectively allow noisy lints
@@ -37,6 +40,13 @@ redundant_type_annotations = "warn"
 use_self = "warn"
 implicit_clone = "warn"
 needless_pass_by_ref_mut = "warn"
+missing_const_for_fn = "warn"
+unused_async = "warn"
+needless_collect = "warn"
+derive_partial_eq_without_eq = "warn"
+equatable_if_let = "warn"
+string_lit_as_bytes = "warn"
+path_buf_push_overwrite = "warn"
 
 # Hard denies — performance and correctness
 or_fun_call = "deny"
