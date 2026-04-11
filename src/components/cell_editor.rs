@@ -131,8 +131,7 @@ impl CellEditor {
     /// In modal mode: move the logical cursor down one line.
     fn move_down(&mut self) {
         let (line, col_in_line) = self.cursor_to_line_col();
-        let lines: Vec<&str> = self.buffer.split('\n').collect();
-        if line + 1 >= lines.len() {
+        if line + 1 >= self.buffer.split('\n').count() {
             return;
         }
         self.cursor_pos = self.line_col_to_pos(line + 1, col_in_line);

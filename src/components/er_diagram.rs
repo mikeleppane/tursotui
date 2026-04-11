@@ -233,7 +233,12 @@ impl Default for ERDiagram {
 const PAN_STEP: i32 = 3;
 
 /// Convert virtual coordinates to screen coordinates, returning `None` if off-screen.
-fn virtual_to_screen(viewport: (i32, i32), vx: i32, vy: i32, area: Rect) -> Option<(u16, u16)> {
+const fn virtual_to_screen(
+    viewport: (i32, i32),
+    vx: i32,
+    vy: i32,
+    area: Rect,
+) -> Option<(u16, u16)> {
     let sx = vx - viewport.0;
     let sy = vy - viewport.1;
     if sx < 0 || sy < 0 {
@@ -1379,7 +1384,7 @@ fn compute_positions(tables: &mut [ERTable], spacing: u8) {
 ///
 /// Uses a simple binary search over [0, n] to find the smallest integer `s`
 /// satisfying `s * s >= n`.
-fn integer_sqrt_ceil(n: usize) -> usize {
+const fn integer_sqrt_ceil(n: usize) -> usize {
     if n == 0 {
         return 0;
     }

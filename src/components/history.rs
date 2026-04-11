@@ -42,7 +42,7 @@ pub(crate) struct QueryHistoryPanel {
 }
 
 impl QueryHistoryPanel {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
             filtered: Vec::new(),
@@ -61,15 +61,15 @@ impl QueryHistoryPanel {
     }
 
     /// Update the slow-query threshold (called when config is loaded).
-    pub(crate) fn set_slow_threshold(&mut self, ms: u64) {
+    pub(crate) const fn set_slow_threshold(&mut self, ms: u64) {
         self.slow_threshold_ms = ms;
     }
 
-    pub(crate) fn set_unavailable(&mut self) {
+    pub(crate) const fn set_unavailable(&mut self) {
         self.history_unavailable = true;
     }
 
-    pub(crate) fn set_loading(&mut self) {
+    pub(crate) const fn set_loading(&mut self) {
         self.loading = true;
     }
 
@@ -130,12 +130,12 @@ impl QueryHistoryPanel {
     // -- Filter getters for dispatch --
 
     #[allow(clippy::unused_self)] // will read self.db_filter when M8 lands
-    pub(crate) fn db_filter_value(&self) -> Option<&str> {
+    pub(crate) const fn db_filter_value(&self) -> Option<&str> {
         None // deferred to M8
     }
 
     #[allow(clippy::unused_self)] // will use self.show_all_origins for server-side filter in M8
-    pub(crate) fn origin_filter(&self) -> Option<&str> {
+    pub(crate) const fn origin_filter(&self) -> Option<&str> {
         // Origin filtering is done client-side in refilter() because the default
         // filter (user+ddl) needs IN ('user', 'ddl') which the current API doesn't support.
         None
@@ -149,7 +149,7 @@ impl QueryHistoryPanel {
         }
     }
 
-    pub(crate) fn errors_only(&self) -> bool {
+    pub(crate) const fn errors_only(&self) -> bool {
         self.errors_only
     }
 

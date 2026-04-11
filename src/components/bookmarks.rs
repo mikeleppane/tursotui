@@ -39,7 +39,7 @@ pub(crate) struct BookmarkPanel {
 }
 
 impl BookmarkPanel {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
             filtered: Vec::new(),

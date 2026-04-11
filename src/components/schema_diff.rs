@@ -30,7 +30,7 @@ impl SchemaObjectType {
         }
     }
 
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Table => "TABLE",
             Self::View => "VIEW",
@@ -50,7 +50,7 @@ pub(crate) enum DiffStatus {
 }
 
 impl DiffStatus {
-    fn icon(self) -> &'static str {
+    const fn icon(self) -> &'static str {
         match self {
             Self::Added => "+",
             Self::Removed => "-",
@@ -59,7 +59,7 @@ impl DiffStatus {
         }
     }
 
-    fn sort_order(self) -> u8 {
+    const fn sort_order(self) -> u8 {
         match self {
             Self::Removed => 0,
             Self::Modified => 1,
@@ -686,7 +686,7 @@ fn truncate_to_width(text: String, max_width: usize) -> String {
     text[..end].to_string()
 }
 
-fn status_color(status: DiffStatus, theme: &Theme) -> Color {
+const fn status_color(status: DiffStatus, theme: &Theme) -> Color {
     match status {
         DiffStatus::Added => theme.success,
         DiffStatus::Removed => theme.error,

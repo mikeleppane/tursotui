@@ -108,7 +108,7 @@ impl ResultsTable {
     }
 
     /// Returns the raw `QueryResult` from the last `set_results` call, if any.
-    pub(crate) fn current_result(&self) -> Option<&QueryResult> {
+    pub(crate) const fn current_result(&self) -> Option<&QueryResult> {
         self.last_result.as_ref()
     }
 
@@ -210,16 +210,16 @@ impl ResultsTable {
         None
     }
 
-    pub(crate) fn selected_col_index(&self) -> usize {
+    pub(crate) const fn selected_col_index(&self) -> usize {
         self.selected_col
     }
 
-    pub(crate) fn selected_row(&self) -> Option<usize> {
+    pub(crate) const fn selected_row(&self) -> Option<usize> {
         self.state.selected()
     }
 
     /// Current horizontal scroll offset (first visible column index).
-    pub(crate) fn col_offset(&self) -> usize {
+    pub(crate) const fn col_offset(&self) -> usize {
         self.col_offset
     }
 
@@ -246,7 +246,7 @@ impl ResultsTable {
         self.col_offset = col_offset;
     }
 
-    pub(crate) fn row_count(&self) -> usize {
+    pub(crate) const fn row_count(&self) -> usize {
         self.rows.len()
     }
 
@@ -284,7 +284,7 @@ impl ResultsTable {
         self.original_rows.clear();
     }
 
-    fn next_row(&mut self) {
+    const fn next_row(&mut self) {
         if self.rows.is_empty() {
             return;
         }
@@ -295,7 +295,7 @@ impl ResultsTable {
         self.state.select(Some(next));
     }
 
-    fn prev_row(&mut self) {
+    const fn prev_row(&mut self) {
         if self.rows.is_empty() {
             return;
         }
@@ -307,25 +307,25 @@ impl ResultsTable {
         self.state.select(Some(prev));
     }
 
-    fn first_row(&mut self) {
+    const fn first_row(&mut self) {
         if !self.rows.is_empty() {
             self.state.select(Some(0));
         }
     }
 
-    fn last_row(&mut self) {
+    const fn last_row(&mut self) {
         if !self.rows.is_empty() {
             self.state.select(Some(self.rows.len() - 1));
         }
     }
 
-    fn next_col(&mut self) {
+    const fn next_col(&mut self) {
         if !self.columns.is_empty() && self.selected_col + 1 < self.columns.len() {
             self.selected_col += 1;
         }
     }
 
-    fn prev_col(&mut self) {
+    const fn prev_col(&mut self) {
         if !self.columns.is_empty() && self.selected_col > 0 {
             self.selected_col -= 1;
         }

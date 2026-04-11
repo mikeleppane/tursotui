@@ -500,20 +500,20 @@ impl SchemaExplorer {
         }
     }
 
-    fn move_up(&mut self) {
+    const fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
     }
 
-    fn move_down(&mut self) {
+    const fn move_down(&mut self) {
         if !self.visible.is_empty() && self.selected + 1 < self.visible.len() {
             self.selected += 1;
         }
     }
 
     /// Adjust `scroll_offset` to keep `selected` item in the visible window.
-    fn adjust_scroll(&mut self, visible_height: usize) {
+    const fn adjust_scroll(&mut self, visible_height: usize) {
         if visible_height == 0 {
             return;
         }
@@ -720,7 +720,7 @@ impl SchemaExplorer {
     }
 
     /// Set the selected index and adjust scroll to keep it visible.
-    fn select_and_scroll(&mut self, pos: usize) {
+    const fn select_and_scroll(&mut self, pos: usize) {
         self.selected = pos;
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
@@ -2615,12 +2615,12 @@ mod tests {
         explorer.rebuild_visible();
 
         // Should see: Tables header, users, CustomTypes header, uuid, boolean, date
-        let custom_type_nodes: Vec<_> = explorer
+        let custom_type_count = explorer
             .visible
             .iter()
             .filter(|n| matches!(n, TreeNode::CustomType { .. }))
-            .collect();
-        assert_eq!(custom_type_nodes.len(), 3);
+            .count();
+        assert_eq!(custom_type_count, 3);
     }
 
     #[test]

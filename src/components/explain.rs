@@ -387,7 +387,7 @@ const BYTECODE_MIN_WIDTHS: &[u16] = &[5, 16, 6, 6, 6, 20, 4];
 const _: () = assert!(BYTECODE_MIN_WIDTHS.len() + 1 == BYTECODE_HEADERS.len());
 
 impl ExplainView {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             mode: ExplainMode::Bytecode,
             bytecode_rows: Vec::new(),
@@ -435,12 +435,12 @@ impl ExplainView {
     }
 
     /// Mark as loading to prevent duplicate EXPLAIN tasks.
-    pub(crate) fn set_loading(&mut self) {
+    pub(crate) const fn set_loading(&mut self) {
         self.loading = true;
     }
 
     /// Clear loading flag on failure (data stays stale).
-    pub(crate) fn set_loading_failed(&mut self) {
+    pub(crate) const fn set_loading_failed(&mut self) {
         self.loading = false;
     }
 
@@ -474,7 +474,7 @@ impl ExplainView {
     }
 
     /// Ensure `scroll_offset` keeps `selected_row` visible within `viewport_height` rows.
-    fn clamp_scroll(&mut self, viewport_height: usize) {
+    const fn clamp_scroll(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
             return;
         }
@@ -630,7 +630,7 @@ impl ExplainView {
     }
 
     /// Color for a scan type classification.
-    fn scan_color(scan: ScanType, theme: &Theme) -> Color {
+    const fn scan_color(scan: ScanType, theme: &Theme) -> Color {
         match scan {
             ScanType::FullTableScan => theme.error,
             ScanType::TempBTree | ScanType::CorrelatedSubquery => theme.warning,
@@ -640,7 +640,7 @@ impl ExplainView {
     }
 
     /// Color for a warning severity.
-    fn severity_color(severity: WarningSeverity, theme: &Theme) -> Color {
+    const fn severity_color(severity: WarningSeverity, theme: &Theme) -> Color {
         match severity {
             WarningSeverity::Critical => theme.error,
             WarningSeverity::Warning => theme.warning,
@@ -649,7 +649,7 @@ impl ExplainView {
     }
 
     /// Severity prefix for display.
-    fn severity_prefix(severity: WarningSeverity) -> &'static str {
+    const fn severity_prefix(severity: WarningSeverity) -> &'static str {
         match severity {
             WarningSeverity::Critical => "\u{26a0} ",
             WarningSeverity::Warning => "\u{25b3} ",

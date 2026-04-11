@@ -25,7 +25,7 @@ pub(crate) struct ProfileView {
 }
 
 impl ProfileView {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             data: None,
             selected_col: 0,
@@ -49,18 +49,18 @@ impl ProfileView {
     }
 
     /// Mark the profile as stale (data has changed).
-    pub(crate) fn mark_stale(&mut self) {
+    pub(crate) const fn mark_stale(&mut self) {
         self.stale = true;
         self.loading = false;
     }
 
     /// Mark as loading.
-    pub(crate) fn set_loading(&mut self) {
+    pub(crate) const fn set_loading(&mut self) {
         self.loading = true;
     }
 
     /// Whether the profile is stale (data changed since last profile).
-    pub(crate) fn is_stale(&self) -> bool {
+    pub(crate) const fn is_stale(&self) -> bool {
         self.stale
     }
 
@@ -159,7 +159,7 @@ impl Component for ProfileView {
     }
 
     fn update(&mut self, action: &Action) {
-        if let Action::Data(DataAction::DataEditsCommitted) = action {
+        if matches!(action, Action::Data(DataAction::DataEditsCommitted)) {
             self.mark_stale();
         }
     }

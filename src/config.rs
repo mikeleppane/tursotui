@@ -127,19 +127,19 @@ pub(crate) struct EditorConfig {
     pub(crate) autocomplete_min_chars: usize,
 }
 
-fn default_tab_size() -> usize {
+const fn default_tab_size() -> usize {
     4
 }
 
-fn default_show_line_numbers() -> bool {
+const fn default_show_line_numbers() -> bool {
     true
 }
 
-fn default_autocomplete() -> bool {
+const fn default_autocomplete() -> bool {
     true
 }
 
-fn default_autocomplete_min_chars() -> usize {
+const fn default_autocomplete_min_chars() -> usize {
     1
 }
 
@@ -162,7 +162,7 @@ pub(crate) struct ResultsConfig {
     pub(crate) null_display: String,
 }
 
-fn default_max_column_width() -> u16 {
+const fn default_max_column_width() -> u16 {
     40
 }
 
@@ -185,7 +185,7 @@ pub(crate) struct HistoryConfig {
     pub(crate) max_entries: usize,
 }
 
-fn default_max_entries() -> usize {
+const fn default_max_entries() -> usize {
     5000
 }
 
@@ -203,7 +203,7 @@ pub(crate) struct PerformanceConfig {
     pub(crate) slow_query_ms: u64,
 }
 
-fn default_slow_query_ms() -> u64 {
+const fn default_slow_query_ms() -> u64 {
     500
 }
 
@@ -221,7 +221,7 @@ pub(crate) struct ProfileConfig {
     pub(crate) sample_threshold: u64,
 }
 
-fn default_sample_threshold() -> u64 {
+const fn default_sample_threshold() -> u64 {
     10_000
 }
 
@@ -239,7 +239,7 @@ pub(crate) struct MouseConfig {
     pub(crate) mouse_mode: bool,
 }
 
-fn default_mouse_mode() -> bool {
+const fn default_mouse_mode() -> bool {
     true
 }
 

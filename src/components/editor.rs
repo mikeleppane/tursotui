@@ -166,7 +166,7 @@ impl QueryEditor {
         self.sync_params();
     }
 
-    pub(crate) fn is_dirty(&self) -> bool {
+    pub(crate) const fn is_dirty(&self) -> bool {
         self.buf.is_dirty()
     }
 
@@ -234,7 +234,7 @@ impl QueryEditor {
         self.buf.move_cursor_right();
     }
 
-    fn move_home(&mut self) {
+    const fn move_home(&mut self) {
         self.buf.move_home();
     }
 
@@ -242,11 +242,11 @@ impl QueryEditor {
         self.buf.move_end();
     }
 
-    fn clear_selection(&mut self) {
+    const fn clear_selection(&mut self) {
         self.buf.clear_selection();
     }
 
-    fn start_or_extend_selection(&mut self) {
+    const fn start_or_extend_selection(&mut self) {
         self.buf.start_or_extend_selection();
     }
 
@@ -317,13 +317,13 @@ impl QueryEditor {
 
     // ─── Autocomplete ───────────────────────────────────────────────────
 
-    pub(crate) fn set_autocomplete_config(&mut self, enabled: bool, min_chars: usize) {
+    pub(crate) const fn set_autocomplete_config(&mut self, enabled: bool, min_chars: usize) {
         self.autocomplete_enabled = enabled;
         self.autocomplete_min_chars = min_chars;
     }
 
     /// Whether automatic autocomplete triggering is enabled.
-    pub(crate) fn autocomplete_enabled(&self) -> bool {
+    pub(crate) const fn autocomplete_enabled(&self) -> bool {
         self.autocomplete_enabled
     }
 
@@ -397,7 +397,7 @@ impl QueryEditor {
     }
 
     /// Returns the cursor position for autocomplete popup rendering.
-    pub(crate) fn cursor_position(&self) -> (usize, usize) {
+    pub(crate) const fn cursor_position(&self) -> (usize, usize) {
         self.buf.cursor_position()
     }
 
@@ -407,7 +407,7 @@ impl QueryEditor {
     }
 
     /// Returns the current scroll offset.
-    pub(crate) fn scroll_offset(&self) -> usize {
+    pub(crate) const fn scroll_offset(&self) -> usize {
         self.buf.scroll_offset()
     }
 
@@ -476,7 +476,7 @@ impl QueryEditor {
     }
 
     #[allow(dead_code)] // used in tests; called from dispatch/layout when param persistence is wired
-    pub(crate) fn param_bar_active(&self) -> bool {
+    pub(crate) const fn param_bar_active(&self) -> bool {
         self.param_bar_active
     }
 
@@ -486,12 +486,12 @@ impl QueryEditor {
     }
 
     #[allow(dead_code)] // used in tests; called from dispatch/layout when param persistence is wired
-    pub(crate) fn param_focused_idx(&self) -> usize {
+    pub(crate) const fn param_focused_idx(&self) -> usize {
         self.param_focused_idx
     }
 
     #[allow(dead_code)] // used by tests
-    pub(crate) fn param_bar_focused(&self) -> bool {
+    pub(crate) const fn param_bar_focused(&self) -> bool {
         self.param_bar_focused
     }
 
@@ -952,7 +952,7 @@ impl Component for QueryEditor {
         let (editor_area, param_area) =
             if self.param_bar_active && !self.param_fields.is_empty() && area.height >= 6 {
                 let chunks = Layout::default()
-                    .direction(ratatui::layout::Direction::Vertical)
+                    .direction(layout::Direction::Vertical)
                     .constraints([Constraint::Min(3), Constraint::Length(3)])
                     .split(area);
                 (chunks[0], Some(chunks[1]))

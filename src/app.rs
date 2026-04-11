@@ -246,7 +246,7 @@ pub(crate) enum AdminAction {
     IntegrityCheck,
     IntegrityCheckCompleted(String),
     IntegrityCheckFailed(String),
-    IndexDetailsLoaded(String, Vec<tursotui_db::IndexDetail>),
+    IndexDetailsLoaded(String, Vec<IndexDetail>),
     RequestProfile,
     ProfileCompleted(tursotui_db::ProfileData),
     ProfileFailed(String),
@@ -362,7 +362,7 @@ pub(crate) enum DataAction {
     DataEditsFailed(String),
     FollowFK,
     FKNavigateBack,
-    FKLoaded(String, Vec<tursotui_db::ForeignKeyInfo>),
+    FKLoaded(String, Vec<ForeignKeyInfo>),
 }
 
 /// All state mutations flow through actions.
@@ -992,15 +992,15 @@ mod tests {
     use crate::config::AppConfig;
 
     async fn test_app_state() -> AppState {
-        let handle = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
+        let handle = DatabaseHandle::open(":memory:").await.unwrap();
         let config = AppConfig::default();
         let db_ctx = DatabaseContext::new(handle, ":memory:".into(), &config);
         AppState::new(vec![db_ctx], config, None)
     }
 
     async fn two_db_app_state() -> AppState {
-        let h1 = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
-        let h2 = tursotui_db::DatabaseHandle::open(":memory:").await.unwrap();
+        let h1 = DatabaseHandle::open(":memory:").await.unwrap();
+        let h2 = DatabaseHandle::open(":memory:").await.unwrap();
         let config = AppConfig::default();
         let db1 = DatabaseContext::new(h1, "db1.sqlite".into(), &config);
         let db2 = DatabaseContext::new(h2, "db2.sqlite".into(), &config);
